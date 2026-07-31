@@ -1,0 +1,38 @@
+{
+  "max_query_depth": 5,
+  "default_confidence": 0.7,
+  "max_documents": 1000,
+  "web_node_load_depth": 2,
+  "web_node_label_threshold": 3,
+  "summary_trigger_file_count": 5,
+  "summary_trigger_time": "03:00",
+  "recycle_life_days": 30,
+  "rag_similarity_threshold": 0.6,
+  "default_top_k": 10,
+  "chunking_mode": "hierarchical",
+  "chunk_small_size": 128,
+  "chunk_size": 512,
+  "chunk_large_size": 1024,
+  "chunk_overlap": 64,
+  "rerank_top_n": 5,
+  "hybrid_enhancement_factor": 1.2,
+  "entity_extraction": {
+    "method": "llm",
+    "max_entities": 10
+  },
+  "graph_tool_max_iterations": 40,
+  "log_dir": "log",
+  "log_level": "INFO",
+  "kemo": {
+    "base_url": "http://127.0.0.1:8531",
+    "api_key_env": "KEMO_API_KEY",
+    "protocol_version": "1.0",
+    "request_timeout": 900
+  },
+  "models": {
+    "llm": "deepseek-deepseek-v4-flash",
+    "embedding": "siliconflow-Qwen-Qwen3-VL-Embedding-8B",
+    "embedding_dimensions": 4096,
+    "rerank": "siliconflow-Qwen-Qwen3-VL-Reranker-8B"
+  }
+}

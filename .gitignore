@@ -21,6 +21,11 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local development documentation (never publish)
+/开发文档/
+.playwright-cli/
+.playwright-mcp/
+
 # Data / runtime
 data/
 *.log
