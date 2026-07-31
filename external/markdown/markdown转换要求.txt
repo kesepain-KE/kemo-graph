@@ -1,0 +1,2 @@
+每个原始文档只有一个markdown文件，且每个markdown文件只有一个原始文档
+external\markdown此目录的根目录有一个数据表，专门映映射指定markdown文件的原始文件的位置+状态值+存在性状态
