@@ -1,2 +1,0 @@
-external文件夹
-存放文档的地方，外部文档会被转化成markdown数据存放进external\markdown
