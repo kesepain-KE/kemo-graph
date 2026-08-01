@@ -105,8 +105,28 @@ class GraphEngineTests(unittest.TestCase):
             )
             self.assertEqual(
                 result["groups"],
-                [{"group_id": "group-ai", "summary": "AI 检索技术群"}],
+                [
+                    {
+                        "group_id": "group-ai",
+                        "summary": "AI 检索技术群",
+                        "node_count": 4,
+                        "edge_count": 3,
+                    }
+                ],
             )
+            self.assertEqual(
+                {relation["text"] for relation in result["relations"]},
+                {
+                    "知识图谱->[互补]->向量检索",
+                    "向量检索->[使用]->Embedding",
+                    "数据结构->[支持]->知识图谱",
+                },
+            )
+            self.assertEqual(
+                result["paths"][0]["text"],
+                "知识图谱->[互补]->向量检索->[使用]->Embedding",
+            )
+            self.assertAlmostEqual(result["paths"][0]["weight"], 0.8)
 
     def test_direction_depth_fuzzy_match_and_parameter_limits(self) -> None:
         settings = _settings()
@@ -229,7 +249,12 @@ class HybridEngineTests(unittest.TestCase):
             self.assertEqual(rerank_document_orders[0][0], "anchored document")
             self.assertEqual(result["graph"]["hit_nodes"][0]["node_id"], "node-kg")
             self.assertEqual(result["rag"]["results"][0]["chunk_id"], "chunk-anchor")
-            self.assertEqual(set(result), {"graph", "rag"})
+            self.assertEqual(
+                set(result),
+                {"graph", "rag", "entities", "communities"},
+            )
+            self.assertEqual(result["entities"], [])
+            self.assertEqual(result["communities"], [])
 
 
 def _insert_graph_fixture(paths) -> None:

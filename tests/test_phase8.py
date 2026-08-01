@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -42,7 +43,9 @@ class FrontendMountTests(unittest.TestCase):
                 response = client.get(path)
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("phase-8-spa", response.text)
-                self.assertTrue(response.headers["content-type"].startswith("text/html"))
+                self.assertTrue(
+                    response.headers["content-type"].startswith("text/html")
+                )
 
             asset = client.get("/assets/app.js")
             self.assertEqual(asset.status_code, 200)
@@ -152,10 +155,54 @@ class ManagementAPITests(unittest.TestCase):
 
             self.assertEqual(saved["chunk_size"], 768)
             self.assertEqual(service.get_config(), saved)
-            self.assertEqual(json.loads(config_path.read_text(encoding="utf-8")), saved)
+            persisted = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["chunk_size"], 768)
+            self.assertEqual(persisted["kemo"]["api_key"], "")
+            self.assertNotIn("api_key_source", persisted["kemo"])
             self.assertEqual(service.data_dir, (root / "data").resolve())
 
-    def test_upload_registers_document_and_content_is_immediately_available(self) -> None:
+    def test_config_api_key_is_masked_and_can_be_replaced_or_cleared(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            config_path = root / "config.json"
+            settings = AppConfig(
+                kemo={"api_key": "initial-secret", "api_key_env": "FALLBACK_KEY"}
+            )
+            service = KnowledgeBaseService(
+                settings=settings,
+                config_path=config_path,
+                data_dir=root / "data",
+                external_dir=root / "markdown",
+            )
+
+            with patch.dict(
+                os.environ, {"FALLBACK_KEY": "environment-secret"}, clear=True
+            ):
+                visible = service.get_config()
+                self.assertNotEqual(visible["kemo"]["api_key"], "initial-secret")
+                self.assertEqual(visible["kemo"]["api_key_source"], "config")
+
+                unchanged = service.save_config(visible)
+                self.assertEqual(unchanged["kemo"]["api_key_source"], "config")
+                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["kemo"]["api_key"], "initial-secret")
+
+                unchanged["kemo"]["api_key"] = "replacement-secret"
+                replaced = service.save_config(unchanged)
+                self.assertEqual(replaced["kemo"]["api_key_source"], "config")
+                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["kemo"]["api_key"], "replacement-secret")
+
+                replaced["kemo"]["api_key"] = ""
+                cleared = service.save_config(replaced)
+                self.assertEqual(cleared["kemo"]["api_key"], "")
+                self.assertEqual(cleared["kemo"]["api_key_source"], "environment")
+                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["kemo"]["api_key"], "")
+
+    def test_upload_registers_document_and_content_is_immediately_available(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             service = KnowledgeBaseService(
@@ -167,7 +214,9 @@ class ManagementAPITests(unittest.TestCase):
             uploaded = service.upload_file("# 新文档\n\n正文", "new-document.md")
 
             self.assertIsNotNone(uploaded["source_id"])
-            documents = service.list_documents(status="active")
+            document_page = service.list_documents(status="active")
+            documents = document_page["documents"]
+            self.assertEqual(document_page["pagination"]["total"], 1)
             self.assertEqual(len(documents), 1)
             self.assertEqual(documents[0]["relative_path"], "new-document.md")
             content = service.get_document_content(documents[0]["source_id"])

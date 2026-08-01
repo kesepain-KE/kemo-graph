@@ -16,16 +16,12 @@ from core.db import (
     connect_sources,
     read_graph_meta,
 )
-from core.ingestor import (
-    GraphEntity,
-    GraphRelation,
-    Ingestor,
-    PreparedGraph,
-)
+from core.ingestor import Ingestor
 
 
 def _settings() -> AppConfig:
     return AppConfig(
+        graph_build_mode="tools",
         chunk_size=128,
         chunk_overlap=16,
         models={
@@ -43,22 +39,52 @@ def _embedding(texts: list[str]) -> EmbeddingResult:
     return EmbeddingResult(vectors, "test-space")
 
 
-def _versioned_graph(text: str) -> PreparedGraph:
-    second_keyword = "Gamma" if "version-two" in text else "Beta"
-    return PreparedGraph(
-        entities=[
-            GraphEntity("Alpha", "Alpha shared concept", ["A"], ["test"]),
-            GraphEntity(
-                second_keyword,
-                f"{second_keyword} concept",
-                [],
-                ["test"],
-            ),
-        ],
-        relations=[
-            GraphRelation("Alpha", "关联", second_keyword, 0.8),
-        ],
+def _upsert_tool_entity(tool_handler, keyword: str, summary: str) -> str:
+    matches = tool_handler("search_entities", {"query": keyword, "limit": 10})
+    exact = next((item for item in matches if item["keyword"] == keyword), None)
+    if exact is not None:
+        updated = tool_handler(
+            "update_entity",
+            {
+                "node_id": exact["node_id"],
+                "summary": summary,
+                "tags": ["test"],
+            },
+        )
+        return str(updated["node_id"])
+    return str(
+        tool_handler(
+            "add_entity",
+            {
+                "keyword": keyword,
+                "summary": summary,
+                "aliases": ["A"] if keyword == "Alpha" else [],
+                "tags": ["test"],
+            },
+        )
     )
+
+
+def _versioned_tool_graph(system, user, tools, tool_handler, **kwargs) -> str:
+    del system, tools, kwargs
+    second_keyword = "Gamma" if "version-two" in user else "Beta"
+    alpha_id = _upsert_tool_entity(tool_handler, "Alpha", "Alpha shared concept")
+    second_id = _upsert_tool_entity(
+        tool_handler,
+        second_keyword,
+        f"{second_keyword} concept",
+    )
+    tool_handler(
+        "add_relation",
+        {
+            "source_node_id": alpha_id,
+            "relation": "关联",
+            "target_node_id": second_id,
+            "evidence_weight": 0.8,
+        },
+    )
+    tool_handler("finish", {})
+    return "done"
 
 
 class SourceScanTests(unittest.TestCase):
@@ -84,21 +110,30 @@ class SourceScanTests(unittest.TestCase):
 
             second = ingestor.scan_sources()
             self.assertEqual(second.unchanged_source_ids, [source_id])
-            self.assertEqual(_source_row(ingestor, source_id)["updated_at"], first_updated_at)
+            self.assertEqual(
+                _source_row(ingestor, source_id)["updated_at"], first_updated_at
+            )
 
             document.write_text("version-two", encoding="utf-8")
             third = ingestor.scan_sources()
             self.assertEqual(third.changed_source_ids, [source_id])
-            self.assertEqual(_source_row(ingestor, source_id)["graph_status"], "pending")
+            self.assertEqual(
+                _source_row(ingestor, source_id)["graph_status"], "pending"
+            )
 
             document.unlink()
             fourth = ingestor.scan_sources()
             self.assertEqual(fourth.newly_deleted_source_ids, [source_id])
-            self.assertEqual(_source_row(ingestor, source_id)["exists_status"], "deleted")
+            self.assertEqual(
+                _source_row(ingestor, source_id)["exists_status"], "deleted"
+            )
 
 
 class IncrementalIngestTests(unittest.TestCase):
-    def test_first_build_unchanged_skip_and_atomic_incremental_replace(self) -> None:
+    @patch("core.ingestor.chat_with_tools")
+    def test_first_build_unchanged_skip_and_atomic_incremental_replace(
+        self, mock_chat
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             external = root / "external" / "markdown"
@@ -108,9 +143,13 @@ class IncrementalIngestTests(unittest.TestCase):
             graph_calls: list[str] = []
             embedding_calls: list[list[str]] = []
 
-            def graph_extractor(text: str) -> PreparedGraph:
-                graph_calls.append(text)
-                return _versioned_graph(text)
+            def graph_builder(system, user, tools, tool_handler, **kwargs):
+                graph_calls.append(user)
+                return _versioned_tool_graph(
+                    system, user, tools, tool_handler, **kwargs
+                )
+
+            mock_chat.side_effect = graph_builder
 
             def embedder(texts: list[str]) -> EmbeddingResult:
                 embedding_calls.append(texts.copy())
@@ -120,7 +159,6 @@ class IncrementalIngestTests(unittest.TestCase):
                 root / "data",
                 external,
                 settings=_settings(),
-                graph_extractor=graph_extractor,
                 embedder=embedder,
             )
             first = ingestor.ingest(mode="both")
@@ -150,7 +188,9 @@ class IncrementalIngestTests(unittest.TestCase):
             calls_before_skip = (len(graph_calls), len(embedding_calls))
             skipped = ingestor.ingest(mode="both")
             self.assertEqual(skipped["processed"], 0)
-            self.assertEqual((len(graph_calls), len(embedding_calls)), calls_before_skip)
+            self.assertEqual(
+                (len(graph_calls), len(embedding_calls)), calls_before_skip
+            )
 
             ingestor.paths.rerank_cache.write_text("stale-cache\n", encoding="utf-8")
             document.write_text("version-two Alpha Gamma", encoding="utf-8")
@@ -162,7 +202,7 @@ class IncrementalIngestTests(unittest.TestCase):
             self.assertEqual(updated_source["source_id"], source["source_id"])
             updated_nodes = _nodes_by_keyword(ingestor)
             self.assertEqual(set(updated_nodes), {"Alpha", "Gamma"})
-            self.assertEqual(updated_nodes["Alpha"], original_nodes["Alpha"])
+            self.assertNotEqual(updated_nodes["Alpha"], original_nodes["Alpha"])
             self.assertFalse(
                 original_chunk_ids.intersection(
                     _column_values(ingestor, "rag", "chunks", "chunk_id")
@@ -173,10 +213,17 @@ class IncrementalIngestTests(unittest.TestCase):
             )
             self.assertFalse(original_vector_ids.intersection(current_vector_ids))
             self.assertEqual(ingestor._get_rag_engine().index.ids, current_vector_ids)
-            self.assertEqual(ingestor.paths.rerank_cache.read_text(encoding="utf-8"), "")
-            self.assertEqual(read_graph_meta(ingestor.paths)["changed_since_summary"], 2)
+            self.assertEqual(
+                ingestor.paths.rerank_cache.read_text(encoding="utf-8"), ""
+            )
+            self.assertEqual(
+                read_graph_meta(ingestor.paths)["changed_since_summary"], 2
+            )
 
-    def test_graph_and_rag_modes_fill_chunk_nodes_when_both_are_current(self) -> None:
+    @patch("core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph)
+    def test_graph_and_rag_modes_fill_chunk_nodes_when_both_are_current(
+        self, _mock_chat
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             external = root / "external" / "markdown"
@@ -186,7 +233,6 @@ class IncrementalIngestTests(unittest.TestCase):
                 root / "data",
                 external,
                 settings=_settings(),
-                graph_extractor=_versioned_graph,
                 embedder=_embedding,
             )
 
@@ -212,19 +258,18 @@ class IncrementalIngestTests(unittest.TestCase):
                 root / "data",
                 external,
                 settings=_settings(),
-                graph_extractor=_versioned_graph,
                 embedder=_embedding,
             )
-            initial.ingest(mode="both")
+            with patch(
+                "core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph
+            ):
+                initial.ingest(mode="both")
             old_source = _only_source(initial)
             old_nodes = _nodes_by_keyword(initial)
             old_chunks = _column_values(initial, "rag", "chunks", "chunk_id")
             old_vectors = _column_values(initial, "rag", "embeddings", "vector_id")
 
             document.write_text("version-two", encoding="utf-8")
-
-            def fail_graph(text: str) -> PreparedGraph:
-                raise RuntimeError("graph preparation failed")
 
             def fail_embedding(texts: list[str]) -> EmbeddingResult:
                 raise RuntimeError("embedding preparation failed")
@@ -233,10 +278,13 @@ class IncrementalIngestTests(unittest.TestCase):
                 root / "data",
                 external,
                 settings=_settings(),
-                graph_extractor=fail_graph,
                 embedder=fail_embedding,
             )
-            result = failing.ingest(mode="both")
+            with patch(
+                "core.ingestor.chat_with_tools",
+                side_effect=RuntimeError("graph preparation failed"),
+            ):
+                result = failing.ingest(mode="both")
 
             self.assertEqual(result["failed"], 1)
             source = _only_source(failing)
@@ -253,7 +301,10 @@ class IncrementalIngestTests(unittest.TestCase):
             )
             self.assertEqual(failing._get_rag_engine().index.ids, old_vectors)
 
-    def test_faiss_replace_failure_recovers_from_committed_rag_database(self) -> None:
+    @patch("core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph)
+    def test_faiss_replace_failure_recovers_from_committed_rag_database(
+        self, _mock_chat
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             external = root / "external" / "markdown"
@@ -264,13 +315,10 @@ class IncrementalIngestTests(unittest.TestCase):
                 root / "data",
                 external,
                 settings=_settings(),
-                graph_extractor=_versioned_graph,
                 embedder=_embedding,
             )
             ingestor.ingest(mode="both")
-            old_vector_ids = _column_values(
-                ingestor, "rag", "embeddings", "vector_id"
-            )
+            old_vector_ids = _column_values(ingestor, "rag", "embeddings", "vector_id")
             rag_engine = ingestor._get_rag_engine()
 
             document.write_text("version-two", encoding="utf-8")
@@ -281,9 +329,7 @@ class IncrementalIngestTests(unittest.TestCase):
             ):
                 result = ingestor.ingest(mode="rag")
 
-            new_vector_ids = _column_values(
-                ingestor, "rag", "embeddings", "vector_id"
-            )
+            new_vector_ids = _column_values(ingestor, "rag", "embeddings", "vector_id")
             self.assertEqual(result["rag_updated"], 1)
             self.assertFalse(old_vector_ids.intersection(new_vector_ids))
             self.assertEqual(rag_engine.index.ids, new_vector_ids)
@@ -293,7 +339,10 @@ class IncrementalIngestTests(unittest.TestCase):
 
 
 class DeleteCascadeTests(unittest.TestCase):
-    def test_delete_recalculates_shared_references_and_removes_last_source(self) -> None:
+    @patch("core.ingestor.chat_with_tools")
+    def test_delete_recalculates_shared_references_and_removes_last_source(
+        self, mock_chat
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             external = root / "external" / "markdown"
@@ -303,21 +352,29 @@ class DeleteCascadeTests(unittest.TestCase):
             high.write_text("shared high", encoding="utf-8")
             low.write_text("shared low", encoding="utf-8")
 
-            def shared_graph(text: str) -> PreparedGraph:
-                weight = 0.9 if "high" in text else 0.5
-                return PreparedGraph(
-                    entities=[
-                        GraphEntity("SharedA", "Shared A", [], []),
-                        GraphEntity("SharedB", "Shared B", [], []),
-                    ],
-                    relations=[GraphRelation("SharedA", "关联", "SharedB", weight)],
+            def shared_tool_graph(system, user, tools, tool_handler, **kwargs):
+                del system, tools, kwargs
+                weight = 0.9 if "high" in user else 0.5
+                source_id = _upsert_tool_entity(tool_handler, "SharedA", "Shared A")
+                target_id = _upsert_tool_entity(tool_handler, "SharedB", "Shared B")
+                tool_handler(
+                    "add_relation",
+                    {
+                        "source_node_id": source_id,
+                        "relation": "关联",
+                        "target_node_id": target_id,
+                        "evidence_weight": weight,
+                    },
                 )
+                tool_handler("finish", {})
+                return "done"
+
+            mock_chat.side_effect = shared_tool_graph
 
             ingestor = Ingestor(
                 root / "data",
                 external,
                 settings=_settings(),
-                graph_extractor=shared_graph,
                 embedder=_embedding,
             )
             ingestor.ingest(mode="both")

@@ -65,6 +65,7 @@ class ConfigTests(unittest.TestCase):
                 "siliconflow-Qwen-Qwen3-VL-Embedding-8B",
             )
             self.assertEqual(settings.kemo.api_key_env, "KEMO_API_KEY")
+            self.assertEqual(settings.kemo.api_key, "")
             self.assertEqual(settings.graph_tool_max_iterations, 40)
             self.assertEqual(settings.log_level, "INFO")
             self.assertEqual(settings.kemo.protocol_version, "1.0")
@@ -121,7 +122,10 @@ class DatabaseTests(unittest.TestCase):
             paths = initialize_databases(temporary_dir, AppConfig())
             initialize_databases(temporary_dir, AppConfig())  # 幂等验收
 
-            self.assertEqual(_table_names(paths.sources_db), {"sources"})
+            self.assertEqual(
+                _table_names(paths.sources_db),
+                {"sources", "maintenance_jobs", "maintenance_job_events"},
+            )
             self.assertEqual(
                 _table_names(paths.graph_db),
                 {
@@ -131,11 +135,24 @@ class DatabaseTests(unittest.TestCase):
                     "edge_sources",
                     "groups",
                     "group_nodes",
+                    "entity_mentions",
+                    "relation_mentions",
+                    "mention_nodes",
                 },
             )
             self.assertEqual(
                 _table_names(paths.rag_db),
-                {"chunks", "chunk_nodes", "embeddings"},
+                {
+                    "chunks",
+                    "chunk_nodes",
+                    "embeddings",
+                    "entity_embeddings",
+                    "community_embeddings",
+                },
+            )
+            self.assertIn(
+                "has_entity_embedding",
+                _column_names(paths.graph_db, "nodes"),
             )
             self.assertEqual(
                 _column_names(paths.sources_db, "sources"),
@@ -186,6 +203,8 @@ class DatabaseTests(unittest.TestCase):
                     "idx_sources_path_hash",
                     "idx_sources_graph_status",
                     "idx_sources_rag_status",
+                    "idx_maintenance_jobs_updated",
+                    "idx_maintenance_job_events_job",
                 },
             )
             self.assertTrue(
@@ -208,6 +227,8 @@ class DatabaseTests(unittest.TestCase):
                     "idx_chunk_nodes_node",
                     "idx_embeddings_chunk",
                     "idx_embeddings_vector_id",
+                    "idx_entity_embeddings_node",
+                    "idx_community_embeddings_group",
                 }.issubset(_index_names(paths.rag_db))
             )
 

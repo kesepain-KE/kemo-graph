@@ -32,6 +32,7 @@ def _settings(root: Path, dimensions: int = 3) -> AppConfig:
     return AppConfig(
         chunk_size=128,
         chunk_overlap=16,
+        graph_build_mode="tools",
         log_dir=str(root / "log"),
         models={
             "embedding": "test-embedding",
@@ -160,11 +161,20 @@ class ToolGraphBuildTests(unittest.TestCase):
             graph_connection = connect_graph(ingestor.paths)
             try:
                 graph_connection.execute(
-                    "INSERT INTO nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    ("shared", "Shared", "old", "[]", "[]", 1, now, now),
+                    """
+                    INSERT INTO nodes (
+                        node_id, keyword, summary, aliases, tags,
+                        weight, ref_count, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("shared", "Shared", "old", "[]", "[]", 1.0, 1, now, now),
                 )
                 graph_connection.execute(
-                    "INSERT INTO node_sources VALUES (?, ?, ?)",
+                    """
+                    INSERT INTO node_sources (
+                        node_id, source_id, content_hash, evidence_weight
+                    ) VALUES (?, ?, ?, 1.0)
+                    """,
                     (
                         "shared",
                         existing_source["source_id"],

@@ -11,7 +11,13 @@ from unittest.mock import patch
 import httpx
 import numpy as np
 
-from core.chunker import chunk, document_chunks, estimate_token_count
+from core.chunker import (
+    _pre_split_by_paragraphs,
+    chunk,
+    chunking_signature,
+    document_chunks,
+    estimate_token_count,
+)
 from core.config import AppConfig
 from core.db import (
     connect_rag,
@@ -30,10 +36,11 @@ from provider import (
     ProviderConfigurationError,
     ProviderResponseError,
     ProviderTimeoutError,
+    get_api_key,
     kemo_headers,
     request_json,
 )
-from provider.embedding import EmbeddingResult, embed
+from provider.embedding import EmbeddingResult, _clear_capability_cache, embed
 from provider.engine import chat, chat_with_tools
 from provider.rerank import rerank
 
@@ -56,6 +63,12 @@ def _settings(dimensions: int = 3) -> AppConfig:
 
 
 class ProviderErrorTests(unittest.TestCase):
+    def test_explicit_api_key_has_priority_over_environment(self) -> None:
+        settings = _settings()
+        settings.kemo.api_key = "config-secret"
+        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "environment-secret"}, clear=True):
+            self.assertEqual(get_api_key(settings.kemo), "config-secret")
+
     def test_missing_api_key_raises_configuration_error(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(ProviderConfigurationError):
@@ -90,6 +103,9 @@ class ProviderErrorTests(unittest.TestCase):
 
 
 class ProviderFunctionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _clear_capability_cache()
+
     def test_kemo_headers_share_one_request_id(self) -> None:
         headers = kemo_headers(" secret ")
 
@@ -337,6 +353,11 @@ class ProviderFunctionTests(unittest.TestCase):
 
     def test_embedding_orders_and_validates_float32_vectors(self) -> None:
         settings = _settings()
+        capabilities = {
+            "model": "test-embedding",
+            "task": "embedding",
+            "embedding": {"max_batch_size": 64},
+        }
         response = {
             "vector_space_id": "test-space@v1:3:normalized",
             "data": [
@@ -347,7 +368,7 @@ class ProviderFunctionTests(unittest.TestCase):
         with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
             with patch(
                 "provider.embedding.request_json",
-                return_value=response,
+                side_effect=[capabilities, response],
             ) as request:
                 result = embed(["first", "second"], settings=settings)
 
@@ -355,11 +376,18 @@ class ProviderFunctionTests(unittest.TestCase):
         self.assertEqual(result.vector_space_id, "test-space@v1:3:normalized")
         self.assertEqual(result.vectors, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         self.assertEqual(np.asarray(result.vectors, dtype=np.float32).dtype, np.float32)
+        self.assertEqual(request.call_count, 2)
         self.assertEqual(
-            request.call_args.args[1],
+            request.call_args_list[0].args[1],
+            "https://gateway.test/model/models/test-embedding/capabilities",
+        )
+        self.assertEqual(request.call_args_list[0].args[0], "GET")
+        embedding_request = request.call_args_list[1]
+        self.assertEqual(
+            embedding_request.args[1],
             "https://gateway.test/model/embeddings",
         )
-        payload = request.call_args.kwargs["payload"]
+        payload = embedding_request.kwargs["payload"]
         self.assertEqual(payload["input_type"], "document")
         self.assertEqual(
             payload["inputs"],
@@ -370,17 +398,154 @@ class ProviderFunctionTests(unittest.TestCase):
         )
         self.assertEqual(
             payload["request_id"],
-            request.call_args.kwargs["headers"]["Idempotency-Key"],
+            embedding_request.kwargs["headers"]["Idempotency-Key"],
         )
+
+    def test_embedding_batches_according_to_gateway_capability(self) -> None:
+        settings = _settings()
+        settings.embedding_batch_size = 64
+        texts = [f"text-{index}" for index in range(166)]
+
+        def embedding_response(*args, **kwargs) -> dict:
+            inputs = kwargs["payload"]["inputs"]
+            return {
+                "vector_space_id": "test-space@v1:3:normalized",
+                "data": [
+                    {
+                        "id": item["id"],
+                        "index": local_index,
+                        "vector": [
+                            float(int(item["id"].removeprefix("chunk-"))),
+                            1.0,
+                            0.0,
+                        ],
+                    }
+                    for local_index, item in enumerate(inputs)
+                ],
+            }
+
+        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
+            with patch(
+                "provider.embedding._get_max_batch_size",
+                return_value=64,
+            ):
+                with patch(
+                    "provider.embedding.request_json",
+                    side_effect=embedding_response,
+                ) as request:
+                    result = embed(texts, settings=settings)
+
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(
+            [len(call.kwargs["payload"]["inputs"]) for call in request.call_args_list],
+            [64, 64, 38],
+        )
+        self.assertEqual(len(result.vectors), 166)
+        self.assertEqual(result.vectors[0], [0.0, 1.0, 0.0])
+        self.assertEqual(result.vectors[65], [65.0, 1.0, 0.0])
+        self.assertEqual(result.vectors[-1], [165.0, 1.0, 0.0])
+        for call in request.call_args_list:
+            self.assertEqual(
+                call.kwargs["payload"]["request_id"],
+                call.kwargs["headers"]["Idempotency-Key"],
+            )
+
+    def test_embedding_respects_local_safety_batch_size(self) -> None:
+        settings = _settings()
+        settings.embedding_batch_size = 8
+
+        def embedding_response(*args, **kwargs) -> dict:
+            inputs = kwargs["payload"]["inputs"]
+            return {
+                "vector_space_id": "space",
+                "data": [
+                    {
+                        "id": item["id"],
+                        "index": local_index,
+                        "vector": [1.0, 0.0, 0.0],
+                    }
+                    for local_index, item in enumerate(inputs)
+                ],
+            }
+
+        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
+            with patch(
+                "provider.embedding._get_max_batch_size",
+                return_value=64,
+            ):
+                with patch(
+                    "provider.embedding.request_json",
+                    side_effect=embedding_response,
+                ) as request:
+                    result = embed(
+                        [f"text-{index}" for index in range(18)], settings=settings
+                    )
+
+        self.assertEqual(len(result.vectors), 18)
+        self.assertEqual(
+            [len(call.kwargs["payload"]["inputs"]) for call in request.call_args_list],
+            [8, 8, 2],
+        )
+
+    def test_embedding_rejects_vector_space_change_between_batches(self) -> None:
+        responses = [
+            {
+                "vector_space_id": "space-a",
+                "data": [
+                    {"id": "chunk-0", "index": 0, "vector": [1.0, 0.0, 0.0]},
+                    {"id": "chunk-1", "index": 1, "vector": [0.0, 1.0, 0.0]},
+                ],
+            },
+            {
+                "vector_space_id": "space-b",
+                "data": [{"id": "chunk-2", "index": 0, "vector": [0.0, 0.0, 1.0]}],
+            },
+        ]
+        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
+            with patch(
+                "provider.embedding._get_max_batch_size",
+                return_value=2,
+            ):
+                with patch(
+                    "provider.embedding.request_json",
+                    side_effect=responses,
+                ):
+                    with self.assertRaises(ProviderResponseError) as context:
+                        embed(["first", "second", "third"], settings=_settings())
+
+        self.assertIn("vector_space_id 不一致", str(context.exception))
 
     def test_embedding_requires_vector_space_id(self) -> None:
         response = {"data": [{"id": "chunk-0", "index": 0, "vector": [1.0, 0.0, 0.0]}]}
         with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
-            with patch("provider.embedding.request_json", return_value=response):
-                with self.assertRaises(ProviderResponseError) as context:
-                    embed(["text"], settings=_settings())
+            with patch("provider.embedding._get_max_batch_size", return_value=64):
+                with patch("provider.embedding.request_json", return_value=response):
+                    with self.assertRaises(ProviderResponseError) as context:
+                        embed(["text"], settings=_settings())
 
         self.assertIn("vector_space_id", str(context.exception))
+
+    def test_embedding_supports_query_input_type(self) -> None:
+        response = {
+            "vector_space_id": "space-query",
+            "data": [
+                {"id": "chunk-0", "index": 0, "vector": [1.0, 0.0, 0.0]}
+            ],
+        }
+        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
+            with patch("provider.embedding._get_max_batch_size", return_value=64):
+                with patch(
+                    "provider.embedding.request_json",
+                    return_value=response,
+                ) as request:
+                    result = embed(
+                        ["semantic query"],
+                        settings=_settings(),
+                        input_type="query",
+                    )
+
+        self.assertEqual(result.vector_space_id, "space-query")
+        self.assertEqual(request.call_args.kwargs["payload"]["input_type"], "query")
 
     def test_embedding_rejects_nan_and_wrong_dimensions(self) -> None:
         settings = _settings()
@@ -404,10 +569,13 @@ class ProviderFunctionTests(unittest.TestCase):
             for response in responses:
                 with self.subTest(response=response):
                     with patch(
-                        "provider.embedding.request_json", return_value=response
+                        "provider.embedding._get_max_batch_size", return_value=64
                     ):
-                        with self.assertRaises(ProviderResponseError) as context:
-                            embed(["bad"], settings=settings)
+                        with patch(
+                            "provider.embedding.request_json", return_value=response
+                        ):
+                            with self.assertRaises(ProviderResponseError) as context:
+                                embed(["bad"], settings=settings)
                     self.assertIn("第 0 个向量", str(context.exception))
 
     def test_rerank_calls_api_once_then_uses_cache(self) -> None:
@@ -523,6 +691,66 @@ class ChunkerTests(unittest.TestCase):
             )
             self.assertLessEqual(parent.token_start, child_center)
             self.assertLess(child_center, parent.token_end)
+
+    def test_llm_chunks_use_verified_boundaries_without_rewriting_text(self) -> None:
+        settings = _settings()
+        settings.chunking_mode = "llm"
+        text = "# 主题\n\n第一段事实。\n\n## 子主题\n\n第二段事实。"
+        response = {
+            "chunks": [
+                {"start_block": 1, "end_block": 2},
+                {"start_block": 3, "end_block": 4},
+            ]
+        }
+
+        with patch("core.chunker.chat_structured", return_value=response) as request:
+            chunks = document_chunks(text, settings=settings)
+
+        self.assertEqual(
+            [item.content for item in chunks],
+            ["# 主题\n\n第一段事实。", "## 子主题\n\n第二段事实。"],
+        )
+        self.assertEqual([item.granularity for item in chunks], ["medium", "medium"])
+        self.assertEqual(chunks[0].token_end, chunks[1].token_start)
+        schema = request.call_args.args[2]
+        self.assertIn("start_block", schema["properties"]["chunks"]["items"]["properties"])
+
+    def test_llm_invalid_boundaries_fall_back_to_fixed_chunks(self) -> None:
+        settings = _settings()
+        settings.chunking_mode = "llm"
+        settings.chunk_size = 128
+        settings.chunk_overlap = 16
+        text = "\n\n".join(
+            " ".join(f"token_{paragraph}_{index}" for index in range(220))
+            for paragraph in range(3)
+        )
+        invalid_response = {
+            "chunks": [
+                {"start_block": 1, "end_block": 1},
+                {"start_block": 3, "end_block": 3},
+            ]
+        }
+
+        with patch("core.chunker.chat_structured", return_value=invalid_response):
+            chunks = document_chunks(text, settings=settings)
+
+        expected = chunk(text, settings=settings)
+        self.assertEqual([item.content for item in chunks], expected)
+
+    def test_long_document_pre_split_is_lossless_and_bounded(self) -> None:
+        text = "第一段内容。\n\n第二段比较长的内容。\n\n第三段内容。"
+        parts = _pre_split_by_paragraphs(text, 18)
+
+        self.assertEqual("".join(parts), text)
+        self.assertTrue(all(len(part) <= 18 for part in parts))
+
+    def test_llm_chunking_signature_tracks_llm_settings(self) -> None:
+        first = _settings()
+        first.chunking_mode = "llm"
+        second = first.model_copy(deep=True)
+        second.chunking_llm_max_input_chars = 9000
+
+        self.assertNotEqual(chunking_signature(first), chunking_signature(second))
 
 
 class FaissTests(unittest.TestCase):

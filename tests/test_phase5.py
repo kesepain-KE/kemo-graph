@@ -19,7 +19,7 @@ from api import create_app as create_api_app
 from api.deps import get_service
 from core.config import AppConfig
 from core.db import connect_graph, connect_rag, connect_sources
-from core.ingestor import GraphEntity, GraphRelation, Ingestor, PreparedGraph
+from core.ingestor import Ingestor
 from core.knowledge_base import (
     KnowledgeBaseNotInitializedError,
     KnowledgeBaseService,
@@ -29,6 +29,7 @@ from start_web import create_app as create_web_app
 
 def _settings() -> AppConfig:
     return AppConfig(
+        graph_build_mode="tools",
         chunk_size=128,
         chunk_overlap=16,
         recycle_life_days=7,
@@ -47,18 +48,44 @@ def _embedding(texts: list[str]) -> EmbeddingResult:
     )
 
 
-def _graph(_: str) -> PreparedGraph:
-    return PreparedGraph(
-        entities=[
-            GraphEntity("Alpha", "Alpha concept", ["A"], ["test"]),
-            GraphEntity("Beta", "Beta concept", [], ["test"]),
-        ],
-        relations=[GraphRelation("Alpha", "关联", "Beta", 0.8)],
+def _tool_graph(system, user, tools, tool_handler, **kwargs) -> str:
+    del system, user, tools, kwargs
+    tool_handler("search_entities", {"query": "Alpha", "limit": 10})
+    alpha_id = tool_handler(
+        "add_entity",
+        {
+            "keyword": "Alpha",
+            "summary": "Alpha concept",
+            "aliases": ["A"],
+            "tags": ["test"],
+        },
     )
+    tool_handler("search_entities", {"query": "Beta", "limit": 10})
+    beta_id = tool_handler(
+        "add_entity",
+        {
+            "keyword": "Beta",
+            "summary": "Beta concept",
+            "aliases": [],
+            "tags": ["test"],
+        },
+    )
+    tool_handler(
+        "add_relation",
+        {
+            "source_node_id": alpha_id,
+            "relation": "关联",
+            "target_node_id": beta_id,
+            "evidence_weight": 0.8,
+        },
+    )
+    tool_handler("finish", {})
+    return "done"
 
 
 class KnowledgeBaseServiceTests(unittest.TestCase):
-    def test_status_full_graph_and_document_delete(self) -> None:
+    @patch("core.ingestor.chat_with_tools", side_effect=_tool_graph)
+    def test_status_full_graph_and_document_delete(self, _mock_chat) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             data_dir = root / "data"
@@ -72,7 +99,6 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
                 data_dir,
                 external_dir,
                 settings=settings,
-                graph_extractor=_graph,
                 embedder=_embedding,
             )
             ingestor.ingest(mode="both")
@@ -94,6 +120,15 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
                 {node["keyword"] for node in full_graph["nodes"]}, {"Alpha", "Beta"}
             )
             self.assertEqual(len(full_graph["edges"]), 1)
+            self.assertEqual(full_graph["nodes_pagination"]["total"], 2)
+            paged_graph = service.get_full_graph(nodes_page=2, nodes_page_size=1)
+            self.assertEqual(len(paged_graph["nodes"]), 1)
+            self.assertEqual(paged_graph["nodes_pagination"]["total_pages"], 2)
+            self.assertEqual(len(paged_graph["edges"]), 1)
+
+            document_page = service.list_documents(page=1, page_size=1)
+            self.assertEqual(len(document_page["documents"]), 1)
+            self.assertEqual(document_page["pagination"]["total"], 1)
 
             result = service.delete_document(source_id)
 
@@ -148,11 +183,49 @@ class _FakeService:
     def query_hybrid(self, query, **kwargs):
         return {"query": query, "graph": {}, "rag": {}, **kwargs}
 
+    def query_answer(self, query, **kwargs):
+        return {
+            "query": query,
+            "answer": "hybrid answer",
+            "retrieval": {"graph": {}, "rag": {}},
+            **kwargs,
+        }
+
+    def query_global(self, query, **kwargs):
+        return {
+            "query": query,
+            "answer": "global",
+            "communities": [],
+            "key_entities": [],
+            **kwargs,
+        }
+
     def delete_document(self, source_id):
         return {"deleted_source_id": source_id}
 
-    def get_full_graph(self):
-        return {"nodes": [], "edges": [], "groups": []}
+    def list_documents(self, status=None, page=1, page_size=20):
+        return {
+            "documents": [],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": 0,
+                "total_pages": 0,
+            },
+        }
+
+    def get_full_graph(self, nodes_page=None, nodes_page_size=100):
+        return {
+            "nodes": [],
+            "edges": [],
+            "groups": [],
+            "nodes_pagination": {
+                "page": nodes_page,
+                "page_size": nodes_page_size,
+                "total": 0,
+                "total_pages": 0,
+            },
+        }
 
     def generate_group_summaries(self):
         return {"generated": 0}
@@ -183,11 +256,34 @@ class APITests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["data"]["query"], "Alpha")
             self.assertIsNone(response.json()["error"])
+            global_response = client.post(
+                "/api/v1/query/global",
+                json={"query": " themes ", "top_k": 4},
+            )
+            self.assertEqual(global_response.status_code, 200)
+            self.assertEqual(global_response.json()["data"]["query"], "themes")
+            self.assertEqual(global_response.json()["data"]["top_k"], 4)
+            answer_response = client.post(
+                "/api/v1/query/answer",
+                json={"query": " mixed context ", "graph_depth": 4, "rag_top_k": 8},
+            )
+            self.assertEqual(answer_response.status_code, 200)
+            self.assertEqual(answer_response.json()["data"]["query"], "mixed context")
+            self.assertEqual(answer_response.json()["data"]["graph_depth"], 4)
+            self.assertEqual(answer_response.json()["data"]["rag_top_k"], 8)
             self.assertEqual(
                 client.delete("/api/v1/documents/source-1").json()["data"],
                 {"deleted_source_id": "source-1"},
             )
             self.assertEqual(client.get("/api/v1/graph").status_code, 200)
+            graph_page = client.get(
+                "/api/v1/graph?nodes_page=1&nodes_page_size=5"
+            ).json()["data"]
+            self.assertEqual(graph_page["nodes_pagination"]["page"], 1)
+            document_page = client.get("/api/v1/documents?page=2&page_size=5").json()[
+                "data"
+            ]
+            self.assertEqual(document_page["pagination"]["page"], 2)
             self.assertEqual(client.get("/api/v1/graph/full").status_code, 200)
             self.assertEqual(
                 client.delete("/api/v1/maintenance/recycle").json()["data"],
@@ -209,6 +305,8 @@ class APITests(unittest.TestCase):
                 "/api/v1/query/graph",
                 "/api/v1/query/rag",
                 "/api/v1/query/hybrid",
+                "/api/v1/query/answer",
+                "/api/v1/query/global",
                 "/api/v1/status",
                 "/api/v1/documents/{source_id}",
                 "/api/v1/graph",
@@ -255,10 +353,12 @@ class CLITests(unittest.TestCase):
             ["query-graph", "alpha", "--depth", "2"],
             ["query-rag", "alpha", "--top-k", "3"],
             ["query-hybrid", "alpha", "--graph-depth", "2"],
+            ["query-global", "themes", "--top-k", "4"],
             ["status"],
             ["delete-doc", "source-1"],
             ["summarize"],
             ["cleanup-recycle"],
+            ["list-docs", "--page", "2", "--page-size", "5"],
         ]
         with (
             patch.object(start, "load_config", return_value=_settings()),
