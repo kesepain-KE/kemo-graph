@@ -10,6 +10,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from core.graph_engine import GraphQueryError
+from core.graph_visualization import (
+    GraphNodeNotFoundError,
+    GraphRevisionChangedError,
+)
 from core.ingestor import (
     DocumentNotFoundError,
     IngestError,
@@ -25,6 +29,7 @@ from core.knowledge_base import (
     UnsupportedDocumentFormatError,
 )
 from core.logger import DailyTSVLogger
+from core.jobs import JobNotFoundError
 from core.rag_engine import RAGQueryError
 from provider.tools.document_tools import DocumentConversionError
 
@@ -51,6 +56,9 @@ def install_exception_handlers(app: FastAPI) -> None:
         KnowledgeBaseNotInitializedError,
         KnowledgeBaseProcessingError,
         DocumentNotFoundError,
+        GraphNodeNotFoundError,
+        GraphRevisionChangedError,
+        JobNotFoundError,
         RecycleConflictError,
         GraphQueryError,
         RAGQueryError,
@@ -101,11 +109,20 @@ async def _application_error_handler(request: Request, exc: Exception) -> JSONRe
             status_code=409,
             content=error_payload("PROCESSING", str(exc)),
         )
-    if isinstance(exc, DocumentNotFoundError):
+    if isinstance(
+        exc,
+        (DocumentNotFoundError, GraphNodeNotFoundError, JobNotFoundError),
+    ):
         _log_api_error(request, 404, "NOT_FOUND", exc)
         return JSONResponse(
             status_code=404,
             content=error_payload("NOT_FOUND", str(exc)),
+        )
+    if isinstance(exc, GraphRevisionChangedError):
+        _log_api_error(request, 409, "GRAPH_CHANGED", exc)
+        return JSONResponse(
+            status_code=409,
+            content=error_payload("GRAPH_CHANGED", str(exc)),
         )
     if isinstance(exc, RecycleConflictError):
         _log_api_error(request, 409, "INVALID_PARAM", exc)

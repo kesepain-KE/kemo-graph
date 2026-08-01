@@ -21,6 +21,7 @@ from api.deps import create_context, create_service
 from api.errors import install_exception_handlers
 from api.routes import router
 from core.scheduler import MaintenanceScheduler
+from core.jobs import MaintenanceJobManager
 
 
 LOGGER = logging.getLogger(__name__)
@@ -82,14 +83,21 @@ def create_app(
         external_dir=external_dir,
     )
     scheduler = MaintenanceScheduler(lambda: create_service(context))
+    job_manager = MaintenanceJobManager(
+        lambda: create_service(context),
+        data_dir=context.data_dir,
+        settings=context.settings,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        job_manager.start()
         scheduler.start()
         try:
             yield
         finally:
             scheduler.stop()
+            job_manager.stop()
 
     application = FastAPI(
         title="kemo-graph Web",
@@ -98,6 +106,7 @@ def create_app(
     )
     application.state.kemo_context = context
     application.state.kemo_scheduler = scheduler
+    application.state.kemo_job_manager = job_manager
     install_exception_handlers(application)
     application.add_middleware(
         CORSMiddleware,

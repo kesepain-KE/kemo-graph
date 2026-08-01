@@ -11,6 +11,7 @@ from typing import Any
 
 from core.config import DEFAULT_CONFIG_PATH, load_config
 from core.graph_engine import GraphQueryError
+from core.graph_organizer import GraphOrganizerError
 from core.ingestor import DocumentNotFoundError, IngestError, RecycleConflictError
 from core.knowledge_base import (
     DocumentImportError,
@@ -22,6 +23,8 @@ from core.knowledge_base import (
     UnsupportedDocumentFormatError,
 )
 from core.rag_engine import RAGQueryError
+from core.rebuilder import RebuildError
+from core.jobs import JobNotFoundError
 from provider.tools.document_tools import DocumentConversionError
 
 
@@ -41,7 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     import_parser = subparsers.add_parser("import", help="转换并导入本地文档")
-    import_parser.add_argument("path", help="PDF、DOCX、Markdown、TXT、HTML、RST 或 CSV 路径")
+    import_parser.add_argument(
+        "path", help="PDF、DOCX、Markdown、TXT、HTML、RST 或 CSV 路径"
+    )
     import_parser.add_argument(
         "--no-ingest",
         action="store_true",
@@ -57,11 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="both",
     )
     graph_parser.add_argument("--confidence", type=float)
+    graph_parser.add_argument(
+        "--force", action="store_true", help="跳过缓存并刷新结果"
+    )
 
     rag_parser = subparsers.add_parser("query-rag", help="执行向量检索")
     rag_parser.add_argument("query")
     rag_parser.add_argument("--top-k", type=int)
     rag_parser.add_argument("--threshold", type=float)
+    rag_parser.add_argument(
+        "--force", action="store_true", help="跳过缓存并刷新结果"
+    )
 
     hybrid_parser = subparsers.add_parser("query-hybrid", help="执行混合检索")
     hybrid_parser.add_argument("query")
@@ -74,17 +85,57 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("forward", "backward", "both"),
         default="both",
     )
+    hybrid_parser.add_argument(
+        "--force", action="store_true", help="跳过缓存并刷新结果"
+    )
+
+    global_parser = subparsers.add_parser(
+        "query-global",
+        help="基于节点群总结执行知识库全局检索",
+    )
+    global_parser.add_argument("query")
+    global_parser.add_argument("--top-k", type=int, default=5)
+    global_parser.add_argument(
+        "--force", action="store_true", help="跳过缓存并刷新结果"
+    )
+
+    cache_list_parser = subparsers.add_parser(
+        "cache-list", help="分页列出搜索缓存与历史"
+    )
+    cache_list_parser.add_argument("--page", type=int, default=1)
+    cache_list_parser.add_argument("--page-size", type=int, default=20)
+    cache_show_parser = subparsers.add_parser("cache-show", help="查看缓存详情")
+    cache_show_parser.add_argument("cache_key")
+    cache_clear_parser = subparsers.add_parser("cache-clear", help="清理搜索缓存")
+    cache_clear_parser.add_argument(
+        "--stale", action="store_true", help="只清理与当前知识库不匹配的记录"
+    )
 
     subparsers.add_parser("status", help="查看知识库状态")
     delete_parser = subparsers.add_parser("delete-doc", help="删除文档")
     delete_parser.add_argument("source_id")
-    subparsers.add_parser("list-docs", help="列出所有文档")
+    list_docs_parser = subparsers.add_parser("list-docs", help="分页列出文档")
+    list_docs_parser.add_argument("--page", type=int, default=1)
+    list_docs_parser.add_argument("--page-size", type=int, default=20)
     content_parser = subparsers.add_parser("doc-content", help="查看文档内容")
     content_parser.add_argument("source_id")
     delete_node_parser = subparsers.add_parser("delete-node", help="删除图谱节点")
     delete_node_parser.add_argument("node_id")
     subparsers.add_parser("summarize", help="生成节点群总结")
     subparsers.add_parser("cleanup-recycle", help="清理过期回收站文件")
+    organize_parser = subparsers.add_parser("organize-graph", help="整理重叠节点与关系")
+    organize_parser.add_argument(
+        "--no-llm", action="store_true", help="仅执行完全术语重叠的确定性整理"
+    )
+    organize_parser.add_argument(
+        "--no-summarize", action="store_true", help="整理后不生成节点群总结"
+    )
+    subparsers.add_parser("rebuild-knowledge-base", help="重建新增、变化和失败文档")
+    subparsers.add_parser("rebuild-all", help="影子重建整个 Graph、RAG 与 FAISS 项目")
+    jobs_parser = subparsers.add_parser("jobs", help="查看后台维护任务")
+    jobs_parser.add_argument("--limit", type=int, default=100)
+    job_parser = subparsers.add_parser("job-status", help="查看单个后台任务及事件")
+    job_parser.add_argument("job_id")
     subparsers.add_parser("config-get", help="查看当前配置")
     config_set_parser = subparsers.add_parser("config-set", help="更新配置")
     config_set_parser.add_argument("key", help="配置键（如 rag.chunk_size）")
@@ -138,12 +189,14 @@ def _dispatch(
             depth=args.depth,
             direction=args.direction,
             confidence=args.confidence,
+            force=args.force,
         )
     if args.command == "query-rag":
         return service.query_rag(
             args.query,
             top_k=args.top_k,
             threshold=args.threshold,
+            force=args.force,
         )
     if args.command == "query-hybrid":
         return service.query_hybrid(
@@ -153,13 +206,22 @@ def _dispatch(
             graph_confidence=args.graph_confidence,
             rag_threshold=args.rag_threshold,
             direction=args.direction,
+            force=args.force,
         )
+    if args.command == "query-global":
+        return service.query_global(args.query, top_k=args.top_k, force=args.force)
+    if args.command == "cache-list":
+        return service.list_cached_queries(page=args.page, page_size=args.page_size)
+    if args.command == "cache-show":
+        return service.get_cached_query(args.cache_key)
+    if args.command == "cache-clear":
+        return service.clear_search_cache(stale_only=args.stale)
     if args.command == "status":
         return service.status()
     if args.command == "delete-doc":
         return service.delete_document(args.source_id)
     if args.command == "list-docs":
-        return {"documents": service.list_documents()}
+        return service.list_documents(page=args.page, page_size=args.page_size)
     if args.command == "doc-content":
         return service.get_document_content(args.source_id)
     if args.command == "delete-node":
@@ -168,6 +230,19 @@ def _dispatch(
         return service.generate_group_summaries()
     if args.command == "cleanup-recycle":
         return service.cleanup_recycle()
+    if args.command == "organize-graph":
+        return service.organize_graph(
+            use_llm=not args.no_llm,
+            summarize=not args.no_summarize,
+        )
+    if args.command == "rebuild-knowledge-base":
+        return service.rebuild_knowledge_base()
+    if args.command == "rebuild-all":
+        return service.rebuild_all()
+    if args.command == "jobs":
+        return {"jobs": service.list_jobs(limit=args.limit)}
+    if args.command == "job-status":
+        return service.get_job(args.job_id)
     if args.command == "config-get":
         return service.get_config()
     if args.command == "config-set":
@@ -175,9 +250,7 @@ def _dispatch(
     raise ValueError(f"未知命令：{args.command}")
 
 
-def _set_config(
-    service: KnowledgeBaseService, key: str, value: str
-) -> dict[str, Any]:
+def _set_config(service: KnowledgeBaseService, key: str, value: str) -> dict[str, Any]:
     import json as _json
 
     current = service.get_config()
@@ -205,6 +278,8 @@ def _map_error(exc: Exception) -> tuple[str, str, int]:
         return "PROCESSING", str(exc), 3
     if isinstance(exc, DocumentNotFoundError):
         return "NOT_FOUND", str(exc), 2
+    if isinstance(exc, JobNotFoundError):
+        return "NOT_FOUND", str(exc), 2
     if isinstance(exc, UnsupportedDocumentFormatError):
         return "UNSUPPORTED_FORMAT", str(exc), 2
     if isinstance(exc, DocumentTooLargeError):
@@ -227,6 +302,10 @@ def _map_error(exc: Exception) -> tuple[str, str, int]:
         ),
     ):
         return "INVALID_PARAM", str(exc), 2
+    if isinstance(exc, GraphOrganizerError):
+        return "ORGANIZE_FAILED", str(exc), 1
+    if isinstance(exc, RebuildError):
+        return "REBUILD_FAILED", str(exc), 1
     return "INTERNAL", "内部错误", 1
 
 
