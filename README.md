@@ -135,12 +135,16 @@ kemo-graph 保留这两种能力各自的边界，再让它们在需要时协作
 | 图谱检索 | 这个概念和什么有关？关系向前或向后还能延伸多远？它属于哪一组知识？ |
 | 向量检索 | 哪些原文片段最接近当前问题？具体资料是怎么说的？ |
 | 混合检索 | 先从图谱命中概念和关联切片，再增强这些切片的向量候选并重排序。 |
+| 全局检索 | 先匹配节点群总结，再结合群组中的高引用实体回答知识库整体主题。 |
+| 搜索缓存 | 同一知识状态和有效参数下直接复用四种检索结果；知识变化后自动转为历史快照。 |
 
 混合检索不会把节点、关系线与文档片段伪装成同一种结果：
 
 ```text
 图谱结果 → 提供结构、方向与概念关系
 RAG 结果  → 提供原文片段、分数与来源文档
+实体结果  → 提供概念摘要的独立语义命中
+群组结果  → 提供知识库主题级语义命中
 ```
 
 调用方可以同时知道“为什么相关”，也知道“依据在哪里”。
@@ -197,38 +201,36 @@ kemo-graph
 | Embedding | `siliconflow-Qwen-Qwen3-VL-Embedding-8B`（4096 维） |
 | Rerank | `siliconflow-Qwen-Qwen3-VL-Reranker-8B` |
 
-模型名、网关地址、切片策略、相似度阈值与维护节奏都由 `config/config.json` 控制。密钥不进入项目配置，而是由环境变量提供给 Kemo 网关调用层。
+模型名、网关地址、切片策略、相似度阈值与维护节奏都由 `config/config.json` 控制。密钥可以显式写入 `kemo.api_key`，也可以由 `kemo.api_key_env` 指定的环境变量提供；显式配置优先。Web API 只返回掩码和来源状态，不回显真实密钥。共享或提交配置前仍应清空显式密钥。
 
 ---
 
-## 图谱构建不是一次性的 JSON 幻觉
+## 高速构建与谨慎整理被分成两个阶段
 
-kemo-graph 不要求模型一次返回一份看似完整、实际上难以纠正的大型 JSON。
-
-它让图谱构建模型在受控工具范围内逐步工作：
+新文档入库时，kemo-graph 优先让模型通过 Kemo 严格工具 Schema 一次提交完整 `GraphDraft`。模型只返回局部实体、关系、证据和权重，不直接操作数据库，也不生成 UUID、哈希或 SQL。
 
 ```text
-读取当前文档与图谱上下文
-  ↓
-搜索已有概念
-  ↓
-决定补充已有节点，或新建独立节点
-  ↓
-建立关系并绑定当前文档的哈希证据
-  ↓
-完成构建
+Markdown
+  → 小文档单请求；大文档按标题有限并行
+  → 本地严格校验并合并 GraphDraft
+  → entity_mentions / relation_mentions 来源事实层
+  → nodes / edges 规范投影
+  → 单篇文档事务提交
 ```
 
-模型可调用的工具包括概念搜索、节点读取、新增与更新节点、建立关系、删除实体以及完成构建等。图谱构建提示词要求模型在新增概念前先搜索已有知识，以减少同义概念被反复建立为多个节点的概率。
+只有所有分段都成功时才替换该文档的旧图谱。任何模型请求、引用或数值校验失败，旧图谱与旧哈希仍然可用。初次导入只合并完全一致的术语，不在时效性最敏感的路径中反复调用搜索与写入工具。
 
-更重要的是，单篇文档的图谱构建运行在同一个数据库事务中：
+模糊同义、重复关系和长期累积噪声交给独立的“知识图谱整理”：
 
 ```text
-工具调用与写入全部成功 → 提交整篇文档的图谱变更
-模型请求、工具调用或校验失败 → 回滚整篇文档的图谱变更
+扫描疑似重叠候选
+  → 模型必须先读取两个节点事实
+  → 合并或明确保留
+  → 迁移来源、哈希和 mention 投影
+  → 重算节点/关系权重、chunk_nodes 与节点群
 ```
 
-这不是为了追求“自动化得更彻底”，而是为了让知识库在模型偶尔出错、网络偶尔中断时，仍然保持可理解、可恢复的状态。
+整理不重读 Markdown、不调用 Embedding。这样新资料可以更快、更忠实地进入图谱，而高成本判断集中在用户明确触发的维护阶段。旧的逐工具图谱构建仍可通过 `graph_build_mode=tools` 作为兼容路径使用。
 
 ---
 
@@ -245,10 +247,14 @@ kemo-graph 不要求模型一次返回一份看似完整、实际上难以纠正
 - 上传 PDF、DOCX、Markdown、TXT、HTML、RST、CSV；
 - 查看转换后的 Markdown 以及图谱、RAG 的整理状态；
 - 在力导向图中浏览概念节点、关系线和节点群；
-- 选择图谱、向量或混合方式检索；
+- 选择图谱、向量、混合或全局方式检索；
+- 在右侧统一历史卡片中恢复跨页面搜索结果、强制刷新并清理缓存；
+- 直接阅读 `A->[关系]->B->[关系]->C` 关系链并点击节点定位；
 - 查看文档数、节点数、关系数、向量数和 FAISS 健康状态；
 - 查看或调整本地配置；
-- 管理源文档与回收站生命周期。
+- 管理源文档与回收站生命周期；
+- 在全局运行气泡中跨页面、跨刷新追踪后台任务进度与事件；
+- 启动知识图谱整理、变化文档重建或全项目影子重建。
 
 网页并不是另一套知识库，而是同一份本地知识状态的可视化入口。
 
@@ -261,17 +267,34 @@ python start.py import "E:\documents\project.pdf" --no-ingest
 # 扫描并整理所有待处理文档
 python start.py ingest
 
-# 只构建指定 Markdown 的图谱
-python start.py ingest --paths "markdown\project-a1b2c3.md" --mode graph
+# 只构建指定 Markdown 的图谱（路径是位置参数）
+python start.py ingest "project-a1b2c3.md" --mode graph
 
 # 图谱、RAG、混合查询
 python start.py query-graph "知识图谱如何增强检索"
 python start.py query-rag "如何导入 PDF" --top-k 10
 python start.py query-hybrid "图谱和向量检索的关系"
+python start.py query-global "知识库有哪些主要主题？" --top-k 5
+
+# 强制跳过缓存，或管理 CLI/API/Web 共用的搜索历史
+python start.py query-hybrid "图谱和向量检索的关系" --force
+python start.py cache-list --page 1 --page-size 20
+python start.py cache-show <cache_key>
+python start.py cache-clear --stale
 
 # 查看状态与资料列表
 python start.py status
 python start.py list-docs
+python start.py list-docs --page 1 --page-size 20
+
+# 三个不同维护层级
+python start.py organize-graph
+python start.py rebuild-knowledge-base
+python start.py rebuild-all
+
+# 查询服务端持久化任务记录
+python start.py jobs --limit 20
+python start.py job-status "<job_id>"
 ```
 
 CLI 输出结构化 JSON，适合 PowerShell 脚本、定时任务或本地自动化接续处理。
@@ -292,6 +315,11 @@ uvicorn api:app --host 127.0.0.1 --port 8000
 /api/v1/query/hybrid
 /api/v1/import
 /api/v1/ingest
+/api/v1/jobs/ingest
+/api/v1/jobs
+/api/v1/maintenance/organize-graph
+/api/v1/maintenance/rebuild-knowledge-base
+/api/v1/maintenance/rebuild-all
 /api/v1/documents
 /api/v1/graph
 ```
@@ -359,9 +387,10 @@ kemo-graph 坚持本地优先。
 external/markdown/          转换后的正式 Markdown 与 file_map.json
 external/recycle/           已删除、等待生命周期清理的 Markdown
 data/sources.db             源文档身份、内容哈希与处理状态
+data/search_cache.db        四种检索共用的结果缓存与历史元数据
 data/Graph/graph.db         节点、关系、来源证据与节点群
-data/RAG/rag.db             文本切片、原始向量与切片-节点关联
-data/RAG/vector_index/      可由 rag.db 重建的 FAISS 索引
+data/RAG/rag.db             文本切片、实体/群组原始向量与切片-节点关联
+data/RAG/vector_index/      三类均可由 rag.db 重建的 FAISS 索引
 log/YYYY-MM-DD.tsv          按 UTC 日期滚动的运行日志
 ```
 
@@ -416,6 +445,10 @@ models.llm                    可用于图谱构建的 LLM
 models.embedding              Embedding 模型
 models.embedding_dimensions   对应向量维度
 models.rerank                 Rerank 模型
+chunking_mode                 fixed / hierarchical / llm
+chunking_llm_max_input_chars  LLM 语义切分单次最大输入字符数
+vector_search.entity_weight   实体向量结果权重
+vector_search.community_weight 群组向量结果权重
 ```
 
 构建网页前端：
@@ -492,11 +525,14 @@ kemo-graph 不试图成为一个替代所有文件管理、所有数据库或所
 - 原始文件与转换 Markdown 的一对一映射；
 - 内容哈希驱动的增量图谱与 RAG 更新；
 - Kemo 协议下的图谱构建 LLM、Embedding 与 Rerank 调用；
-- 工具调用式图谱构建与单文档事务回滚；
-- SQLite 图谱、RAG 原始向量与本地 FAISS 索引；
-- 图谱、向量、混合三种检索模式；
+- 高速结构化 GraphDraft、大文档有限并行与单文档事务回滚；
+- entity/relation mention 来源事实层与节点/关系 MAX 证据权重；
+- 保真型 LLM 语义切分，以及切片、实体、群组三类本地 FAISS 索引；
+- 图谱、向量、混合、全局四种检索模式，以及一跳/多跳人类可读关系链；
 - Web、CLI、外部 HTTP API 三个入口；
 - 文档与节点删除、回收站、节点群总结与定时维护；
+- 图谱整理、变化文档知识库重建和安全的全项目影子重建；
+- 服务端持久化后台任务与跨页面运行记录；
 - 按日 TSV 运行日志与敏感信息脱敏；
 - 面向 kemo-agent 等智能体的外部知识服务接口。
 

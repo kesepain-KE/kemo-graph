@@ -111,9 +111,10 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/status
 
 ```http
 GET /api/v1/graph
+GET /api/v1/graph?nodes_page=1&nodes_page_size=100
 ```
 
-返回当前全部节点、关系线和节点群总结。适合智能体需要：
+不传分页参数时返回当前全部节点；传入 `nodes_page` 后仅对节点分页，关系线和节点群总结仍始终全量返回。适合智能体需要：
 
 - 找到 `node_id` / `edge_id`；
 - 审查可删除目标；
@@ -157,7 +158,13 @@ GET /api/v1/graph
         "edge_count": 2,
         "node_ids": ["node-a", "node-b", "node-c"]
       }
-    ]
+    ],
+    "nodes_pagination": {
+      "page": null,
+      "page_size": 1,
+      "total": 1,
+      "total_pages": 1
+    }
   },
   "error": null
 }
@@ -165,17 +172,61 @@ GET /api/v1/graph
 
 兼容别名：`GET /api/v1/graph/full`。
 
+### 3.3 GPU 可视化分页
+
+Phase 14A 新增可视化专用数据契约，节点和关系分别分页，避免节点翻页时重复传输全部关系：
+
+```http
+GET /api/v1/graph/visualization/meta
+GET /api/v1/graph/visualization/nodes?page=1&page_size=1000&expected_revision={revision}
+GET /api/v1/graph/visualization/edges?page=1&page_size=2000&expected_revision={revision}
+```
+
+`meta` 返回当前内容驱动的 64 位 `revision`、节点/关系/群组数量和群组摘要。节点页额外返回每个节点的 `source_ids` 与 `group_ids`；关系页只返回关系。所有分页响应都携带相同的 `revision`。
+
+客户端应先读取 `meta`，随后把该值作为 `expected_revision` 请求各页。加载期间图谱发生变化时，服务端返回 HTTP 409：
+
+```json
+{
+  "ok": false,
+  "data": null,
+  "error": {
+    "code": "GRAPH_CHANGED",
+    "message": "图谱已发生变化，请重新加载……"
+  }
+}
+```
+
+旧的 `GET /api/v1/graph` 行为保持不变。
+
+### 3.4 确定性局部图谱
+
+```http
+GET /api/v1/graph/neighborhood/{node_id}?depth=2&direction=both&limit=2000&edge_limit=10000&expected_revision={revision}
+```
+
+- `depth`：1～6；
+- `direction`：`forward`、`backward` 或 `both`；
+- `limit`：节点上限，最大 10000；
+- `edge_limit`：内部关系上限，最大 50000；
+- `expected_revision`：可选的快照一致性保护。
+
+该端点直接按 `node_id` 执行数据库 BFS，不调用 LLM、Embedding 或 Rerank。响应中的节点包含 `depth`，并用 `truncated` / `edges_truncated` 表示是否达到安全上限。
+
 ---
 
 ## 4. 查询 API
 
-三种查询模式互相独立：
+四种查询模式互相独立：
 
 | 模式 | 端点 | 用途 |
 |---|---|---|
 | 图谱查询 | `POST /query/graph` | 关键词/实体命中、关系扩展、群总结 |
 | 向量查询 | `POST /query/rag` | 文档切片语义召回与重排序 |
 | 混合查询 | `POST /query/hybrid` | 先图谱命中并增强关联切片，再执行向量召回和重排序 |
+| 全局查询 | `POST /query/global` | 先召回相关节点群，再结合群总结和关键实体生成整体回答 |
+
+四种查询都接受可选查询参数 `force=true`。启用时跳过已有缓存并重新执行完整检索，成功结果仍会更新缓存。默认情况下，CLI、API 与网页端共享 `data/search_cache.db` 中的结果；知识状态或有效配置变化后旧记录不会参与查询。
 
 ### 4.1 图谱查询
 
@@ -213,8 +264,24 @@ query
 hit_nodes        # 直接匹配的节点
 expanded_nodes   # BFS 扩展得到的节点
 edges            # 涉及的关系线
- groups           # 关联节点群总结
+relations        # 一跳：A->[关系]->B
+paths            # 多跳：A->[关系]->B->[关系]->C
+groups           # 关联节点群总结
 ```
+
+`relations` 每项保留完整 edge 字段并增加 `text`。`paths` 每项包含：
+
+```json
+{
+  "text": "知识图谱->[增强]->RAG->[使用]->Embedding",
+  "node_ids": ["node-a", "node-b", "node-c"],
+  "edge_ids": ["edge-ab", "edge-bc"],
+  "weight": 0.84,
+  "depth": 2
+}
+```
+
+多跳路径由本地 BFS 最短树确定性生成，权重取链上最小关系权重，数量受 `graph_path_limit` 控制。关系方向不会为了排版被改写。
 
 ---
 
@@ -249,14 +316,16 @@ Content-Type: application/json
 查询文本切块 → Embedding → FAISS 候选召回 → Rerank → 阈值过滤
 ```
 
-响应 `data.results` 中每项包含至少：
+响应 `data.results` 中每项包含：
 
 ```text
 chunk_id
 content
 score
-source_id
-relative_path
+granularity       # small / medium / large
+parent_chunk_id
+context           # 父级上下文或 null
+source: { source_id, relative_path }
 ```
 
 ---
@@ -298,7 +367,8 @@ Content-Type: application/json
   → chunk_nodes 找到关联文档切片
   → 给这些切片施加 configured hybrid_enhancement_factor
   → Embedding / FAISS / Rerank
-  → 分别返回 graph 与 rag
+  → 同时检索实体摘要和群组总结向量
+  → 分别返回 graph、rag、entities 与 communities
 ```
 
 响应：
@@ -307,15 +377,85 @@ Content-Type: application/json
 {
   "ok": true,
   "data": {
-    "query": "……",
-    "graph": { "hit_nodes": [], "expanded_nodes": [], "edges": [], "groups": [] },
-    "rag": { "results": [] }
+    "graph": { "hit_nodes": [], "expanded_nodes": [], "edges": [], "relations": [], "paths": [], "groups": [] },
+    "rag": { "query": "……", "results": [] },
+    "entities": [{ "node_id": "…", "keyword": "…", "summary": "…", "score": 0.8, "source": "entity" }],
+    "communities": [{ "group_id": "…", "summary": "…", "node_count": 8, "score": 0.6, "source": "community" }]
   },
   "error": null
 }
 ```
 
 Graph 与 RAG 结果不去重，因为一个是结构关系，另一个是文档片段。
+
+实体和群组分数分别乘以 `vector_search.entity_weight` 与
+`vector_search.community_weight`。这两类结果是补充上下文，不会改写旧的
+`graph` / `rag` 响应结构。
+
+---
+
+### 4.4 全局查询
+
+```http
+POST /api/v1/query/global
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "query": "知识库中主要讨论了哪些技术方向？",
+  "top_k": 5
+}
+```
+
+`top_k` 允许 1–100，表示参与回答的最大相关群组数。系统先检索群组总结向量，
+再加载这些群组的成员，并选取引用次数最高的 10 个关键实体作为受约束上下文。
+
+响应 `data` 包含：
+
+```text
+query
+answer          # LLM 基于选中群组与实体生成的回答
+communities     # 分数、群组统计和 node_ids
+key_entities    # 关键节点、权重、引用次数及所属群组
+```
+
+若尚未生成节点群总结，接口不会调用 LLM，而是返回空的 `communities`、
+`key_entities` 和“请先生成节点群总结”的提示。
+
+---
+
+### 4.5 搜索缓存与历史
+
+```http
+GET    /api/v1/search/cache?page=1&page_size=20
+GET    /api/v1/search/cache/{cache_key}
+DELETE /api/v1/search/cache?stale_only=true
+DELETE /api/v1/search/cache
+```
+
+列表按最近命中或更新时间倒序返回。每条记录包含：
+
+```text
+cache_key
+query_mode       # graph / rag / hybrid / global
+query
+normalized_query
+params           # 已解析的有效查询参数
+result_size      # UTF-8 JSON 字节数
+state_hash
+is_stale         # 是否与当前知识库状态不一致
+hit_count        # 真正从缓存返回的次数
+created_at / updated_at / last_hit_at
+```
+
+详情端点额外返回 `result`，其结构与原查询端点的 `data` 完全一致。读取历史详情不会增加 `hit_count`。
+
+`stale_only=true` 只删除过期记录；不传时清空全部缓存。删除文档或节点时，服务端会主动清空缓存结果，避免已删除正文继续保留在历史结果中。
+
+缓存是透明加速层。缓存数据库损坏或暂时不可写时，查询会降级执行原始检索，不会因缓存故障阻断知识查询。
 
 ---
 
@@ -328,6 +468,7 @@ GET /api/v1/documents
 GET /api/v1/documents?status=active
 GET /api/v1/documents?status=pending
 GET /api/v1/documents?status=all
+GET /api/v1/documents?status=active&page=1&page_size=20
 ```
 
 返回：
@@ -347,7 +488,13 @@ GET /api/v1/documents?status=all
         "created_at": "…",
         "updated_at": "…"
       }
-    ]
+    ],
+    "pagination": {
+      "page": 1,
+      "page_size": 20,
+      "total": 1,
+      "total_pages": 1
+    }
   },
   "error": null
 }
@@ -570,7 +717,7 @@ DELETE /api/v1/nodes/{node_id}
 GET /api/v1/config
 ```
 
-返回可读取的当前配置。敏感密钥不在 `config.json` 中，仍不可将环境变量中的密钥写入请求或日志。
+返回可读取的当前配置。`kemo.api_key` 若已显式配置只返回固定掩码 `************`，并增加只读 `kemo.api_key_source`（`config / environment / none`）；真实密钥不会回显。
 
 ### 7.2 保存完整配置
 
@@ -582,6 +729,8 @@ Content-Type: application/json
 请求体是完整配置对象。配置由服务端校验并原子写入。
 
 **风险**：这是全量配置更新，不是 JSON Patch。调用方必须先 `GET /config`，只修改必要字段后带回完整对象；不要自行编造或删除未知配置项。
+
+密钥优先级：非空 `kemo.api_key` > `kemo.api_key_env` 指定的环境变量。把掩码原样提交会保留现有显式密钥；把字段清空并保存会删除显式密钥并回退到环境变量。`kemo.api_key_source` 和 `kemo.protocol_version` 是 Web 只读字段。
 
 ### 7.3 手动生成节点群总结
 
@@ -599,6 +748,71 @@ POST /api/v1/maintenance/cleanup-recycle
 
 按回收站 `.meta.json` 的 `expires_at` 永久删除到期文件；不可恢复。
 
+### 7.5 永久清空回收站
+
+```http
+DELETE /api/v1/maintenance/recycle
+```
+
+强制删除回收站中的全部文件与元数据，不考虑到期时间。该操作不可恢复，必须由用户明确确认。
+
+### 7.6 后台整理文档
+
+```http
+POST /api/v1/jobs/ingest
+Content-Type: application/json
+
+{"paths": null, "mode": "both"}
+```
+
+与同步 `/ingest` 使用相同参数，但立即返回 job。网页导入完成后使用此端点，避免页面切换或请求连接中断影响长任务。
+
+### 7.7 知识图谱整理
+
+```http
+POST /api/v1/maintenance/organize-graph
+Content-Type: application/json
+
+{"use_llm": true, "summarize": true}
+```
+
+只整理 Graph 投影：合并已检查的重叠节点/关系、迁移来源事实、重算权重和 `chunk_nodes`。不重读 Markdown，不调用 Embedding。
+
+### 7.8 变化文档知识库重建
+
+```http
+POST /api/v1/maintenance/rebuild-knowledge-base
+```
+
+重试新增、变化、删除和失败文档；未变化文档按哈希跳过。
+
+### 7.9 全项目影子重建
+
+```http
+POST /api/v1/maintenance/rebuild-all
+```
+
+在影子目录从全部活动 Markdown 重建 Graph、RAG、FAISS 和派生关联。校验通过才切换正式目录，并在 `data/` 同级保留旧知识库备份；失败不改变正式库。
+
+### 7.10 查询后台任务
+
+```http
+GET /api/v1/jobs?limit=100
+GET /api/v1/jobs/{job_id}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `job_id` / `kind` | 稳定任务身份与类型 |
+| `status` | `queued / running / completed / failed` |
+| `progress` | 0~1 |
+| `detail` | 当前阶段 |
+| `result` / `error` | 完成结果或失败摘要 |
+| `created_at` / `started_at` / `finished_at` / `updated_at` | UTC ISO 时间 |
+| `events[]` | 有序阶段与错误事件 |
+
+任务状态持久化在 `sources.db`。服务重启后遗留的未完成任务会标记为 failed，不会永久卡住。
+
 ---
 
 ## 8. 智能体推荐调用流程
@@ -615,7 +829,8 @@ POST /import?ingest=false
 之后再决定是否：
 
 ```text
-POST /ingest {"paths":["…"], "mode":"both"}
+POST /jobs/ingest {"paths":["…"], "mode":"both"}
+  → GET /jobs/{job_id}
 ```
 
 ### 8.2 普通查询
