@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { GraphEdge, GraphNode } from "../types/api";
-import { computeForceLayout, selectNeighborhood } from "./forceLayout";
+import {
+  computeForceLayout,
+  computeInitialLayout,
+  selectNeighborhood,
+} from "./forceLayout";
+import { graphNodeCollisionRadius } from "../features/graph/engine/layoutTypes";
 
 const nodes = ["a", "b", "c", "d"].map(
   (node_id): GraphNode => ({
@@ -32,6 +37,28 @@ describe("force layout", () => {
     const second = computeForceLayout(nodes, edges, 40);
     expect(first).toEqual(second);
     expect(first.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true);
+  });
+
+  it("creates a deterministic non-iterative starting layout", () => {
+    expect(computeInitialLayout(nodes)).toEqual(computeInitialLayout(nodes));
+    expect(computeInitialLayout([])).toEqual([]);
+  });
+
+  it("keeps rendered node circles from touching after layout", () => {
+    const positioned = computeForceLayout(nodes, edges, 40);
+    for (let left = 0; left < positioned.length; left += 1) {
+      for (let right = left + 1; right < positioned.length; right += 1) {
+        const distance = Math.hypot(
+          positioned[left].x - positioned[right].x,
+          positioned[left].y - positioned[right].y,
+        );
+        expect(distance).toBeGreaterThanOrEqual(
+          graphNodeCollisionRadius(positioned[left].ref_count)
+          + graphNodeCollisionRadius(positioned[right].ref_count)
+          - 0.02,
+        );
+      }
+    }
   });
 
   it("selects bidirectional neighbors up to the requested depth", () => {

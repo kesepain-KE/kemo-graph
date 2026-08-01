@@ -1,15 +1,15 @@
 import {
-  ChevronDown,
-  FileText,
   Focus,
+  Globe2,
   Hand,
+  Maximize2,
   Minus,
+  Minimize2,
   Network,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   RotateCcw,
-  Search,
-  Tag,
 } from "lucide-react";
 import {
   useEffect,
@@ -19,20 +19,53 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent,
 } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
+import { GraphControlPanel } from "../features/graph/GraphControlPanel";
+import { GraphDetails } from "../features/graph/GraphDetails";
+import { GraphRelationDetails } from "../features/graph/GraphRelationDetails";
 import {
+  GraphViewport,
+  type GraphViewportHandle,
+} from "../features/graph/GraphViewport";
+import {
+  isGraphRevisionChanged,
+  loadGlobalEdges,
+  loadGraphSourceLabels,
+  loadGraphCatalog,
+  type GraphCatalog,
+} from "../features/graph/data/GraphDataLoader";
+import { makeLayoutCacheKey } from "../features/graph/data/GraphPositionCache";
+import {
+  loadGraphPreferences,
+  resolveSemanticNodeVisualStyle,
+  saveGraphPreferences,
+} from "../features/graph/graphPreferences";
+import type {
+  GraphRenderScene,
+} from "../features/graph/engine/GraphRenderer";
+import type { LayoutRuntimeStatus } from "../features/graph/engine/layoutTypes";
+import {
+  calculateLayoutWorld,
+  graphNodeCollisionRadius,
+} from "../features/graph/engine/layoutTypes";
+import { buildReadableRelationPaths } from "../features/graph/relationPaths";
+import {
+  computeInitialLayout,
   computeForceLayout,
-  selectNeighborhood,
   type PositionedNode,
 } from "../lib/forceLayout";
-import type { FullGraphData, GraphEdge, GraphNode } from "../types/api";
+import type {
+  GraphEdge,
+  GraphNeighborhoodData,
+  GraphNode,
+  GraphVisualizationNode,
+} from "../types/api";
 
 type Point = { x: number; y: number };
-type NodeKind = "core" | "concept" | "group";
 type Interaction =
   | { kind: "pan"; client: Point; pan: Point }
   | { kind: "node"; nodeId: string };
@@ -45,12 +78,6 @@ function graphLabel(value: string, max = 12): string {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
-function isGroupNode(node: GraphNode): boolean {
-  return [node.keyword, ...node.aliases, ...node.tags].some((value) =>
-    /(^|[\s_-])(group|cluster|community)([\s_-]|$)|群组|社群/i.test(value),
-  );
-}
-
 function isCoreNode(node: GraphNode, maxRefCount: number): boolean {
   const explicitlyCore = [node.keyword, ...node.aliases, ...node.tags].some(
     (value) => /(^|[\s_-])core([\s_-]|$)|核心/i.test(value),
@@ -61,23 +88,27 @@ function isCoreNode(node: GraphNode, maxRefCount: number): boolean {
 function GraphCanvas({
   nodes,
   edges,
-  selectedId,
-  highlightedIds,
-  groupNodeIds,
+  scene,
   onSelect,
+  onSelectEdge,
 }: {
   nodes: PositionedNode[];
   edges: GraphEdge[];
-  selectedId: string | null;
-  highlightedIds: Set<string>;
-  groupNodeIds: Set<string>;
+  scene: GraphRenderScene;
   onSelect: (nodeId: string) => void;
+  onSelectEdge: (edgeId: string) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const interactionRef = useRef<Interaction | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [manualPositions, setManualPositions] = useState<Map<string, Point>>(new Map());
+  const layoutWorld = useMemo(() => calculateLayoutWorld(new Float32Array(
+    nodes.map((node) => graphNodeCollisionRadius(
+      node.ref_count,
+      scene.appearance.nodeScale,
+    )),
+  )), [nodes, scene.appearance.nodeScale]);
 
   useEffect(() => {
     setManualPositions(new Map());
@@ -93,14 +124,17 @@ function GraphCanvas({
       ),
     [manualPositions, nodes],
   );
-  const maxRefCount = Math.max(1, ...nodes.map((node) => node.ref_count));
+  const nodeLabels = useMemo(
+    () => new Map(nodes.map((node) => [node.node_id, node.keyword])),
+    [nodes],
+  );
 
   const toCanvasPoint = (clientX: number, clientY: number): Point => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
     return {
-      x: ((clientX - rect.left) / rect.width) * 1000,
-      y: ((clientY - rect.top) / rect.height) * 700,
+      x: layoutWorld.minX + ((clientX - rect.left) / rect.width) * layoutWorld.width,
+      y: layoutWorld.minY + ((clientY - rect.top) / rect.height) * layoutWorld.height,
     };
   };
 
@@ -135,7 +169,18 @@ function GraphCanvas({
 
   const handleWheel = (event: WheelEvent<SVGSVGElement>) => {
     event.preventDefault();
-    setZoom((value) => Math.min(2.2, Math.max(0.55, value - event.deltaY * 0.001)));
+    const pointer = toCanvasPoint(event.clientX, event.clientY);
+    const nextZoom = Math.min(2.2, Math.max(0.55, zoom - event.deltaY * 0.001));
+    if (nextZoom === zoom) return;
+    const worldPoint = {
+      x: (pointer.x - pan.x) / zoom,
+      y: (pointer.y - pan.y) / zoom,
+    };
+    setPan({
+      x: pointer.x - worldPoint.x * nextZoom,
+      y: pointer.y - worldPoint.y * nextZoom,
+    });
+    setZoom(nextZoom);
   };
 
   if (!nodes.length) {
@@ -153,7 +198,7 @@ function GraphCanvas({
       <svg
         ref={svgRef}
         className="graph-svg"
-        viewBox="0 0 1000 700"
+        viewBox={`${layoutWorld.minX} ${layoutWorld.minY} ${layoutWorld.width} ${layoutWorld.height}`}
         role="img"
         aria-label="可缩放拖拽的知识图谱"
         onPointerDown={(event) => {
@@ -189,48 +234,88 @@ function GraphCanvas({
             <path d="M0,0 L8,4 L0,8 Z" className="graph-arrow" />
           </marker>
         </defs>
-        <rect width="1000" height="700" fill="url(#grid)" />
+        <rect
+          x={layoutWorld.minX}
+          y={layoutWorld.minY}
+          width={layoutWorld.width}
+          height={layoutWorld.height}
+          fill="url(#grid)"
+        />
         <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
           {edges.map((edge) => {
             const source = positions.get(edge.source_node_id);
             const target = positions.get(edge.target_node_id);
             if (!source || !target) return null;
             const midpoint = { x: (source.x + target.x) / 2, y: (source.y + target.y) / 2 };
+            const selected = scene.selectedEdgeId === edge.edge_id;
+            const related = scene.contextMode === "local" && scene.relatedEdgeIds.has(edge.edge_id);
+            const stroke = selected || related
+              ? scene.appearance.colors.selectedRelation
+              : scene.contextMode === "local"
+                ? scene.appearance.colors.unrelatedRelation
+                : scene.appearance.colors.globalRelation;
+            const alpha = selected || related || scene.contextMode === "global"
+              ? selected ? 0.96 : 0.54
+              : scene.appearance.unrelatedOpacity;
             return (
-              <g className="graph-edge-group" key={edge.edge_id}>
+              <g className={`graph-edge-group ${selected ? "is-selected" : ""}`} key={edge.edge_id}>
                 <line
                   className="graph-edge"
                   x1={source.x}
                   y1={source.y}
                   x2={target.x}
                   y2={target.y}
-                  markerEnd="url(#arrow)"
-                  style={{ strokeWidth: 1.1 + Math.max(0, edge.weight) * 2.8 }}
+                  style={{
+                    stroke,
+                    opacity: alpha,
+                    strokeWidth: (
+                      1.1 + Math.max(0, edge.weight) * 2.8
+                    ) * scene.appearance.edgeScale + (selected ? 1.8 : 0),
+                  }}
+                  markerEnd={scene.appearance.showArrows ? "url(#arrow)" : undefined}
                 />
-                {nodes.length <= 36 ? (
+                {shouldShowSvgEdgeLabel(edge, scene, zoom) ? (
                   <text
                     className="graph-edge-label"
                     x={midpoint.x}
                     y={midpoint.y - 7}
                     textAnchor="middle"
+                    style={{
+                      fill: stroke,
+                      opacity: scene.appearance.labelOpacity * Math.max(alpha, 0.3),
+                    }}
                   >
                     {edge.relation}
                   </text>
                 ) : null}
+                <line
+                  className="graph-edge-hit-target"
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${nodeLabels.get(edge.source_node_id) ?? edge.source_node_id} 到 ${nodeLabels.get(edge.target_node_id) ?? edge.target_node_id} 的关系：${edge.relation}`}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    onSelectEdge(edge.edge_id);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") onSelectEdge(edge.edge_id);
+                  }}
+                />
               </g>
             );
           })}
 
           {nodes.map((node) => {
             const position = positions.get(node.node_id) ?? node;
-            const kind: NodeKind = groupNodeIds.has(node.node_id)
-              ? "group"
-              : isCoreNode(node, maxRefCount)
-                ? "core"
-                : "concept";
-            const radius = nodeRadius(node);
-            const selected = selectedId === node.node_id;
-            const highlighted = highlightedIds.has(node.node_id);
+            const kind = scene.nodeKinds.get(node.node_id) ?? "concept";
+            const radius = nodeRadius(node) * scene.appearance.nodeScale;
+            const selected = scene.selectedId === node.node_id;
+            const highlighted = scene.highlightedIds.has(node.node_id);
+            const visualStyle = scene.nodeStyles.get(node.node_id);
             return (
               <g
                 key={node.node_id}
@@ -239,6 +324,7 @@ function GraphCanvas({
                 role="button"
                 tabIndex={0}
                 aria-label={`${node.keyword}，引用 ${node.ref_count} 次`}
+                style={{ opacity: visualStyle?.alpha ?? 1 }}
                 onPointerDown={(event) => {
                   event.stopPropagation();
                   interactionRef.current = { kind: "node", nodeId: node.node_id };
@@ -249,14 +335,37 @@ function GraphCanvas({
                   if (event.key === "Enter" || event.key === " ") onSelect(node.node_id);
                 }}
               >
-                <circle className="graph-node__halo" r={radius + 8} />
-                <circle className="graph-node__body" r={radius} />
-                <text textAnchor="middle" y="4">
-                  {graphLabel(node.keyword)}
-                </text>
-                <text className="graph-node__count" textAnchor="middle" y={radius + 20}>
-                  ref · {node.ref_count}
-                </text>
+                <circle
+                  className="graph-node__halo"
+                  r={radius + 8}
+                  style={{ stroke: visualStyle?.stroke }}
+                />
+                <circle
+                  className="graph-node__body"
+                  r={radius}
+                  style={{ fill: visualStyle?.fill, stroke: visualStyle?.stroke }}
+                />
+                {shouldShowSvgNodeLabel(node, kind, selected, highlighted, scene, zoom) ? (
+                  <>
+                    <text
+                      textAnchor="middle"
+                      y="4"
+                      style={{ fill: visualStyle?.text, opacity: scene.appearance.labelOpacity }}
+                    >
+                      {graphLabel(node.keyword)}
+                    </text>
+                    {selected || scene.performance.labelDensity === "high" ? (
+                      <text
+                        className="graph-node__count"
+                        textAnchor="middle"
+                        y={radius + 20}
+                        style={{ opacity: scene.appearance.labelOpacity }}
+                      >
+                        ref · {node.ref_count}
+                      </text>
+                    ) : null}
+                  </>
+                ) : null}
               </g>
             );
           })}
@@ -266,7 +375,7 @@ function GraphCanvas({
       <div className="graph-legend">
         <span><i className="legend-dot legend-dot--core" />核心概念</span>
         <span><i className="legend-dot legend-dot--concept" />一般概念</span>
-        <span><i className="legend-dot legend-dot--group" />群组节点</span>
+        <span><i className="legend-dot legend-dot--group" />真实群组配色</span>
       </div>
 
       <div className="canvas-tools">
@@ -291,31 +400,128 @@ function GraphCanvas({
   );
 }
 
-export function GraphPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [data, setData] = useState<FullGraphData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [depth, setDepth] = useState(2);
-  const [groupId, setGroupId] = useState("all");
-  const [selectedId, setSelectedId] = useState<string | null>(
-    searchParams.get("node"),
+function SvgGraphFallback({
+  scene,
+  onSelect,
+  onSelectEdge,
+}: {
+  scene: GraphRenderScene;
+  onSelect: (nodeId: string) => void;
+  onSelectEdge: (edgeId: string) => void;
+}) {
+  const positioned = useMemo(
+    () => computeForceLayout(
+      scene.nodes,
+      scene.edges,
+      180,
+      scene.appearance.nodeScale,
+    ),
+    [scene.appearance.nodeScale, scene.edges, scene.nodes],
   );
+  return (
+    <GraphCanvas
+      nodes={positioned}
+      edges={scene.edges}
+      scene={{ ...scene, nodes: positioned }}
+      onSelect={onSelect}
+      onSelectEdge={onSelectEdge}
+    />
+  );
+}
+
+function shouldShowSvgEdgeLabel(
+  edge: GraphEdge,
+  scene: GraphRenderScene,
+  zoom: number,
+): boolean {
+  if (scene.appearance.relationLabels === "never") return false;
+  if (scene.appearance.relationLabels === "always") return scene.edges.length <= 2000;
+  const touchesSelected = Boolean(scene.selectedId) && (
+    edge.source_node_id === scene.selectedId || edge.target_node_id === scene.selectedId
+  );
+  if (scene.appearance.relationLabels === "selected") return touchesSelected;
+  return touchesSelected || (zoom >= 1.55 && scene.edges.length <= 500);
+}
+
+function shouldShowSvgNodeLabel(
+  node: PositionedNode,
+  kind: "core" | "concept" | "group",
+  selected: boolean,
+  highlighted: boolean,
+  scene: GraphRenderScene,
+  zoom: number,
+): boolean {
+  if (selected || highlighted) return true;
+  if (scene.performance.labelDensity === "high") return scene.nodes.length <= 3000 || zoom >= 1.35;
+  if (scene.performance.labelDensity === "low") return kind === "core" && (scene.nodes.length <= 800 || zoom >= 1.7);
+  if (scene.nodes.length <= 500) return true;
+  const maxRef = Math.max(1, ...scene.nodes.map((item) => item.ref_count));
+  return kind === "core" || node.ref_count >= Math.max(3, maxRef * 0.55) || zoom >= 1.6;
+}
+
+export function GraphPage() {
+  const viewportRef = useRef<GraphViewportHandle>(null);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [catalog, setCatalog] = useState<GraphCatalog | null>(null);
+  const [localGraph, setLocalGraph] = useState<GraphNeighborhoodData | null>(null);
+  const [globalEdges, setGlobalEdges] = useState<GraphEdge[] | null>(null);
+  const [sourceLabels, setSourceLabels] = useState<Map<string, string>>(new Map());
+  const [preferences, setPreferences] = useState(loadGraphPreferences);
+  const [loading, setLoading] = useState(true);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rendererBackend, setRendererBackend] = useState("正在初始化");
+  const [layoutStatus, setLayoutStatus] = useState<LayoutRuntimeStatus | null>(null);
+  const [fps, setFps] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenPanelOpen, setFullscreenPanelOpen] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("node"));
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+
+  const viewMode = preferences.view.mode;
+  const depth = preferences.view.depth;
+
+  useEffect(() => saveGraphPreferences(preferences), [preferences]);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      const active = document.fullscreenElement === fullscreenRef.current;
+      setIsFullscreen(active);
+      if (active) {
+        setFullscreenPanelOpen(true);
+      }
+      requestAnimationFrame(() => viewportRef.current?.reheat());
+    };
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
+  }, []);
 
   const loadGraph = async () => {
     setLoading(true);
     setError(null);
     try {
-      const graph = await api.fullGraph();
-      setData(graph);
+      const [graph, labels] = await Promise.all([
+        loadGraphCatalog(),
+        loadGraphSourceLabels().catch(() => new Map<string, string>()),
+      ]);
+      const edges = await loadGlobalEdges(graph.meta);
+      setCatalog(graph);
+      setSourceLabels(labels);
+      setLocalGraph(null);
+      setGlobalEdges(edges);
+      setSelectedEdgeId(null);
       const requestedNode = searchParams.get("node");
       if (requestedNode && graph.nodes.some((node) => node.node_id === requestedNode)) {
         setSelectedId(requestedNode);
-      } else if (!selectedId && graph.nodes.length) {
-        setSelectedId(
-          [...graph.nodes].sort((a, b) => b.ref_count - a.ref_count)[0].node_id,
-        );
+      } else if (graph.nodes.length) {
+        setSelectedId((current) => (
+          current && graph.nodes.some((node) => node.node_id === current)
+            ? current
+            : [...graph.nodes].sort((left, right) => right.ref_count - left.ref_count)[0].node_id
+        ));
+      } else {
+        setSelectedId(null);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "无法加载图谱");
@@ -326,217 +532,415 @@ export function GraphPage() {
 
   useEffect(() => {
     void loadGraph();
+    // The initial URL node is intentionally read only once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const highlightedIds = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase();
-    if (!keyword || !data) return new Set<string>();
-    return new Set(
-      data.nodes
-        .filter((node) =>
-          [node.keyword, ...node.aliases, ...node.tags].some((value) =>
-            value.toLocaleLowerCase().includes(keyword),
-          ),
-        )
-        .map((node) => node.node_id),
-    );
-  }, [data, query]);
+  useEffect(() => {
+    if (!catalog || !selectedId) {
+      setGraphLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    const loadActiveGraph = async () => {
+      setGraphLoading(true);
+      try {
+        if (viewMode === "local") {
+          setLocalGraph(null);
+          const neighborhood = await api.graphNeighborhood(selectedId, {
+            depth,
+            direction: "both",
+            limit: 5000,
+            edgeLimit: 20000,
+            expectedRevision: catalog.revision,
+          });
+          if (!cancelled) setLocalGraph(neighborhood);
+        } else {
+          setGraphLoading(false);
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          if (isGraphRevisionChanged(caught)) {
+            setError("图谱刚刚发生更新，正在重新载入一致快照…");
+            void loadGraph();
+          } else {
+            setError(caught instanceof Error ? caught.message : "无法加载图谱数据");
+          }
+        }
+      } finally {
+        if (!cancelled) setGraphLoading(false);
+      }
+    };
+    void loadActiveGraph();
+    return () => {
+      cancelled = true;
+    };
+  }, [catalog, depth, selectedId, viewMode]);
 
-  const focusedId = highlightedIds.values().next().value ?? selectedId;
-  const group = data?.groups.find((item) => item.group_id === groupId) ?? null;
-  const groupFilter = group?.node_ids?.length ? new Set(group.node_ids) : null;
-  const neighborhood = useMemo(
-    () =>
-      data
-        ? selectNeighborhood(data.nodes, data.edges, focusedId ?? null, depth)
-        : new Set<string>(),
-    [data, depth, focusedId],
+  const data = useMemo(() => {
+    if (!catalog) return null;
+    return {
+      nodes: catalog.nodes,
+      edges: globalEdges ?? [],
+    };
+  }, [catalog, globalEdges]);
+
+  const activeLocalGraph = viewMode === "local"
+    && localGraph?.anchor_node_id === selectedId
+    && localGraph.depth === depth
+    ? localGraph
+    : null;
+
+  const relatedNodeIds = useMemo(() => {
+    if (viewMode !== "local") return new Set<string>();
+    const ids = new Set(activeLocalGraph?.nodes.map((node) => node.node_id) ?? []);
+    if (selectedId) ids.add(selectedId);
+    return ids;
+  }, [activeLocalGraph, selectedId, viewMode]);
+  const relatedEdgeIds = useMemo(() => new Set(
+    viewMode === "local" ? (activeLocalGraph?.edges ?? []).map((edge) => edge.edge_id) : [],
+  ), [activeLocalGraph, viewMode]);
+
+  const highlightedNodes = useMemo(() => {
+    const keyword = preferences.filters.query.trim().toLocaleLowerCase();
+    if (!keyword || !catalog) return [];
+    return catalog.nodes.filter((node) => (
+      [node.keyword, node.summary, ...node.aliases, ...node.tags].some(
+        (value) => value.toLocaleLowerCase().includes(keyword),
+      )
+    ));
+  }, [catalog, preferences.filters.query]);
+  const highlightedIds = useMemo(
+    () => new Set(highlightedNodes.map((node) => node.node_id)),
+    [highlightedNodes],
   );
-  const visibleNodes = useMemo(
-    () =>
-      (data?.nodes ?? []).filter(
-        (node) =>
-          neighborhood.has(node.node_id) &&
-          (!groupFilter || groupFilter.has(node.node_id)),
-      ),
-    [data, groupFilter, neighborhood],
-  );
+
+  const groupFilter = useMemo(() => {
+    if (preferences.filters.groupId === "all") return null;
+    const group = catalog?.groups.find(
+      (item) => item.group_id === preferences.filters.groupId,
+    );
+    return group?.node_ids?.length ? new Set(group.node_ids) : new Set<string>();
+  }, [catalog, preferences.filters.groupId]);
+
+  const visibleNodes = useMemo<GraphVisualizationNode[]>(() => (
+    (data?.nodes ?? []).filter((node) => (
+      (!groupFilter || groupFilter.has(node.node_id))
+      && (preferences.filters.sourceId === "all" || node.source_ids.includes(preferences.filters.sourceId))
+      && (preferences.filters.tag === "all" || node.tags.includes(preferences.filters.tag))
+      && (node.weight ?? 0) >= preferences.filters.minNodeWeight
+      && node.ref_count >= preferences.filters.minRefCount
+    ))
+  ), [
+    data,
+    groupFilter,
+    preferences.filters.minNodeWeight,
+    preferences.filters.minRefCount,
+    preferences.filters.sourceId,
+    preferences.filters.tag,
+  ]);
   const visibleIds = useMemo(
     () => new Set(visibleNodes.map((node) => node.node_id)),
     [visibleNodes],
   );
-  const visibleEdges = useMemo(
-    () =>
-      (data?.edges ?? []).filter(
-        (edge) =>
-          visibleIds.has(edge.source_node_id) && visibleIds.has(edge.target_node_id),
-      ),
-    [data, visibleIds],
+  const activeRelationTypes = useMemo(
+    () => [...new Set((data?.edges ?? []).map((edge) => edge.relation))].sort(),
+    [data],
   );
+  const visibleEdges = useMemo(() => (
+    (data?.edges ?? []).filter((edge) => (
+      visibleIds.has(edge.source_node_id)
+      && visibleIds.has(edge.target_node_id)
+      && edge.weight >= preferences.filters.minEdgeWeight
+      && (
+        preferences.filters.relation === "all"
+        || edge.relation === preferences.filters.relation
+      )
+    ))
+  ), [
+    data,
+    preferences.filters.minEdgeWeight,
+    preferences.filters.relation,
+    visibleIds,
+  ]);
   const positionedNodes = useMemo(
-    () => computeForceLayout(visibleNodes, visibleEdges),
-    [visibleEdges, visibleNodes],
+    () => computeInitialLayout(visibleNodes, preferences.appearance.nodeScale),
+    [preferences.appearance.nodeScale, visibleNodes],
   );
-  const selected = data?.nodes.find((node) => node.node_id === selectedId) ?? null;
-  const selectedEdges = (data?.edges ?? []).filter(
-    (edge) =>
-      edge.source_node_id === selectedId || edge.target_node_id === selectedId,
+  const selected = catalog?.nodes.find((node) => node.node_id === selectedId) ?? null;
+  const selectedEdge = visibleEdges.find((edge) => edge.edge_id === selectedEdgeId) ?? null;
+  const relatedRelationEdges = useMemo(() => (
+    selectedEdge
+      ? visibleEdges.filter((edge) => edge.relation === selectedEdge.relation)
+      : []
+  ), [selectedEdge, visibleEdges]);
+  const selectedEdges = visibleEdges.filter((edge) => (
+    edge.source_node_id === selectedId || edge.target_node_id === selectedId
+  ));
+  const nodesById = useMemo(
+    () => new Map<string, GraphNode>(
+      (catalog?.nodes ?? []).map((node) => [node.node_id, node]),
+    ),
+    [catalog],
   );
-  const selectedGroups = (data?.groups ?? []).filter((item) =>
-    item.node_ids?.includes(selectedId ?? ""),
+  const maxRefCount = Math.max(1, ...(catalog?.nodes ?? []).map((node) => node.ref_count));
+  const nodeKinds = useMemo(() => new Map(
+    positionedNodes.map((node) => [
+      node.node_id,
+      isCoreNode(node, maxRefCount) ? "core" as const : "concept" as const,
+    ]),
+  ), [maxRefCount, positionedNodes]);
+  const nodeStyles = useMemo(() => new Map(
+    visibleNodes.map((node) => {
+      const highlighted = highlightedIds.has(node.node_id);
+      const isSelected = viewMode === "local" && node.node_id === selectedId;
+      const isRelated = viewMode === "local" && relatedNodeIds.has(node.node_id);
+      const color = viewMode === "global"
+        ? preferences.appearance.colors.globalNode
+        : isSelected
+          ? preferences.appearance.colors.selectedNode
+          : isRelated
+            ? preferences.appearance.colors.relatedNode
+            : preferences.appearance.colors.unrelatedNode;
+      const alpha = viewMode === "global" || isSelected || isRelated || highlighted
+        ? 1
+        : preferences.appearance.unrelatedOpacity;
+      return [
+        node.node_id,
+        resolveSemanticNodeVisualStyle(
+          node,
+          color,
+          preferences.appearance.canvasPreset,
+          alpha,
+        ),
+      ];
+    }),
+  ), [
+    highlightedIds,
+    preferences.appearance,
+    relatedNodeIds,
+    selectedId,
+    visibleNodes,
+    viewMode,
+  ]);
+  const contextEdges = useMemo(() => (
+    viewMode === "local" && activeLocalGraph
+      ? activeLocalGraph.edges.filter((edge) => (
+        visibleIds.has(edge.source_node_id) && visibleIds.has(edge.target_node_id)
+      ))
+      : visibleEdges
+  ), [activeLocalGraph, viewMode, visibleEdges, visibleIds]);
+  const selectedPaths = useMemo(
+    () => buildReadableRelationPaths(selectedId, contextEdges, nodesById, 24),
+    [contextEdges, nodesById, selectedId],
   );
-  const groupNodeIds = new Set(
-    (data?.nodes ?? []).filter(isGroupNode).map((node) => node.node_id),
-  );
+  const selectedIsCore = selected ? isCoreNode(selected, maxRefCount) : false;
+
+  const graphScene = useMemo<GraphRenderScene>(() => ({
+    nodes: positionedNodes,
+    edges: visibleEdges,
+    selectedId,
+    selectedEdgeId,
+    highlightedIds,
+    relatedNodeIds,
+    relatedEdgeIds,
+    contextMode: viewMode,
+    nodeKinds,
+    nodeStyles,
+    appearance: preferences.appearance,
+    performance: preferences.performance,
+  }), [
+    highlightedIds,
+    nodeKinds,
+    nodeStyles,
+    positionedNodes,
+    preferences.appearance,
+    preferences.performance,
+    relatedEdgeIds,
+    relatedNodeIds,
+    selectedEdgeId,
+    selectedId,
+    visibleEdges,
+    viewMode,
+  ]);
+  const layoutKey = useMemo(() => makeLayoutCacheKey(
+    catalog?.revision ?? "empty",
+    "global",
+    null,
+    0,
+    preferences.force,
+    preferences.appearance.nodeScale,
+  ), [
+    catalog?.revision,
+    preferences.appearance.nodeScale,
+    preferences.force,
+  ]);
 
   const selectNode = (nodeId: string) => {
     setSelectedId(nodeId);
+    setSelectedEdgeId(null);
+    setPreferences((current) => ({
+      ...current,
+      view: { ...current.view, mode: "local" },
+    }));
     setSearchParams({ node: nodeId }, { replace: true });
+  };
+
+  const selectEdge = (edgeId: string) => {
+    setSelectedEdgeId(edgeId);
+    if (isFullscreen) setFullscreenPanelOpen(true);
+  };
+
+  const returnToGlobal = () => {
+    setSelectedEdgeId(null);
+    setPreferences((current) => ({
+      ...current,
+      view: { ...current.view, mode: "global" },
+    }));
+  };
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === fullscreenRef.current) {
+        await document.exitFullscreen();
+        return;
+      }
+      if (!fullscreenRef.current || !document.fullscreenEnabled) {
+        throw new Error("当前浏览器未开放全屏显示能力");
+      }
+      await fullscreenRef.current.requestFullscreen();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "无法进入图谱全屏模式");
+    }
   };
 
   return (
     <section className="graph-page page-stack">
       <PageIntro
         title="探索知识之间的连接"
-        description="节点大小反映引用次数，边宽反映关系权重；拖拽节点可微调当前布局。"
+        description="默认以当前节点为锚点强化局部关系；无关知识保留并虚化，随时可回归全局。"
         actions={
-          <button className="button button--secondary" onClick={loadGraph} disabled={loading}>
-            <RefreshCw className={loading ? "spin" : ""} size={16} /> 刷新图谱
+          <button className="button button--secondary" type="button" onClick={loadGraph} disabled={loading}>
+            <RefreshCw className={loading ? "spin" : ""} size={16} />刷新图谱
           </button>
         }
       />
       {error ? <ErrorNotice message={error} /> : null}
 
-      <div className="graph-layout">
-        <aside className="graph-explorer card">
-          <div className="panel-title-row">
-            <div><p className="eyebrow">Explore</p><h3>图谱探索</h3></div>
-            <span className="count-chip">{visibleNodes.length}</span>
-          </div>
-          <label className="search-field">
-            <Search size={16} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索节点、别名或标签…"
-            />
-          </label>
-          {query && highlightedIds.size === 0 ? (
-            <span className="field-hint text-warning">没有匹配节点</span>
-          ) : null}
-
-          <section className="control-section">
-            <div className="section-label"><span>关系深度</span><strong>{depth}</strong></div>
-            <input
-              className="range-input"
-              type="range"
-              min="1"
-              max="4"
-              value={depth}
-              onChange={(event) => setDepth(Number(event.target.value))}
-            />
-            <div className="range-labels"><span>1</span><span>2</span><span>3</span><span>4</span></div>
-          </section>
-
-          <section className="control-section">
-            <div className="section-label"><span>群组筛选</span></div>
-            <label className="select-field">
-              <select value={groupId} onChange={(event) => setGroupId(event.target.value)}>
-                <option value="all">全部群组</option>
-                {(data?.groups ?? []).map((item, index) => (
-                  <option key={item.group_id} value={item.group_id}>
-                    群组 {index + 1} · {item.node_count ?? item.node_ids?.length ?? 0} 节点
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} />
-            </label>
-          </section>
-
-          <section className="control-section">
-            <div className="section-label"><span>搜索命中</span><strong>{highlightedIds.size}</strong></div>
-            <div className="matched-node-list">
-              {(data?.nodes ?? [])
-                .filter((node) => highlightedIds.has(node.node_id))
-                .slice(0, 6)
-                .map((node) => (
-                  <button key={node.node_id} onClick={() => selectNode(node.node_id)}>
-                    <span>{node.keyword}</span><small>ref {node.ref_count}</small>
-                  </button>
-                ))}
-              {!query ? <p className="field-hint">输入关键词即可高亮并聚焦邻居。</p> : null}
-            </div>
-          </section>
-
-          <div className="graph-mini-stats">
-            <span><strong>{data?.nodes.length ?? 0}</strong>全部节点</span>
-            <span><strong>{data?.edges.length ?? 0}</strong>全部关系</span>
-          </div>
-        </aside>
-
-        <section className="graph-canvas card">
-          {loading ? <LoadingState label="正在计算图谱布局…" /> : null}
+      <div
+        ref={fullscreenRef}
+        className={`graph-layout graph-layout--studio ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"} ${isFullscreen ? "is-fullscreen-mode" : ""} ${isFullscreen && !fullscreenPanelOpen ? "is-panel-collapsed" : ""}`}
+      >
+        <section className={`graph-canvas card ${preferences.appearance.canvasPreset === "obsidian" ? "is-obsidian" : ""}`}>
+          {loading ? <LoadingState label="正在加载一致图谱快照…" /> : null}
           {!loading ? (
-            <GraphCanvas
-              nodes={positionedNodes}
-              edges={visibleEdges}
-              selectedId={selectedId}
-              highlightedIds={highlightedIds}
-              groupNodeIds={groupNodeIds}
+            <GraphViewport
+              ref={viewportRef}
+              scene={graphScene}
               onSelect={selectNode}
+              onSelectEdge={selectEdge}
+              onBackendChange={(backend) => {
+                setRendererBackend(backend);
+                if (backend === "svg") setFps(0);
+              }}
+              onLayoutStatus={setLayoutStatus}
+              onFpsChange={setFps}
+              layoutKey={layoutKey}
+              forceSettings={preferences.force}
+              fallback={<SvgGraphFallback scene={graphScene} onSelect={selectNode} onSelectEdge={selectEdge} />}
             />
           ) : null}
+          <div className="graph-fullscreen-toolbar" aria-label="图谱全屏工具">
+            <button
+              className={`graph-fullscreen-button graph-return-global ${viewMode === "global" ? "is-active" : ""}`}
+              type="button"
+              onClick={returnToGlobal}
+              aria-pressed={viewMode === "global"}
+              title="显示全部知识节点和关系"
+            >
+              <Globe2 size={16} />
+              <span>回归全局</span>
+            </button>
+            {isFullscreen && !fullscreenPanelOpen ? (
+              <button
+                className="graph-fullscreen-button"
+                type="button"
+                onClick={() => setFullscreenPanelOpen(true)}
+                title="打开图谱操作面板"
+              >
+                <PanelRightOpen size={16} />
+                <span>操作面板</span>
+              </button>
+            ) : null}
+            <button
+              className="graph-fullscreen-button"
+              type="button"
+              onClick={() => void toggleFullscreen()}
+              disabled={!document.fullscreenEnabled}
+              title={isFullscreen ? "退出全屏" : "全屏查看知识图谱"}
+              aria-pressed={isFullscreen}
+            >
+              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              <span>{isFullscreen ? "退出全屏" : "全屏图谱"}</span>
+            </button>
+          </div>
+
         </section>
 
-        <aside className="graph-detail card">
-          {selected ? (
-            <>
-              <div className="detail-heading">
-                <p className="eyebrow">Selected node</p>
-                <h3>{selected.keyword}</h3>
-                <span className="node-type-chip">
-                  {groupNodeIds.has(selected.node_id)
-                    ? "群组节点"
-                    : isCoreNode(
-                        selected,
-                        Math.max(1, ...(data?.nodes ?? []).map((node) => node.ref_count)),
-                      )
-                      ? "核心概念"
-                      : "一般概念"}
-                </span>
-              </div>
-              <section className="detail-section">
-                <h4>摘要</h4>
-                <p>{selected.summary || "暂无摘要"}</p>
-              </section>
-              <section className="detail-section">
-                <h4><Tag size={14} />标签与别名</h4>
-                <div className="tag-list">
-                  {[...selected.tags, ...selected.aliases].map((tag) => <span key={tag}>{tag}</span>)}
-                  {!selected.tags.length && !selected.aliases.length ? <small>暂无标签</small> : null}
-                </div>
-              </section>
-              <section className="detail-section detail-metrics">
-                <span><strong>{selected.ref_count}</strong>关联来源</span>
-                <span><strong>{selectedEdges.length}</strong>直接关系</span>
-                <span><strong>{selectedGroups.length}</strong>所属群组</span>
-              </section>
-              <section className="detail-section">
-                <div className="section-label"><h4><FileText size={14} />关联文档</h4></div>
-                <div className="related-doc-card">
-                  <span className="document-icon">SRC</span>
-                  <div><strong>{selected.ref_count} 个来源绑定</strong><small>文档明细由来源接口提供</small></div>
-                </div>
-                <Link className="text-link" to="/documents">前往文档管理</Link>
-              </section>
-            </>
-          ) : (
-            <div className="empty-state compact">
-              <Network size={30} /><h3>选择节点查看详情</h3><p>点击画布中的任意节点。</p>
+        {!isFullscreen ? (
+          <aside
+            className={`graph-node-detail-card card ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"}`}
+            aria-label="节点或关系详情"
+          >
+            <div className="graph-node-detail-card__scroll">
+              {selectedEdge ? (
+                <GraphRelationDetails
+                  selected={selectedEdge}
+                  related={relatedRelationEdges}
+                  nodesById={nodesById}
+                  onSelectNode={selectNode}
+                />
+              ) : (
+                <GraphDetails
+                  selected={selected}
+                  paths={selectedPaths}
+                  directRelationCount={selectedEdges.length}
+                  isCore={selectedIsCore}
+                  sourceLabels={sourceLabels}
+                  onSelect={selectNode}
+                />
+              )}
             </div>
-          )}
-        </aside>
+          </aside>
+        ) : null}
+
+        {isFullscreen ? (
+          <GraphControlPanel
+            preferences={preferences}
+            onPreferencesChange={setPreferences}
+            catalog={catalog}
+            activeNodes={visibleNodes}
+            activeRelationTypes={activeRelationTypes}
+            highlightedNodes={highlightedNodes}
+            selected={selected}
+            selectedEdge={selectedEdge}
+            relatedRelationEdges={relatedRelationEdges}
+            nodesById={nodesById}
+            selectedPaths={selectedPaths}
+            selectedRelationCount={selectedEdges.length}
+            selectedIsCore={selectedIsCore}
+            sourceLabels={sourceLabels}
+            rendererBackend={rendererBackend}
+            layoutStatus={layoutStatus}
+            fps={fps}
+            loading={loading || graphLoading}
+            onSelect={selectNode}
+            onReheat={() => viewportRef.current?.reheat()}
+            fullscreen
+            visible={fullscreenPanelOpen}
+            onRequestClose={() => setFullscreenPanelOpen(false)}
+          />
+        ) : null}
       </div>
     </section>
   );

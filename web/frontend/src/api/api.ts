@@ -1,17 +1,28 @@
 import type {
+  AnswerQueryData,
   ApiEnvelope,
   ConfigData,
   DeleteDocumentData,
   DocumentContentData,
   DocumentListData,
   FullGraphData,
+  GlobalQueryData,
+  GraphNeighborhoodData,
   GraphQueryData,
+  GraphVisualizationEdgesData,
+  GraphVisualizationMetaData,
+  GraphVisualizationNodesData,
   HybridQueryData,
   IngestData,
   IngestMode,
   ImportData,
+  MaintenanceJob,
+  MaintenanceJobListData,
   RagQueryData,
   RecycleCleanupData,
+  SearchCacheClearData,
+  SearchCacheDetailData,
+  SearchCacheListData,
   StatusData,
   UploadData,
 } from "../types/api";
@@ -19,7 +30,7 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api/v1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-type RequestOptions = RequestInit & { timeoutMs?: number };
+type RequestOptions = RequestInit & { timeoutMs?: number | null };
 
 export class ApiClientError extends Error {
   readonly code: string;
@@ -39,7 +50,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const abortFromCaller = () => controller.abort(callerSignal?.reason);
   if (callerSignal?.aborted) abortFromCaller();
   else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = timeoutMs === null
+    ? null
+    : globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
   let response: Response;
   try {
@@ -64,7 +77,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       0,
     );
   } finally {
-    globalThis.clearTimeout(timeout);
+    if (timeout !== null) globalThis.clearTimeout(timeout);
     callerSignal?.removeEventListener("abort", abortFromCaller);
   }
 
@@ -95,26 +108,56 @@ export const api = {
     request<IngestData>("/ingest", {
       method: "POST",
       body: JSON.stringify({ paths, mode }),
-      timeoutMs: 10 * 60_000,
+      timeoutMs: null,
     }),
+  startIngestJob: (paths: string[] | null = null, mode: IngestMode = "both") =>
+    request<MaintenanceJob>("/jobs/ingest", {
+      method: "POST",
+      body: JSON.stringify({ paths, mode }),
+    }),
+  organizeGraph: (options: { use_llm?: boolean; summarize?: boolean } = {}) =>
+    request<MaintenanceJob>("/maintenance/organize-graph", {
+      method: "POST",
+      body: JSON.stringify({
+        use_llm: options.use_llm ?? true,
+        summarize: options.summarize ?? true,
+      }),
+    }),
+  rebuildKnowledgeBase: () =>
+    request<MaintenanceJob>("/maintenance/rebuild-knowledge-base", { method: "POST" }),
+  rebuildAll: () =>
+    request<MaintenanceJob>("/maintenance/rebuild-all", { method: "POST" }),
+  getJobs: (limit = 100) =>
+    request<MaintenanceJobListData>(`/jobs?limit=${limit}`, { timeoutMs: 5_000 }),
+  getJob: (jobId: string) =>
+    request<MaintenanceJob>(`/jobs/${encodeURIComponent(jobId)}`, { timeoutMs: 5_000 }),
   queryGraph: (
     query: string,
-    options: { depth?: number; direction?: string; confidence?: number } = {},
-  ) =>
-    request<GraphQueryData>("/query/graph", {
+    options: {
+      depth?: number;
+      direction?: string;
+      confidence?: number;
+      force?: boolean;
+    } = {},
+  ) => {
+    const { force = false, ...payload } = options;
+    return request<GraphQueryData>(`/query/graph${force ? "?force=true" : ""}`, {
       method: "POST",
-      body: JSON.stringify({ query, ...options }),
+      body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
-    }),
+    });
+  },
   queryRag: (
     query: string,
-    options: { top_k?: number; threshold?: number } = {},
-  ) =>
-    request<RagQueryData>("/query/rag", {
+    options: { top_k?: number; threshold?: number; force?: boolean } = {},
+  ) => {
+    const { force = false, ...payload } = options;
+    return request<RagQueryData>(`/query/rag${force ? "?force=true" : ""}`, {
       method: "POST",
-      body: JSON.stringify({ query, ...options }),
+      body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
-    }),
+    });
+  },
   queryHybrid: (
     query: string,
     options: {
@@ -122,14 +165,119 @@ export const api = {
       rag_top_k?: number;
       graph_confidence?: number;
       rag_threshold?: number;
+      force?: boolean;
     } = {},
-  ) =>
-    request<HybridQueryData>("/query/hybrid", {
+  ) => {
+    const { force = false, ...payload } = options;
+    return request<HybridQueryData>(`/query/hybrid${force ? "?force=true" : ""}`, {
       method: "POST",
-      body: JSON.stringify({ query, ...options }),
+      body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
-    }),
-  fullGraph: () => request<FullGraphData>("/graph"),
+    });
+  },
+  queryAnswer: (
+    query: string,
+    options: {
+      graph_depth?: number;
+      rag_top_k?: number;
+      graph_confidence?: number;
+      rag_threshold?: number;
+      force?: boolean;
+    } = {},
+  ) => {
+    const { force = false, ...payload } = options;
+    return request<AnswerQueryData>(`/query/answer${force ? "?force=true" : ""}`, {
+      method: "POST",
+      body: JSON.stringify({ query, ...payload }),
+      timeoutMs: 3 * 60_000,
+    });
+  },
+  queryGlobal: (
+    query: string,
+    options: { top_k?: number; force?: boolean } = {},
+  ) => {
+    const { force = false, ...payload } = options;
+    return request<GlobalQueryData>(`/query/global${force ? "?force=true" : ""}`, {
+      method: "POST",
+      body: JSON.stringify({ query, ...payload }),
+      timeoutMs: 2 * 60_000,
+    });
+  },
+  getSearchCache: (page = 1, pageSize = 20) => {
+    const parameters = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+    });
+    return request<SearchCacheListData>(`/search/cache?${parameters.toString()}`);
+  },
+  getSearchCacheDetail: (cacheKey: string) =>
+    request<SearchCacheDetailData>(`/search/cache/${encodeURIComponent(cacheKey)}`),
+  clearSearchCache: (staleOnly = false) =>
+    request<SearchCacheClearData>(
+      `/search/cache${staleOnly ? "?stale_only=true" : ""}`,
+      { method: "DELETE" },
+    ),
+  fullGraph: (nodesPage?: number, nodesPageSize = 100) => {
+    const query = nodesPage === undefined
+      ? ""
+      : `?nodes_page=${nodesPage}&nodes_page_size=${nodesPageSize}`;
+    return request<FullGraphData>(`/graph${query}`);
+  },
+  graphVisualizationMeta: () =>
+    request<GraphVisualizationMetaData>("/graph/visualization/meta"),
+  graphVisualizationNodes: (
+    page = 1,
+    pageSize = 1000,
+    expectedRevision?: string,
+  ) => {
+    const parameters = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+    });
+    if (expectedRevision) parameters.set("expected_revision", expectedRevision);
+    return request<GraphVisualizationNodesData>(
+      `/graph/visualization/nodes?${parameters.toString()}`,
+    );
+  },
+  graphVisualizationEdges: (
+    page = 1,
+    pageSize = 2000,
+    expectedRevision?: string,
+  ) => {
+    const parameters = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+    });
+    if (expectedRevision) parameters.set("expected_revision", expectedRevision);
+    return request<GraphVisualizationEdgesData>(
+      `/graph/visualization/edges?${parameters.toString()}`,
+    );
+  },
+  graphNeighborhood: (
+    nodeId: string,
+    options: {
+      depth?: number;
+      direction?: "forward" | "backward" | "both";
+      limit?: number;
+      edgeLimit?: number;
+      expectedRevision?: string;
+    } = {},
+  ) => {
+    const parameters = new URLSearchParams();
+    if (options.depth !== undefined) parameters.set("depth", String(options.depth));
+    if (options.direction) parameters.set("direction", options.direction);
+    if (options.limit !== undefined) parameters.set("limit", String(options.limit));
+    if (options.edgeLimit !== undefined) {
+      parameters.set("edge_limit", String(options.edgeLimit));
+    }
+    if (options.expectedRevision) {
+      parameters.set("expected_revision", options.expectedRevision);
+    }
+    const query = parameters.size ? `?${parameters.toString()}` : "";
+    return request<GraphNeighborhoodData>(
+      `/graph/neighborhood/${encodeURIComponent(nodeId)}${query}`,
+    );
+  },
   deleteDocument: (sourceId: string) =>
     request<DeleteDocumentData>(`/documents/${encodeURIComponent(sourceId)}`, {
       method: "DELETE",
@@ -138,7 +286,14 @@ export const api = {
     request<RecycleCleanupData>("/maintenance/recycle", {
       method: "DELETE",
     }),
-  getDocuments: () => request<DocumentListData>("/documents"),
+  getDocuments: (page = 1, pageSize = 20, status?: "active" | "pending" | "all") => {
+    const parameters = new URLSearchParams();
+    if (page !== 1) parameters.set("page", String(page));
+    if (pageSize !== 20) parameters.set("page_size", String(pageSize));
+    if (status) parameters.set("status", status);
+    const query = parameters.size ? `?${parameters.toString()}` : "";
+    return request<DocumentListData>(`/documents${query}`);
+  },
   getDocumentContent: (sourceId: string) =>
     request<DocumentContentData>(
       `/documents/${encodeURIComponent(sourceId)}/content`,
@@ -161,7 +316,7 @@ export const api = {
     return request<ImportData>(`/import?ingest=${ingestAfterImport}`, {
       method: "POST",
       body,
-      timeoutMs: 10 * 60_000,
+      timeoutMs: null,
     });
   },
 };

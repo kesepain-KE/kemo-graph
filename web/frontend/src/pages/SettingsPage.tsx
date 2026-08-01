@@ -1,12 +1,15 @@
 import {
   CheckCircle2,
   ChevronRight,
+  Combine,
   Database,
+  History,
   KeyRound,
   Network,
   RotateCcw,
   Save,
   ServerCog,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,9 +17,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
+import { useRuntimeTasks } from "../context/RuntimeTasksContext";
 import type { ConfigData } from "../types/api";
 
-type FieldKind = "number" | "select" | "text" | "time";
+type FieldKind = "boolean" | "number" | "password" | "select" | "text" | "time";
 
 type FieldOption = {
   label: string;
@@ -33,6 +37,9 @@ type ConfigField = {
   step?: number;
   suffix?: string;
   options?: FieldOption[];
+  optional?: boolean;
+  readOnly?: boolean;
+  placeholder?: string;
 };
 
 type ConfigSection = {
@@ -88,13 +95,15 @@ const groups: ConfigGroup[] = [
     sections: [
       {
         title: "切片与向量召回",
-        description: "定义固定或分层切片，以及向量候选的数量和最低相似度。",
+        description: "定义固定、分层或 LLM 保真语义切片，以及向量候选参数。",
         fields: [
-          { path: "chunking_mode", label: "切片模式", description: "分层模式同时建立小、中、大三类向量；固定模式仅使用中粒度。", kind: "select", options: [{ label: "分层切片", value: "hierarchical" }, { label: "固定切片", value: "fixed" }] },
+          { path: "chunking_mode", label: "切片模式", description: "LLM 模式只选择原文边界；分层模式建立小、中、大三类切片。", kind: "select", options: [{ label: "LLM 语义切片", value: "llm" }, { label: "分层切片", value: "hierarchical" }, { label: "固定切片", value: "fixed" }] },
+          { path: "chunking_llm_max_input_chars", label: "LLM 切分输入上限", description: "长文档会先按自然边界预切，再逐段请求 LLM 选择语义边界。", kind: "number", min: 2000, max: 50000, step: 100, suffix: "字符" },
           { path: "chunk_small_size", label: "小粒度切片", description: "负责关键词、实体和精确片段召回。", kind: "number", min: 64, max: 2048, step: 1, suffix: "tokens" },
           { path: "chunk_size", label: "中粒度切片", description: "负责段落级语义与命中后的主要上下文。", kind: "number", min: 128, max: 4096, step: 1, suffix: "tokens" },
           { path: "chunk_large_size", label: "大粒度切片", description: "负责章节主题召回和较完整的上下文。", kind: "number", min: 256, max: 8192, step: 1, suffix: "tokens" },
           { path: "chunk_overlap", label: "中粒度重叠", description: "中粒度的重叠 token 数；分层模式会按相同比例计算其他层级。", kind: "number", min: 0, max: 512, step: 1, suffix: "tokens" },
+          { path: "embedding_batch_size", label: "Embedding 单批数量", description: "每次发送给网关的最大切片数；实际值不会超过模型能力上限。", kind: "number", min: 1, max: 256, step: 1, suffix: "条" },
           { path: "default_top_k", label: "默认召回数量", description: "向量检索默认取回的候选片段数量。", kind: "number", min: 1, step: 1, suffix: "条" },
           { path: "rag_similarity_threshold", label: "相似度阈值", description: "低于该分数的向量候选不会进入结果集。", kind: "number", min: 0, max: 1, step: 0.05 },
         ],
@@ -105,6 +114,10 @@ const groups: ConfigGroup[] = [
         fields: [
           { path: "rerank_top_n", label: "重排保留数量", description: "Rerank 后最终保留的候选片段数量。", kind: "number", min: 1, step: 1, suffix: "条" },
           { path: "hybrid_enhancement_factor", label: "混合增强系数", description: "图谱锚定 chunk 的 FAISS 分数增强倍率。", kind: "number", min: 0, step: 0.1, suffix: "倍" },
+          { path: "vector_search.entity_weight", label: "实体向量权重", description: "混合检索中实体摘要向量分数的乘数。", kind: "number", min: 0, max: 2, step: 0.1, suffix: "倍" },
+          { path: "vector_search.entity_top_k", label: "实体召回数量", description: "混合检索最多返回的实体语义结果数。", kind: "number", min: 1, max: 100, step: 1, suffix: "个" },
+          { path: "vector_search.community_weight", label: "群组向量权重", description: "混合检索中节点群总结向量分数的乘数。", kind: "number", min: 0, max: 2, step: 0.1, suffix: "倍" },
+          { path: "vector_search.community_top_k", label: "群组召回数量", description: "混合与全局检索默认返回的群组语义结果数。", kind: "number", min: 1, max: 100, step: 1, suffix: "个" },
         ],
       },
     ],
@@ -118,11 +131,13 @@ const groups: ConfigGroup[] = [
     sections: [
       {
         title: "Kemo 网关",
-        description: "所有模型能力统一通过此网关调用，API Key 字段仅填写环境变量名。",
+        description: "所有模型能力统一通过此网关调用；配置文件密钥优先于环境变量。",
         fields: [
           { path: "kemo.base_url", label: "网关 Base URL", description: "Kemo Gateway 的根地址。", kind: "text" },
-          { path: "kemo.api_key_env", label: "API Key 环境变量", description: "保存密钥的环境变量名称，不要填写真实密钥。", kind: "text" },
-          { path: "kemo.protocol_version", label: "协议版本", description: "随请求发送的 Kemo 协议版本。", kind: "text" },
+          { path: "kemo.api_key", label: "API Key", description: "显式密钥优先使用；已配置时显示掩码，清空并保存可回退到环境变量。", kind: "password", optional: true, placeholder: "未设置显式密钥" },
+          { path: "kemo.api_key_env", label: "API Key 环境变量", description: "显式密钥为空时，从此环境变量读取密钥。", kind: "text" },
+          { path: "kemo.api_key_source", label: "当前密钥来源", description: "由服务端根据实际可用密钥计算，只读显示。", kind: "text", readOnly: true },
+          { path: "kemo.protocol_version", label: "协议版本", description: "当前网关严格使用 Kemo 1.0 协议，只读显示。", kind: "text", readOnly: true },
           { path: "kemo.request_timeout", label: "请求超时", description: "单次 Kemo 模型请求的最长等待时间。", kind: "number", min: 1, step: 1, suffix: "秒" },
         ],
       },
@@ -153,6 +168,9 @@ const groups: ConfigGroup[] = [
           { path: "summary_trigger_file_count", label: "摘要触发文件数", description: "累计达到此数量后触发群组摘要生成。", kind: "number", min: 1, step: 1, suffix: "篇" },
           { path: "summary_trigger_time", label: "每日摘要时间", description: "后台调度器每日运行群组摘要任务的本地时间。", kind: "time" },
           { path: "recycle_life_days", label: "回收站保留时间", description: "过期文件将在后台调度任务中自动清理。", kind: "number", min: 0, step: 1, suffix: "天" },
+          { path: "search_cache_enabled", label: "启用搜索缓存", description: "CLI、API 与网页端共享同一份服务端搜索缓存。", kind: "boolean" },
+          { path: "search_cache_max_entries", label: "缓存记录上限", description: "超过上限时优先裁剪最久未访问的搜索结果。", kind: "number", min: 100, max: 100000, step: 100, suffix: "条" },
+          { path: "search_cache_max_bytes", label: "缓存空间上限", description: "缓存结果正文允许占用的最大总字节数。", kind: "number", min: 1048576, step: 1048576, suffix: "字节" },
         ],
       },
       {
@@ -172,6 +190,17 @@ function getConfigValue(config: ConfigData, path: string): unknown {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     return (value as Record<string, unknown>)[key];
   }, config);
+}
+
+function getFieldDisplayValue(config: ConfigData, field: ConfigField): unknown {
+  const value = getConfigValue(config, field.path);
+  if (field.path !== "kemo.api_key_source") return value;
+  if (value === "config") return "配置文件（优先）";
+  if (value === "environment") {
+    const environmentName = getConfigValue(config, "kemo.api_key_env");
+    return `环境变量 ${typeof environmentName === "string" ? environmentName : ""}`.trim();
+  }
+  return "未配置";
 }
 
 function setConfigValue(config: ConfigData, path: string, value: unknown): ConfigData {
@@ -199,7 +228,11 @@ function validateConfig(config: ConfigData): string | null {
     for (const section of group.sections) {
       for (const field of section.fields) {
         const value = getConfigValue(config, field.path);
-        if (field.kind === "number") {
+        if (field.readOnly) continue;
+        if (field.optional && (value === undefined || value === null || value === "")) continue;
+        if (field.kind === "boolean") {
+          if (typeof value !== "boolean") return `${field.label}必须是布尔值`;
+        } else if (field.kind === "number") {
           if (typeof value !== "number" || !Number.isFinite(value)) return `${field.label}必须是有效数字`;
           if (field.min !== undefined && value < field.min) return `${field.label}不能小于 ${field.min}`;
           if (field.max !== undefined && value > field.max) return `${field.label}不能大于 ${field.max}`;
@@ -233,12 +266,15 @@ function validateConfig(config: ConfigData): string | null {
 }
 
 export function SettingsPage() {
+  const { refreshServerTasks } = useRuntimeTasks();
   const [config, setConfig] = useState<ConfigData | null>(null);
   const [savedConfig, setSavedConfig] = useState<ConfigData | null>(null);
   const [activeGroupId, setActiveGroupId] = useState(groups[0].id);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [emptyingRecycle, setEmptyingRecycle] = useState(false);
+  const [clearingCache, setClearingCache] = useState<"all" | "stale" | null>(null);
+  const [maintenanceSubmitting, setMaintenanceSubmitting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -277,8 +313,12 @@ export function SettingsPage() {
   }, [activeGroupId]);
 
   const updateField = (field: ConfigField, rawValue: string) => {
-    if (!config) return;
-    const nextValue = field.kind === "number" && rawValue !== "" ? Number(rawValue) : rawValue;
+    if (!config || field.readOnly) return;
+    const nextValue = field.kind === "number" && rawValue !== ""
+      ? Number(rawValue)
+      : field.kind === "boolean"
+        ? rawValue === "true"
+        : rawValue;
     setConfig(setConfigValue(config, field.path, nextValue));
     setSaved(false);
     setNotice(null);
@@ -335,6 +375,52 @@ export function SettingsPage() {
     }
   };
 
+  const clearSearchCache = async (staleOnly: boolean) => {
+    if (!staleOnly && !window.confirm("确认清空全部搜索缓存和历史结果？")) return;
+    setClearingCache(staleOnly ? "stale" : "all");
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await api.clearSearchCache(staleOnly);
+      setNotice(
+        staleOnly
+          ? `已清理 ${result.deleted} 条过期搜索缓存。`
+          : `已清空 ${result.deleted} 条搜索缓存。`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "清理搜索缓存失败");
+    } finally {
+      setClearingCache(null);
+    }
+  };
+
+  const submitMaintenance = async (
+    kind: "organize" | "changed" | "all",
+  ) => {
+    const confirmations = {
+      organize: "开始知识图谱整理？该操作不重读文档、不重建向量，会检查并合并语义重复节点。",
+      changed: "重建变化文档的知识库？未变化文档会被跳过。",
+      all: "确认执行全项目重建？系统会在影子目录重建 Graph、RAG 与 FAISS，验证后切换，并保留旧数据备份。",
+    };
+    if (!window.confirm(confirmations[kind])) return;
+    setMaintenanceSubmitting(kind);
+    setNotice(null);
+    setError(null);
+    try {
+      const job = kind === "organize"
+        ? await api.organizeGraph({ use_llm: true, summarize: true })
+        : kind === "changed"
+          ? await api.rebuildKnowledgeBase()
+          : await api.rebuildAll();
+      await refreshServerTasks();
+      setNotice(`维护任务已进入后台队列（${job.job_id.slice(0, 8)}），可在右上角运行记录中查看进度和日志。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "无法启动维护任务");
+    } finally {
+      setMaintenanceSubmitting(null);
+    }
+  };
+
   return (
     <section className="settings-page page-stack">
       <PageIntro
@@ -347,12 +433,17 @@ export function SettingsPage() {
         }
       />
 
-      {notice ? <InfoNotice message={notice} /> : null}
-      {error ? <ErrorNotice message={error} /> : null}
-      {loading ? <div className="card"><LoadingState label="正在读取 config.json…" /></div> : null}
+      <div className={`settings-body ${notice || error ? "has-feedback" : ""}`}>
+        {notice || error ? (
+          <div className="settings-feedback" aria-live="polite">
+            {notice ? <InfoNotice message={notice} /> : null}
+            {error ? <ErrorNotice message={error} /> : null}
+          </div>
+        ) : null}
+        {loading ? <div className="card"><LoadingState label="正在读取 config.json…" /></div> : null}
 
-      {!loading && config ? (
-        <div className="settings-layout">
+        {!loading && config ? (
+          <div className="settings-layout">
           <aside className="settings-nav card" aria-label="配置分组">
             {groups.map(({ id, title, description, icon: Icon, tone }) => (
               <button
@@ -393,22 +484,27 @@ export function SettingsPage() {
                   </div>
                   <div className="settings-field-list">
                     {section.fields.map((field) => {
-                      const value = getConfigValue(config, field.path);
+                      const value = getFieldDisplayValue(config, field);
                       return (
-                        <label className="settings-field" key={field.path}>
+                        <label className={`settings-field ${field.readOnly ? "is-readonly" : ""}`} key={field.path}>
                           <span className="settings-field__meta">
                             <strong>{field.label}</strong>
                             <small>{field.description}</small>
                             <code>{field.path}</code>
                           </span>
                           <span className="settings-control">
-                            {field.kind === "select" ? (
+                            {field.kind === "select" || field.kind === "boolean" ? (
                               <select
                                 aria-label={field.label}
-                                value={typeof value === "string" ? value : ""}
+                                value={field.kind === "boolean" ? String(Boolean(value)) : typeof value === "string" ? value : ""}
                                 onChange={(event) => updateField(field, event.target.value)}
                               >
-                                {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                {field.kind === "boolean" ? (
+                                  <>
+                                    <option value="true">启用</option>
+                                    <option value="false">停用</option>
+                                  </>
+                                ) : field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                               </select>
                             ) : (
                               <input
@@ -419,6 +515,10 @@ export function SettingsPage() {
                                 step={field.step}
                                 value={typeof value === "string" || typeof value === "number" ? value : ""}
                                 onChange={(event) => updateField(field, event.target.value)}
+                                readOnly={field.readOnly}
+                                aria-readonly={field.readOnly}
+                                placeholder={field.placeholder}
+                                autoComplete={field.kind === "password" ? "new-password" : undefined}
                                 spellCheck={false}
                               />
                             )}
@@ -431,26 +531,77 @@ export function SettingsPage() {
                 </div>
               ))}
               {activeGroup.id === "system" ? (
-                <div className="settings-danger-zone">
-                  <span>
-                    <strong>清空回收站</strong>
-                    <small>永久删除回收站中的全部文件，此操作不可恢复。</small>
-                  </span>
-                  <button
-                    className="button button--danger"
-                    disabled={emptyingRecycle}
-                    onClick={() => void emptyRecycle()}
-                    type="button"
-                  >
-                    <Trash2 size={16} />
-                    {emptyingRecycle ? "正在清空" : "清空回收站"}
-                  </button>
-                </div>
+                <>
+                  <div className="settings-maintenance-actions">
+                    <article>
+                      <span><Combine size={17} /></span>
+                      <div><strong>知识图谱整理</strong><small>合并重叠节点和关系，保留来源事实，不调用 Embedding。</small></div>
+                      <button className="button button--secondary" disabled={Boolean(maintenanceSubmitting)} onClick={() => void submitMaintenance("organize")} type="button">
+                        {maintenanceSubmitting === "organize" ? "提交中" : "开始整理"}
+                      </button>
+                    </article>
+                    <article>
+                      <span><RotateCcw size={17} /></span>
+                      <div><strong>变化文档知识库重建</strong><small>只重读新增、修改、删除和失败文档，跳过未变化内容。</small></div>
+                      <button className="button button--secondary" disabled={Boolean(maintenanceSubmitting)} onClick={() => void submitMaintenance("changed")} type="button">
+                        {maintenanceSubmitting === "changed" ? "提交中" : "重建变化项"}
+                      </button>
+                    </article>
+                    <article className="is-critical">
+                      <span><Sparkles size={17} /></span>
+                      <div><strong>全项目重建</strong><small>影子重建 Graph、RAG 和 FAISS；校验通过后切换并保留备份。</small></div>
+                      <button className="button button--secondary" disabled={Boolean(maintenanceSubmitting)} onClick={() => void submitMaintenance("all")} type="button">
+                        {maintenanceSubmitting === "all" ? "提交中" : "全量重建"}
+                      </button>
+                    </article>
+                  </div>
+                  <div className="settings-cache-zone">
+                    <span className="settings-cache-zone__icon"><History size={17} /></span>
+                    <span>
+                      <strong>搜索缓存维护</strong>
+                      <small>过期缓存不会参与查询；可以保留查询历史，也可以在此集中清理。</small>
+                    </span>
+                    <span className="settings-cache-zone__actions">
+                      <button
+                        className="button button--secondary"
+                        disabled={Boolean(clearingCache)}
+                        onClick={() => void clearSearchCache(true)}
+                        type="button"
+                      >
+                        {clearingCache === "stale" ? "清理中" : "清理过期"}
+                      </button>
+                      <button
+                        className="button button--danger"
+                        disabled={Boolean(clearingCache)}
+                        onClick={() => void clearSearchCache(false)}
+                        type="button"
+                      >
+                        {clearingCache === "all" ? "清空中" : "清空缓存"}
+                      </button>
+                    </span>
+                  </div>
+                  <div className="settings-danger-zone">
+                    <span>
+                      <strong>清空回收站</strong>
+                      <small>永久删除回收站中的全部文件，此操作不可恢复。</small>
+                    </span>
+                    <button
+                      className="button button--danger"
+                      disabled={emptyingRecycle}
+                      onClick={() => void emptyRecycle()}
+                      type="button"
+                    >
+                      <Trash2 size={16} />
+                      {emptyingRecycle ? "正在清空" : "清空回收站"}
+                    </button>
+                  </div>
+                </>
               ) : null}
             </section>
           </div>
-        </div>
-      ) : null}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

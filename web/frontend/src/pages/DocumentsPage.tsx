@@ -13,13 +13,14 @@ import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
 import { MarkdownPreview } from "../components/MarkdownPreview";
 import { PageIntro } from "../components/PageIntro";
-import { recordIngest } from "../lib/history";
+import { useRuntimeTasks } from "../context/RuntimeTasksContext";
 import type { DocumentRecord, ImportData, IngestData } from "../types/api";
 
 type StatusFilter = "all" | "pending" | "processing" | "ready" | "failed";
 type ImportJobStatus = "queued" | "processing" | "completed" | "failed";
 
 type ImportJob = {
+  id: string;
   name: string;
   format: string;
   status: ImportJobStatus;
@@ -37,6 +38,8 @@ function StatusBadge({ status, label }: { status: string; label: string }) {
 
 export function DocumentsPage() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const { activeTasks, createTask, updateTask, refreshServerTasks } = useRuntimeTasks();
+  const previousActiveTaskCountRef = useRef(activeTasks.length);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState("");
@@ -47,17 +50,24 @@ export function DocumentsPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
   const [importJobs, setImportJobs] = useState<ImportJob[]>([]);
-  const [ingesting, setIngesting] = useState(false);
   const [ingestResult, setIngestResult] = useState<IngestData | null>(null);
+  const uploading = activeTasks.some((task) => task.kind === "import");
+  const ingesting = activeTasks.some((task) =>
+    ["ingest", "rebuild_knowledge_base", "rebuild_all"].includes(task.kind),
+  );
 
   const loadDocuments = async (preferredPath?: string): Promise<DocumentRecord[] | null> => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getDocuments();
-      const next = data.documents.filter(
+      const firstPage = await api.getDocuments(1, 100);
+      const allDocuments = [...firstPage.documents];
+      for (let page = 2; page <= firstPage.pagination.total_pages; page += 1) {
+        const nextPage = await api.getDocuments(page, 100);
+        allDocuments.push(...nextPage.documents);
+      }
+      const next = allDocuments.filter(
         (document) => !document.exists_status || document.exists_status === "active",
       );
       setDocuments(next);
@@ -86,6 +96,16 @@ export function DocumentsPage() {
     void loadDocuments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const previousCount = previousActiveTaskCountRef.current;
+    previousActiveTaskCountRef.current = activeTasks.length;
+    if (previousCount > 0 && activeTasks.length === 0) {
+      void loadDocuments();
+    }
+    // 任务可能由已卸载的文档页完成；当前页面需要在全局任务归零时重新同步列表。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTasks.length]);
 
   const selected = documents.find((document) => document.source_id === selectedId) ?? null;
 
@@ -130,88 +150,120 @@ export function DocumentsPage() {
     const selectedFiles = Array.from(files);
     const initialJobs = selectedFiles.map((file): ImportJob => {
       const format = file.name.split(".").pop()?.toLocaleLowerCase() ?? "未知";
+      const taskId = createTask("import", file.name, "等待校验并上传");
       if (!ALLOWED_IMPORT_EXTENSIONS.has(format)) {
-        return { name: file.name, format, status: "failed", detail: "不支持此文件格式" };
+        updateTask(
+          taskId,
+          { status: "failed", detail: "不支持此文件格式" },
+          `校验失败：不支持 .${format} 文件`,
+        );
+        return { id: taskId, name: file.name, format, status: "failed", detail: "不支持此文件格式" };
       }
       if (file.size > MAX_IMPORT_BYTES) {
-        return { name: file.name, format, status: "failed", detail: "文件超过 50 MB" };
+        updateTask(
+          taskId,
+          { status: "failed", detail: "文件超过 50 MB" },
+          "校验失败：文件大小超过 50 MB",
+        );
+        return { id: taskId, name: file.name, format, status: "failed", detail: "文件超过 50 MB" };
       }
-      return { name: file.name, format, status: "queued", detail: "等待上传" };
+      return { id: taskId, name: file.name, format, status: "queued", detail: "等待上传" };
     });
     setImportJobs(initialJobs);
-    const importable = selectedFiles.filter((_, index) => initialJobs[index].status === "queued");
+    const importable = selectedFiles
+      .map((file, index) => ({ file, job: initialJobs[index] }))
+      .filter(({ job }) => job.status === "queued");
     if (!importable.length) {
       setError("所选文件均无法导入，请检查格式和文件大小。");
       return;
     }
-    setUploading(true);
     setError(null);
     setNotice(null);
     let lastImportedPath: string | undefined;
     let completed = 0;
     let failed = initialJobs.filter((job) => job.status === "failed").length;
-    for (const file of importable) {
-      setImportJobs((current) => current.map((job) => (
-        job.name === file.name
-          ? { ...job, status: "processing", detail: "上传、转换与整理中" }
-          : job
+    let backgroundQueued = false;
+    let backgroundError: string | null = null;
+    for (const { file, job } of importable) {
+      setImportJobs((current) => current.map((currentJob) => (
+        currentJob.id === job.id
+          ? { ...currentJob, status: "processing", detail: "上传与转换中" }
+          : currentJob
       )));
+      updateTask(
+        job.id,
+        { status: "running", detail: "上传并转换为 Markdown" },
+        "文件已发送到服务端，正在进行格式转换。",
+      );
       try {
-        const imported: ImportData = await api.importFile(file, true);
+        const imported: ImportData = await api.importFile(file, false);
         lastImportedPath = imported.markdown_relative_path;
-        if (imported.ingest) {
-          setIngestResult(imported.ingest);
-          recordIngest(imported.ingest);
-        }
-        const ingestFailed = imported.ingest_status === "failed";
-        completed += ingestFailed ? 0 : 1;
-        failed += ingestFailed ? 1 : 0;
-        setImportJobs((current) => current.map((job) => (
-          job.name === file.name
+        completed += 1;
+        const detail = "转换完成，已进入知识库整理队列";
+        setImportJobs((current) => current.map((currentJob) => (
+          currentJob.id === job.id
             ? {
-                ...job,
+                ...currentJob,
                 format: imported.detected_format,
-                status: ingestFailed ? "failed" : "completed",
-                detail: ingestFailed
-                  ? imported.ingest_error ?? "转换完成，但知识库整理失败"
-                  : imported.ingest_status === "pending"
-                    ? "转换完成，等待整理"
-                    : "转换和整理均已完成",
+                status: "completed",
+                detail,
               }
-            : job
+            : currentJob
         )));
+        updateTask(
+          job.id,
+          { status: "completed", detail },
+          detail,
+        );
       } catch (caught) {
         failed += 1;
         const message = caught instanceof Error ? caught.message : "导入失败";
-        setImportJobs((current) => current.map((job) => (
-          job.name === file.name
-            ? { ...job, status: "failed", detail: message }
-            : job
+        setImportJobs((current) => current.map((currentJob) => (
+          currentJob.id === job.id
+            ? { ...currentJob, status: "failed", detail: message }
+            : currentJob
         )));
+        updateTask(
+          job.id,
+          { status: "failed", detail: message },
+          `处理失败：${message}`,
+        );
+      }
+    }
+    if (completed) {
+      try {
+        await api.startIngestJob(null, "both");
+        await refreshServerTasks();
+        backgroundQueued = true;
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "无法启动后台整理";
+        backgroundError = `文档已转换，但${message}`;
       }
     }
     const refreshed = await loadDocuments(lastImportedPath);
     if (refreshed && completed) {
-      setNotice(`已成功导入并刷新 ${completed} 个文档。`);
+      setNotice(backgroundQueued
+        ? `已成功导入 ${completed} 个文档，Graph/RAG 正在后台整理。`
+        : `已成功转换 ${completed} 个文档，但尚未进入 Graph/RAG 整理队列。`);
     }
-    if (failed) setError(`${failed} 个文件导入失败，请查看下方详情。`);
-    setUploading(false);
+    const errors = [
+      backgroundError,
+      failed ? `${failed} 个文件导入失败，请查看下方详情。` : null,
+    ].filter((message): message is string => Boolean(message));
+    if (errors.length) setError(errors.join(" "));
     if (inputRef.current) inputRef.current.value = "";
   };
 
   const runIngest = async () => {
-    setIngesting(true);
     setIngestResult(null);
     setError(null);
     try {
-      const result = await api.ingest(null, "both");
-      setIngestResult(result);
-      recordIngest(result);
-      await loadDocuments();
+      await api.startIngestJob(null, "both");
+      await refreshServerTasks();
+      setNotice("批量整理已进入后台队列，可在右上角运行记录中持续追踪。");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "整理失败");
-    } finally {
-      setIngesting(false);
+      const message = caught instanceof Error ? caught.message : "整理失败";
+      setError(message);
     }
   };
 
@@ -276,7 +328,7 @@ export function DocumentsPage() {
           </div>
           <div className="import-job-list">
             {importJobs.map((job) => (
-              <div className={`import-job is-${job.status}`} key={job.name}>
+              <div className={`import-job is-${job.status}`} key={job.id}>
                 <span className="import-job__icon">
                   {job.status === "processing" ? <RefreshCw className="spin" size={15} /> : <FileText size={15} />}
                 </span>

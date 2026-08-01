@@ -35,6 +35,7 @@ export type GraphNode = {
   summary: string;
   aliases: string[];
   tags: string[];
+  weight?: number;
   ref_count: number;
   created_at?: string | null;
   updated_at?: string | null;
@@ -53,6 +54,18 @@ export type GraphEdge = {
   created_at?: string | null;
 };
 
+export type GraphRelation = GraphEdge & {
+  text: string;
+};
+
+export type GraphPath = {
+  text: string;
+  node_ids: string[];
+  edge_ids: string[];
+  weight: number;
+  depth: number;
+};
+
 export type GraphGroup = {
   group_id: string;
   summary: string;
@@ -61,8 +74,55 @@ export type GraphGroup = {
   node_ids?: string[];
 };
 
+export type Pagination = {
+  page: number | null;
+  page_size: number;
+  total: number;
+  total_pages: number;
+};
+
 export type FullGraphData = {
   nodes: GraphNode[];
+  edges: GraphEdge[];
+  groups: GraphGroup[];
+  nodes_pagination: Pagination;
+};
+
+export type GraphVisualizationNode = GraphNode & {
+  source_ids: string[];
+  group_ids: string[];
+};
+
+export type GraphVisualizationMetaData = {
+  revision: string;
+  node_count: number;
+  edge_count: number;
+  group_count: number;
+  groups: GraphGroup[];
+};
+
+export type GraphVisualizationNodesData = {
+  revision: string;
+  nodes: GraphVisualizationNode[];
+  pagination: Pagination;
+};
+
+export type GraphVisualizationEdgesData = {
+  revision: string;
+  edges: GraphEdge[];
+  pagination: Pagination;
+};
+
+export type GraphNeighborhoodData = {
+  revision: string;
+  anchor_node_id: string;
+  depth: number;
+  direction: "forward" | "backward" | "both";
+  node_limit: number;
+  edge_limit: number;
+  truncated: boolean;
+  edges_truncated: boolean;
+  nodes: GraphVisualizationNode[];
   edges: GraphEdge[];
   groups: GraphGroup[];
 };
@@ -72,6 +132,8 @@ export type GraphQueryData = {
   hit_nodes: GraphNode[];
   expanded_nodes: GraphNode[];
   edges: GraphEdge[];
+  relations: GraphRelation[];
+  paths: GraphPath[];
   groups: GraphGroup[];
 };
 
@@ -101,6 +163,55 @@ export type HybridQueryData = {
   query?: string;
   graph: GraphQueryData;
   rag: RagQueryData;
+  entities?: Array<Pick<GraphNode, "node_id" | "keyword" | "summary"> & { score: number }>;
+  communities?: Array<GraphGroup & { score: number }>;
+};
+
+export type AnswerQueryData = {
+  query: string;
+  answer: string;
+  retrieval: HybridQueryData;
+};
+
+export type GlobalQueryData = {
+  query: string;
+  answer: string;
+  communities: GraphGroup[];
+  key_entities: GraphNode[];
+};
+
+export type SearchCacheMode = "answer" | "graph" | "rag" | "hybrid" | "global";
+
+export type SearchCacheItem = {
+  cache_key: string;
+  query_mode: SearchCacheMode;
+  query: string;
+  normalized_query: string;
+  params: Record<string, unknown>;
+  params_json: string;
+  result_size: number;
+  state_hash: string;
+  is_stale: boolean;
+  hit_count: number;
+  created_at: string;
+  updated_at: string;
+  last_hit_at: string | null;
+};
+
+export type SearchCacheListData = {
+  items: SearchCacheItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type SearchCacheDetailData = SearchCacheItem & {
+  result: AnswerQueryData | GraphQueryData | RagQueryData | HybridQueryData | GlobalQueryData;
+};
+
+export type SearchCacheClearData = {
+  deleted: number;
+  stale_only: boolean;
 };
 
 export type IngestDetail = {
@@ -145,7 +256,10 @@ export type DocumentRecord = {
   updated_at?: string | null;
 };
 
-export type DocumentListData = { documents: DocumentRecord[] };
+export type DocumentListData = {
+  documents: DocumentRecord[];
+  pagination: Pagination;
+};
 
 export type DocumentContentData = {
   source_id: string;
@@ -174,5 +288,39 @@ export type ImportData = {
 
 export type ConfigData = Record<string, unknown>;
 
+export type MaintenanceJobKind =
+  | "ingest"
+  | "organize_graph"
+  | "rebuild_knowledge_base"
+  | "rebuild_all"
+  | "summarize"
+  | "cleanup_recycle";
+
+export type MaintenanceJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type MaintenanceJobEvent = {
+  event_id: string;
+  level: string;
+  message: string;
+  created_at: string;
+};
+
+export type MaintenanceJob = {
+  job_id: string;
+  kind: MaintenanceJobKind;
+  status: MaintenanceJobStatus;
+  progress: number;
+  detail: string;
+  result: unknown;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+  events: MaintenanceJobEvent[];
+};
+
+export type MaintenanceJobListData = { jobs: MaintenanceJob[] };
+
 export type IngestMode = "graph" | "rag" | "both";
-export type SearchMode = "graph" | "rag" | "hybrid";
+export type SearchMode = SearchCacheMode;

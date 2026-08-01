@@ -1,31 +1,59 @@
 import {
   ArrowRight,
+  Bot,
   BookOpen,
+  GitFork,
+  Globe2,
+  History,
   Network,
+  PanelRightOpen,
+  RefreshCw,
   Search,
   Sparkles,
   TextSearch,
+  Trash2,
+  X,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
 import type {
+  AnswerQueryData,
   GraphNode,
+  GraphEdge,
+  GraphPath,
   GraphQueryData,
+  GlobalQueryData,
   HybridQueryData,
   RagQueryData,
+  SearchCacheItem,
   SearchMode,
 } from "../types/api";
 
-type SearchResult = GraphQueryData | RagQueryData | HybridQueryData;
+type SearchResult =
+  | AnswerQueryData
+  | GraphQueryData
+  | RagQueryData
+  | HybridQueryData
+  | GlobalQueryData;
 
 const modes: Array<{ value: SearchMode; label: string; icon: typeof Network }> = [
+  { value: "answer", label: "LLM 回答", icon: Bot },
   { value: "graph", label: "图谱", icon: Network },
   { value: "rag", label: "向量", icon: TextSearch },
   { value: "hybrid", label: "混合", icon: Sparkles },
+  { value: "global", label: "全局", icon: Globe2 },
 ];
+
+const modeLabels: Record<SearchMode, string> = {
+  answer: "LLM 回答",
+  graph: "图谱",
+  rag: "向量",
+  hybrid: "混合",
+  global: "全局",
+};
 
 const suggestions = ["知识图谱如何增强 RAG", "向量检索", "实体关系抽取"];
 const granularityLabels = {
@@ -33,6 +61,93 @@ const granularityLabels = {
   medium: "中粒度",
   large: "大粒度",
 } as const;
+
+function RelationChain({
+  nodeIds,
+  edgeIds,
+  nodes,
+  edges,
+  onNode,
+}: {
+  nodeIds: string[];
+  edgeIds: string[];
+  nodes: Map<string, GraphNode>;
+  edges: Map<string, GraphEdge>;
+  onNode: (node: GraphNode) => void;
+}) {
+  return (
+    <div className="relation-chain">
+      {nodeIds.map((nodeId, index) => {
+        const node = nodes.get(nodeId);
+        const edge = index > 0 ? edges.get(edgeIds[index - 1]) : null;
+        const previousId = index > 0 ? nodeIds[index - 1] : null;
+        const isForward = edge
+          ? edge.source_node_id === previousId && edge.target_node_id === nodeId
+          : true;
+        return (
+          <span className="relation-chain__segment" key={`${nodeId}-${index}`}>
+            {edge ? (
+              <span className="relation-chain__edge" title={`权重 ${Math.round(edge.weight * 100)}%`}>
+                {isForward ? "→" : "←"}<em>{edge.relation}</em>{isForward ? "→" : "←"}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="relation-chain__node"
+              disabled={!node}
+              onClick={() => node && onNode(node)}
+            >
+              {node?.keyword ?? nodeId}
+            </button>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function RelationshipResults({
+  data,
+  nodes,
+  onNode,
+}: {
+  data: GraphQueryData;
+  nodes: GraphNode[];
+  onNode: (node: GraphNode) => void;
+}) {
+  const nodeMap = new Map(nodes.map((node) => [node.node_id, node]));
+  const edgeMap = new Map(data.edges.map((edge) => [edge.edge_id, edge]));
+  const paths: GraphPath[] = data.paths ?? [];
+  const relations = data.relations ?? [];
+  if (!paths.length && !relations.length) return null;
+  return (
+    <section className="relationship-results">
+      <header><GitFork size={15} /><strong>关系路径</strong><span>{paths.length || relations.length} 条</span></header>
+      <div className="relationship-results__list">
+        {paths.map((path) => (
+          <article className="relation-chain-card" key={path.edge_ids.join("/")} title={path.text}>
+            <RelationChain nodeIds={path.node_ids} edgeIds={path.edge_ids} nodes={nodeMap} edges={edgeMap} onNode={onNode} />
+            <small>{path.depth} 跳 · 链路权重 {Math.round(path.weight * 100)}%</small>
+          </article>
+        ))}
+        {!paths.length
+          ? relations.map((relation) => (
+              <article className="relation-chain-card" key={relation.edge_id} title={relation.text}>
+                <RelationChain
+                  nodeIds={[relation.source_node_id, relation.target_node_id]}
+                  edgeIds={[relation.edge_id]}
+                  nodes={nodeMap}
+                  edges={edgeMap}
+                  onNode={onNode}
+                />
+                <small>关系权重 {Math.round(relation.weight * 100)}%</small>
+              </article>
+            ))
+          : null}
+      </div>
+    </section>
+  );
+}
 
 function GraphResults({ data, onNode }: { data: GraphQueryData; onNode: (node: GraphNode) => void }) {
   const nodes = [...data.hit_nodes, ...data.expanded_nodes];
@@ -42,6 +157,7 @@ function GraphResults({ data, onNode }: { data: GraphQueryData; onNode: (node: G
         <span className="result-icon result-icon--graph"><Network size={17} /></span>
         <div><h3>图谱结果</h3><p>{nodes.length} 个节点 · {data.edges.length} 条关系</p></div>
       </div>
+      <RelationshipResults data={data} nodes={nodes} onNode={onNode} />
       <div className="node-result-grid">
         {nodes.map((node) => (
           <button className="node-result-card" key={`${node.node_id}-${node.depth ?? 0}`} onClick={() => onNode(node)}>
@@ -100,35 +216,195 @@ function FileBadge() {
   return <span className="mini-file-badge">MD</span>;
 }
 
+function GlobalResults({ data }: { data: GlobalQueryData }) {
+  return (
+    <section className="result-column global-result">
+      <div className="result-column__heading">
+        <span className="result-icon result-icon--global"><Globe2 size={17} /></span>
+        <div><h3>全局回答</h3><p>{data.communities.length} 个相关节点群</p></div>
+      </div>
+      <div className="global-result__answer">{data.answer}</div>
+      {data.communities.length ? (
+        <div className="global-result__groups">
+          {data.communities.map((group) => (
+            <article key={group.group_id}>
+              <strong>{group.group_id}</strong>
+              <p>{group.summary}</p>
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function AnswerResults({
+  data,
+  onNode,
+}: {
+  data: AnswerQueryData;
+  onNode: (node: GraphNode) => void;
+}) {
+  return (
+    <div className="answer-results">
+      <section className="result-column answer-result">
+        <div className="result-column__heading">
+          <span className="result-icon result-icon--answer"><Bot size={18} /></span>
+          <div>
+            <h3>LLM 回答</h3>
+            <p>基于图谱结构与向量片段的混合知识上下文</p>
+          </div>
+          <span className="answer-result__badge"><Sparkles size={13} />混合增强</span>
+        </div>
+        <div className="answer-result__body">{data.answer}</div>
+      </section>
+
+      <section className="answer-evidence" aria-label="回答依据">
+        <header>
+          <span>回答依据</span>
+          <small>以下内容是本次回答实际使用的检索结果</small>
+        </header>
+        <div className="answer-evidence__grid">
+          <GraphResults data={data.retrieval.graph} onNode={onNode} />
+          <RagResults data={data.retrieval.rag} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatHistoryTime(value: string | null): string {
+  if (!value) return "尚未重复命中";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function SearchPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("hybrid");
+  const [mode, setMode] = useState<SearchMode>("answer");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyItems, setHistoryItems] = useState<SearchCacheItem[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyAction, setHistoryAction] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyNotice, setHistoryNotice] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
-  const runSearch = async (event?: FormEvent) => {
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const data = await api.getSearchCache(1, 30);
+      setHistoryItems(data.items);
+      setHistoryTotal(data.total);
+    } catch (caught) {
+      setHistoryError(caught instanceof Error ? caught.message : "无法读取搜索历史");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
+  useEffect(() => {
+    if (!historyOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHistoryOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [historyOpen]);
+
+  const runSearch = async (event?: FormEvent, force = false) => {
     event?.preventDefault();
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
     setResult(null);
+    setHistoryNotice(null);
     try {
       const data =
-        mode === "graph"
-          ? await api.queryGraph(query.trim(), { depth: 3, direction: "both" })
+        mode === "answer"
+          ? await api.queryAnswer(query.trim(), {
+              graph_depth: 3,
+              rag_top_k: 10,
+              force,
+            })
+          : mode === "graph"
+          ? await api.queryGraph(query.trim(), { depth: 3, direction: "both", force })
           : mode === "rag"
-            ? await api.queryRag(query.trim(), { top_k: 10 })
-            : await api.queryHybrid(query.trim(), {
-                graph_depth: 3,
-                rag_top_k: 10,
-              });
+            ? await api.queryRag(query.trim(), { top_k: 10, force })
+            : mode === "global"
+              ? await api.queryGlobal(query.trim(), { top_k: 5, force })
+              : await api.queryHybrid(query.trim(), {
+                  graph_depth: 3,
+                  rag_top_k: 10,
+                  force,
+                });
       setResult(data);
+      setHistoryNotice(force ? "已强制刷新结果并更新服务端缓存。" : null);
+      await loadHistory();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "检索失败");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const restoreCachedResult = async (item: SearchCacheItem) => {
+    setHistoryAction(item.cache_key);
+    setHistoryError(null);
+    setHistoryNotice(null);
+    try {
+      const detail = await api.getSearchCacheDetail(item.cache_key);
+      setQuery(detail.query);
+      setMode(detail.query_mode);
+      setResult(detail.result);
+      setError(null);
+      setHistoryOpen(false);
+      setHistoryNotice(
+        detail.is_stale
+          ? "已加载过期历史快照；重新检索可获得当前知识库结果。"
+          : "已从服务端缓存加载历史结果。",
+      );
+    } catch (caught) {
+      setHistoryError(caught instanceof Error ? caught.message : "无法加载缓存详情");
+    } finally {
+      setHistoryAction(null);
+    }
+  };
+
+  const clearHistory = async (staleOnly: boolean) => {
+    if (!staleOnly && !window.confirm("确认清空全部搜索缓存和历史结果？")) return;
+    setHistoryAction(staleOnly ? "clear-stale" : "clear-all");
+    setHistoryError(null);
+    setHistoryNotice(null);
+    try {
+      const cleared = await api.clearSearchCache(staleOnly);
+      setHistoryNotice(
+        staleOnly
+          ? `已清理 ${cleared.deleted} 条过期缓存。`
+          : `已清空 ${cleared.deleted} 条搜索缓存。`,
+      );
+      await loadHistory();
+    } catch (caught) {
+      setHistoryError(caught instanceof Error ? caught.message : "无法清理搜索缓存");
+    } finally {
+      setHistoryAction(null);
     }
   };
 
@@ -144,6 +420,8 @@ export function SearchPage() {
       : result && mode === "hybrid"
         ? (result as HybridQueryData).rag
         : null;
+  const globalData = result && mode === "global" ? (result as GlobalQueryData) : null;
+  const answerData = result && mode === "answer" ? (result as AnswerQueryData) : null;
 
   return (
     <section className="search-page page-stack">
@@ -153,7 +431,7 @@ export function SearchPage() {
         <h2>从你的知识网络中找到答案</h2>
         <p>图谱理解结构，向量召回语义；混合模式会让两者互相增强。</p>
 
-        <form className="hero-search" onSubmit={runSearch}>
+        <form className="hero-search" onSubmit={(event) => void runSearch(event)}>
           <Search size={21} />
           <input
             autoFocus
@@ -161,7 +439,16 @@ export function SearchPage() {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="输入问题、概念或关系…"
           />
-          <button disabled={loading || !query.trim()} type="submit">
+          <button
+            className="hero-search__refresh"
+            disabled={loading || !query.trim()}
+            onClick={() => void runSearch(undefined, true)}
+            title="跳过已有缓存并重新执行检索"
+            type="button"
+          >
+            <RefreshCw size={16} />刷新
+          </button>
+          <button className="hero-search__submit" disabled={loading || !query.trim()} type="submit">
             {loading ? "检索中" : "开始检索"}<ArrowRight size={17} />
           </button>
         </form>
@@ -192,31 +479,144 @@ export function SearchPage() {
         </div>
       </div>
 
-      {error ? <ErrorNotice message={error} /> : null}
-      {loading ? <div className="search-loading card"><LoadingState label="正在执行召回、重排与阈值过滤…" /></div> : null}
+      <button
+        className="search-history-trigger"
+        type="button"
+        aria-label={`搜索历史，${historyTotal} 条缓存`}
+        aria-expanded={historyOpen}
+        aria-controls="search-history-panel"
+        onClick={() => setHistoryOpen(true)}
+      >
+        <PanelRightOpen size={17} />
+        <span>搜索历史</span>
+        <em>{historyTotal}</em>
+      </button>
 
-      {result ? (
-        <div className={`search-results ${mode === "hybrid" ? "is-hybrid" : ""}`}>
-          {graphData ? (
-            <GraphResults
-              data={graphData}
-              onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
-            />
+      <div className="search-workspace">
+        <div className="search-primary">
+          {error ? <ErrorNotice message={error} /> : null}
+          {loading ? <div className="search-loading card"><LoadingState label="正在执行召回、重排与阈值过滤…" /></div> : null}
+
+          {result ? (
+            <div className={`search-results ${mode === "hybrid" ? "is-hybrid" : ""} ${mode === "answer" ? "is-answer" : ""}`}>
+              {answerData ? (
+                <AnswerResults
+                  data={answerData}
+                  onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
+                />
+              ) : null}
+              {graphData ? (
+                <GraphResults
+                  data={graphData}
+                  onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
+                />
+              ) : null}
+              {ragData ? <RagResults data={ragData} /> : null}
+              {globalData ? <GlobalResults data={globalData} /> : null}
+            </div>
           ) : null}
-          {ragData ? <RagResults data={ragData} /> : null}
-        </div>
-      ) : null}
 
-      {!result && !loading && !error ? (
-        <div className="search-placeholder">
-          <img
-            className="search-placeholder__logo"
-            src="/kemo-graph-logo.png"
-            alt=""
-            aria-hidden="true"
+          {!result && !loading && !error ? (
+            <div className="search-placeholder">
+              <img
+                className="search-placeholder__logo"
+                src="/kemo-graph-logo.png"
+                alt=""
+                aria-hidden="true"
+              />
+              <h3>一次查询，多种知识视角</h3>
+              <p>服务端缓存会保留成功结果，切换页面后仍可从右侧历史抽屉恢复。</p>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {historyOpen ? (
+        <div className="search-history-drawer">
+          <button
+            className="search-history-drawer__backdrop"
+            type="button"
+            aria-label="关闭搜索历史"
+            onClick={() => setHistoryOpen(false)}
           />
-          <h3>一次查询，两种知识视角</h3>
-          <p>检索结果会在这里按结构化节点与原文片段分别呈现。</p>
+          <aside
+            className="search-history search-history-drawer__panel card"
+            id="search-history-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="search-history-title"
+          >
+          <header className="search-history__header">
+            <span className="search-history__icon"><History size={18} /></span>
+            <span><strong id="search-history-title">搜索历史</strong><small>{historyTotal} 条服务端缓存</small></span>
+            <button
+              disabled={historyLoading}
+              onClick={() => void loadHistory()}
+              title="刷新历史"
+              type="button"
+            >
+              <RefreshCw className={historyLoading ? "spin" : ""} size={15} />
+            </button>
+            <button
+              onClick={() => setHistoryOpen(false)}
+              title="关闭历史"
+              type="button"
+            >
+              <X size={16} />
+            </button>
+          </header>
+
+          <div className="search-history__actions">
+            <button
+              disabled={Boolean(historyAction) || !historyItems.some((item) => item.is_stale)}
+              onClick={() => void clearHistory(true)}
+              type="button"
+            >
+              <Trash2 size={14} />清理过期
+            </button>
+            <button
+              className="is-danger"
+              disabled={Boolean(historyAction) || historyTotal === 0}
+              onClick={() => void clearHistory(false)}
+              type="button"
+            >
+              清空全部
+            </button>
+          </div>
+
+          {historyNotice ? <p className="search-history__notice">{historyNotice}</p> : null}
+          {historyError ? <p className="search-history__error">{historyError}</p> : null}
+          {historyLoading && !historyItems.length ? <LoadingState label="正在读取搜索历史…" /> : null}
+
+          <div className="search-history__list">
+            {historyItems.map((item) => (
+              <button
+                className={`search-history__item ${item.is_stale ? "is-stale" : ""}`}
+                disabled={Boolean(historyAction)}
+                key={item.cache_key}
+                onClick={() => void restoreCachedResult(item)}
+                type="button"
+              >
+                <span className="search-history__item-top">
+                  <em>{modeLabels[item.query_mode]}</em>
+                  {item.is_stale ? <i>已过期</i> : <i className="is-current">可复用</i>}
+                </span>
+                <strong>{item.query}</strong>
+                <small>
+                  {formatHistoryTime(item.last_hit_at ?? item.updated_at)}
+                  <span>命中 {item.hit_count} 次</span>
+                </small>
+                {historyAction === item.cache_key ? <RefreshCw className="spin" size={14} /> : null}
+              </button>
+            ))}
+            {!historyLoading && !historyItems.length ? (
+              <div className="search-history__empty">
+                <History size={22} />
+                <span>还没有搜索缓存</span>
+              </div>
+            ) : null}
+          </div>
+          </aside>
         </div>
       ) : null}
     </section>
