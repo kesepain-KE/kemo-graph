@@ -185,10 +185,15 @@ def _contextual_graph_functions(
             node_id = str(result["node_id"])
             conn.execute(
                 """
-                INSERT INTO node_sources (node_id, source_id, content_hash)
-                VALUES (?, ?, ?)
+                INSERT INTO node_sources (
+                    node_id, source_id, content_hash, evidence_weight
+                ) VALUES (?, ?, ?, 1.0)
                 ON CONFLICT(node_id, source_id) DO UPDATE SET
-                    content_hash = excluded.content_hash
+                    content_hash = excluded.content_hash,
+                    evidence_weight = MAX(
+                        node_sources.evidence_weight,
+                        excluded.evidence_weight
+                    )
                 """,
                 (node_id, source_id, content_hash),
             )
@@ -197,10 +202,13 @@ def _contextual_graph_functions(
                 UPDATE nodes
                 SET ref_count = (
                     SELECT COUNT(*) FROM node_sources WHERE node_id = ?
+                ), weight = (
+                    SELECT MAX(evidence_weight)
+                    FROM node_sources WHERE node_id = ?
                 )
                 WHERE node_id = ?
                 """,
-                (node_id, node_id),
+                (node_id, node_id, node_id),
             )
         except Exception:
             conn.execute(f"ROLLBACK TO {savepoint}")

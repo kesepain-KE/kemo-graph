@@ -6,7 +6,10 @@ import json
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
+from threading import RLock
+from time import monotonic
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from core.config import AppConfig, load_config
@@ -21,6 +24,9 @@ from . import (
 
 
 ToolHandler = Callable[[str, dict[str, Any]], Any]
+_CAPABILITY_CACHE_TTL_SECONDS = 300.0
+_CAPABILITY_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
+_CAPABILITY_CACHE_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -116,6 +122,115 @@ def chat_with_tools(
         f"{provider} 工具调用达到最大迭代次数 {iteration_limit}",
         provider=provider,
     )
+
+
+def chat_structured(
+    system: str,
+    user: str,
+    schema: dict[str, Any],
+    model: str | None = None,
+    *,
+    settings: AppConfig | None = None,
+    tool_name: str = "submit_structured_output",
+) -> dict[str, Any]:
+    """用 Kemo 内部结构化输出工具执行一次请求并返回参数对象。
+
+    该工具只承载最终结果，不执行工具、不追加 tool_result，也不产生第二轮模型请求。
+    """
+
+    _validate_messages(system, user)
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        raise TypeError("schema 必须是根类型为 object 的 JSON Schema")
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        raise ValueError("tool_name 不能为空")
+    active_settings = settings or load_config()
+    tool = {
+        "type": "function",
+        "name": tool_name.strip(),
+        "description": "提交符合输出 Schema 的最终结构化结果。",
+        "parameters": deepcopy(schema),
+        "strict": True,
+        "permission": "write",
+        "metadata": {"purpose": "structured_output"},
+        "extensions": {},
+    }
+    response = _send_response_request(
+        system_prompt=system,
+        input_items=[_user_message_item(user)],
+        settings=active_settings,
+        model=model,
+        tools=[tool],
+    )
+    calls = _extract_tool_calls(response, "kemo")
+    if len(calls) != 1:
+        raise ProviderResponseError(
+            "kemo 结构化输出必须且只能返回一个工具调用",
+            provider="kemo",
+        )
+    call = calls[0]
+    if call.name != tool_name:
+        raise ProviderResponseError(
+            f"kemo 结构化输出工具名错误：期望 {tool_name}，实际 {call.name}",
+            provider="kemo",
+        )
+    if not call.arguments:
+        raise ProviderResponseError(
+            "kemo 结构化输出参数不能为空",
+            provider="kemo",
+        )
+    return call.arguments
+
+
+def supports_structured_output(
+    model: str | None = None,
+    *,
+    settings: AppConfig | None = None,
+) -> bool:
+    """读取 Kemo 模型能力声明；短暂缓存结果以避免每篇文档重复发现。"""
+
+    active_settings = settings or load_config()
+    selected_model = model or active_settings.models.llm
+    cache_key = (active_settings.kemo.base_url.rstrip("/"), selected_model)
+    now = monotonic()
+    with _CAPABILITY_CACHE_LOCK:
+        cached = _CAPABILITY_CACHE.get(cache_key)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+
+    api_key = get_api_key(active_settings.kemo)
+    headers = kemo_headers(api_key)
+    response = request_json(
+        "GET",
+        build_endpoint_url(
+            active_settings.kemo.base_url,
+            f"model/models/{quote(selected_model, safe='')}/capabilities",
+        ),
+        provider="kemo",
+        headers=headers,
+        timeout=active_settings.kemo.request_timeout,
+    )
+    if not isinstance(response, dict):
+        raise ProviderResponseError(
+            "kemo 模型能力响应必须是对象",
+            provider="kemo",
+        )
+    supported = response.get("structured_output") is True
+    tools = response.get("tools")
+    if isinstance(tools, dict):
+        supported = supported and tools.get("function_calling") is True
+    with _CAPABILITY_CACHE_LOCK:
+        _CAPABILITY_CACHE[cache_key] = (
+            supported,
+            monotonic() + _CAPABILITY_CACHE_TTL_SECONDS,
+        )
+    return supported
+
+
+def _clear_capability_cache() -> None:
+    """仅供测试和运行时配置刷新。"""
+
+    with _CAPABILITY_CACHE_LOCK:
+        _CAPABILITY_CACHE.clear()
 
 
 def _send_response_request(

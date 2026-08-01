@@ -35,16 +35,17 @@ def add_entity(
         conn.execute(
             """
             INSERT INTO nodes (
-                node_id, keyword, summary, aliases, tags, ref_count,
+                node_id, keyword, summary, aliases, tags, weight, ref_count,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
             """,
             (node_id, keyword, summary, aliases_json, tags_json, now, now),
         )
         conn.execute(
             """
-            INSERT INTO node_sources (node_id, source_id, content_hash)
-            VALUES (?, ?, ?)
+            INSERT INTO node_sources (
+                node_id, source_id, content_hash, evidence_weight
+            ) VALUES (?, ?, ?, 1)
             """,
             (node_id, source_id, content_hash),
         )
@@ -60,7 +61,7 @@ def add_relation(
     source_id: str,
     content_hash: str,
 ) -> str:
-    """添加关系证据，并按全部来源证据的平均值重算边权重。"""
+    """添加关系证据，并按全部来源证据的最大值重算边权重。"""
 
     source_node_id = _required_text(source_node_id, "source_node_id")
     target_node_id = _required_text(target_node_id, "target_node_id")
@@ -128,7 +129,7 @@ def search_entities(
     rows = _fetch_all(
         conn,
         """
-        SELECT node_id, keyword, summary, aliases, tags, ref_count
+        SELECT node_id, keyword, summary, aliases, tags, weight, ref_count
         FROM nodes
         WHERE keyword = ? COLLATE NOCASE
            OR keyword LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -156,7 +157,7 @@ def get_entity(conn: sqlite3.Connection, node_id: str) -> dict[str, Any]:
     row = _fetch_one(
         conn,
         """
-        SELECT node_id, keyword, summary, aliases, tags, ref_count,
+        SELECT node_id, keyword, summary, aliases, tags, weight, ref_count,
                created_at, updated_at
         FROM nodes WHERE node_id = ?
         """,
@@ -181,7 +182,7 @@ def list_entities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return _fetch_all(
         conn,
         """
-        SELECT node_id, keyword, summary, ref_count
+        SELECT node_id, keyword, summary, weight, ref_count
         FROM nodes ORDER BY keyword, node_id
         """,
     )
@@ -263,11 +264,14 @@ def delete_entity(
             )
             _recalculate_edge(conn, edge_id)
 
-        remaining = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM node_sources WHERE node_id = ?", (node_id,)
-            ).fetchone()[0]
-        )
+        aggregate = conn.execute(
+            """
+            SELECT COUNT(*) AS ref_count, MAX(evidence_weight) AS weight
+            FROM node_sources WHERE node_id = ?
+            """,
+            (node_id,),
+        ).fetchone()
+        remaining = int(aggregate[0])
         deleted = remaining == 0
         if deleted:
             conn.execute(
@@ -283,8 +287,11 @@ def delete_entity(
             conn.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
         else:
             conn.execute(
-                "UPDATE nodes SET ref_count = ?, updated_at = ? WHERE node_id = ?",
-                (remaining, _now_iso(), node_id),
+                """
+                UPDATE nodes SET ref_count = ?, weight = ?, updated_at = ?
+                WHERE node_id = ?
+                """,
+                (remaining, float(aggregate[1]), _now_iso(), node_id),
             )
         conn.execute("DELETE FROM group_nodes")
         conn.execute("DELETE FROM groups")
@@ -294,7 +301,7 @@ def delete_entity(
 def _recalculate_edge(conn: sqlite3.Connection, edge_id: str) -> None:
     aggregate = conn.execute(
         """
-        SELECT COUNT(*) AS support_count, AVG(evidence_weight) AS weight
+        SELECT COUNT(*) AS support_count, MAX(evidence_weight) AS weight
         FROM edge_sources WHERE edge_id = ?
         """,
         (edge_id,),
@@ -330,6 +337,7 @@ def _node_payload(row: dict[str, Any]) -> dict[str, Any]:
         "summary": row["summary"],
         "aliases": _decode_string_list(row.get("aliases")),
         "tags": _decode_string_list(row.get("tags")),
+        "weight": float(row.get("weight") or 0.0),
         "ref_count": int(row.get("ref_count") or 0),
     }
 

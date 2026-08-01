@@ -66,12 +66,17 @@ def kemo_headers(api_key: str) -> dict[str, str]:
 
 
 def get_api_key(api_config: KemoConfig) -> str:
-    """从配置指定的环境变量读取密钥，不允许静默降级。"""
+    """优先读取配置文件密钥，否则回退到配置指定的环境变量。"""
 
-    api_key = os.getenv(api_config.api_key_env, "").strip()
+    explicit_api_key = api_config.api_key.strip()
+    if explicit_api_key:
+        return explicit_api_key
+
+    environment_name = api_config.api_key_env.strip()
+    api_key = os.getenv(environment_name, "").strip() if environment_name else ""
     if not api_key:
         raise ProviderConfigurationError(
-            f"未配置 API 密钥环境变量：{api_config.api_key_env}",
+            f"未配置 kemo.api_key 或 API 密钥环境变量：{environment_name or '<空>'}",
             provider="kemo",
         )
     return api_key
