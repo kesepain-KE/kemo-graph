@@ -52,9 +52,15 @@ class KemoConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     base_url: str = "http://127.0.0.1:7531"
+    api_key: str = Field(default="", repr=False)
     api_key_env: str = "KEMO_API_KEY"
     protocol_version: str = "1.0"
     request_timeout: int = Field(default=900, ge=60, le=3600)
+
+    @field_validator("api_key")
+    @classmethod
+    def normalize_api_key(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("protocol_version")
     @classmethod
@@ -83,6 +89,17 @@ class ModelSelectionConfig(BaseModel):
         return normalized
 
 
+class VectorSearchConfig(BaseModel):
+    """实体和群组向量检索的融合参数。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    entity_weight: float = Field(default=0.8, ge=0.0, le=2.0)
+    community_weight: float = Field(default=0.6, ge=0.0, le=2.0)
+    entity_top_k: int = Field(default=5, ge=1, le=100)
+    community_top_k: int = Field(default=3, ge=1, le=100)
+
+
 class AppConfig(BaseModel):
     """config/config.json 的权威配置模型。"""
 
@@ -99,17 +116,33 @@ class AppConfig(BaseModel):
 
     rag_similarity_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     default_top_k: int = Field(default=10, ge=1, le=100)
+    search_cache_enabled: bool = True
+    search_cache_max_entries: int = Field(default=10000, ge=100, le=100000)
+    search_cache_max_bytes: int = Field(
+        default=256 * 1024 * 1024,
+        ge=1024 * 1024,
+        le=10 * 1024 * 1024 * 1024,
+    )
     chunking_mode: str = "fixed"
+    chunking_llm_max_input_chars: int = Field(default=8000, ge=2000, le=50000)
     chunk_small_size: int = Field(default=128, ge=64, le=2048)
     chunk_size: int = Field(default=512, ge=128, le=4096)
     chunk_large_size: int = Field(default=1024, ge=256, le=8192)
     chunk_overlap: int = Field(default=64, ge=0, le=512)
+    embedding_batch_size: int = Field(default=8, ge=1, le=256)
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     graph_tool_max_iterations: int = Field(default=40, ge=1, le=200)
+    graph_build_mode: str = "auto"
+    graph_extract_chunk_size: int = Field(default=12000, ge=2000, le=100000)
+    graph_extract_concurrency: int = Field(default=3, ge=1, le=8)
+    graph_path_limit: int = Field(default=50, ge=1, le=500)
+    graph_organize_similarity: float = Field(default=0.86, ge=0.5, le=1.0)
+    maintenance_job_history_limit: int = Field(default=100, ge=10, le=1000)
     log_dir: str = "log"
     log_level: str = "INFO"
     kemo: KemoConfig = Field(default_factory=KemoConfig)
     models: ModelSelectionConfig = Field(default_factory=ModelSelectionConfig)
+    vector_search: VectorSearchConfig = Field(default_factory=VectorSearchConfig)
 
     hybrid_enhancement_factor: float = Field(default=1.2, ge=1.0, le=2.0)
     entity_extraction: EntityExtractionConfig = Field(
@@ -148,8 +181,15 @@ class AppConfig(BaseModel):
     @field_validator("chunking_mode")
     @classmethod
     def validate_chunking_mode(cls, value: str) -> str:
-        if value not in {"fixed", "hierarchical"}:
-            raise ValueError("chunking_mode 必须为 fixed 或 hierarchical")
+        if value not in {"fixed", "hierarchical", "llm"}:
+            raise ValueError("chunking_mode 必须为 fixed、hierarchical 或 llm")
+        return value
+
+    @field_validator("graph_build_mode")
+    @classmethod
+    def validate_graph_build_mode(cls, value: str) -> str:
+        if value not in {"auto", "structured", "tools"}:
+            raise ValueError("graph_build_mode 必须为 auto、structured 或 tools")
         return value
 
     def resolve_data_dir(self, project_root: Path = PROJECT_ROOT) -> Path:

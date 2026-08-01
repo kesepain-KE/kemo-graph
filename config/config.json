@@ -9,22 +9,26 @@
   "recycle_life_days": 30,
   "rag_similarity_threshold": 0.6,
   "default_top_k": 10,
-  "chunking_mode": "hierarchical",
-  "chunk_small_size": 128,
-  "chunk_size": 512,
-  "chunk_large_size": 1024,
-  "chunk_overlap": 64,
+  "chunking_mode": "llm",
+  "chunking_llm_max_input_chars": 8000,
+  "chunk_small_size": 512,
+  "chunk_size": 1024,
+  "chunk_large_size": 2048,
+  "chunk_overlap": 128,
+  "embedding_batch_size": 24,
   "rerank_top_n": 5,
-  "hybrid_enhancement_factor": 1.2,
-  "entity_extraction": {
-    "method": "llm",
-    "max_entities": 10
-  },
   "graph_tool_max_iterations": 40,
+  "graph_build_mode": "auto",
+  "graph_extract_chunk_size": 12000,
+  "graph_extract_concurrency": 3,
+  "graph_path_limit": 50,
+  "graph_organize_similarity": 0.86,
+  "maintenance_job_history_limit": 100,
   "log_dir": "log",
   "log_level": "INFO",
   "kemo": {
     "base_url": "http://127.0.0.1:8531",
+    "api_key": "",
     "api_key_env": "KEMO_API_KEY",
     "protocol_version": "1.0",
     "request_timeout": 900
@@ -34,5 +38,16 @@
     "embedding": "siliconflow-Qwen-Qwen3-VL-Embedding-8B",
     "embedding_dimensions": 4096,
     "rerank": "siliconflow-Qwen-Qwen3-VL-Reranker-8B"
+  },
+  "vector_search": {
+    "entity_weight": 0.8,
+    "community_weight": 0.6,
+    "entity_top_k": 5,
+    "community_top_k": 3
+  },
+  "hybrid_enhancement_factor": 1.2,
+  "entity_extraction": {
+    "method": "llm",
+    "max_entities": 10
   }
 }

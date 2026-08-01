@@ -56,7 +56,7 @@ class HybridEngine:
         rag_threshold: float | None = None,
         direction: str = "both",
     ) -> dict[str, Any]:
-        """执行 graph → 锚定 chunk 增强 → RAG，并分别返回两部分。"""
+        """执行图谱锚定 RAG，并补充实体与群组两路语义结果。"""
 
         graph_result = self.graph_engine.query(
             query,
@@ -80,7 +80,14 @@ class HybridEngine:
             threshold=rag_threshold,
             score_multipliers=score_multipliers,
         )
-        return {"graph": graph_result, "rag": rag_result}
+        entity_results = self.rag_engine.search_entities(query)
+        community_results = self.rag_engine.search_communities(query)
+        return {
+            "graph": graph_result,
+            "rag": rag_result,
+            "entities": entity_results,
+            "communities": community_results,
+        }
 
     def get_anchored_chunk_ids(self, node_ids: set[str]) -> set[str]:
         """通过 rag.db.chunk_nodes 找到图谱节点锚定的 chunk。"""

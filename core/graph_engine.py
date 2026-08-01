@@ -36,6 +36,8 @@ class _Node:
     summary: str
     aliases: list[str]
     tags: list[str]
+    weight: float
+    ref_count: int
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ class GraphEngine:
         connection = connect_graph(self.paths)
         try:
             matched = self._match_nodes(connection, entities, float(effective_confidence))
-            expanded, edges = self._expand_from_nodes(
+            expanded, edges, path_traces = self._expand_graph(
                 connection,
                 [item.node.node_id for item in matched],
                 depth,
@@ -105,6 +107,12 @@ class GraphEngine:
                 *(item["node_id"] for item in expanded),
             }
             groups = self._get_groups(connection, all_node_ids)
+            relations = _build_relations(connection, edges)
+            paths = _build_paths(
+                connection,
+                path_traces,
+                limit=self.settings.graph_path_limit,
+            )
         finally:
             connection.close()
 
@@ -113,6 +121,8 @@ class GraphEngine:
             "hit_nodes": [_matched_node_to_dict(item) for item in matched],
             "expanded_nodes": expanded,
             "edges": edges,
+            "relations": relations,
+            "paths": paths,
             "groups": groups,
         }
 
@@ -174,7 +184,7 @@ class GraphEngine:
             raise GraphQueryError("实体抽取器必须返回 Entity 列表")
         rows = connection.execute(
             """
-            SELECT node_id, keyword, summary, aliases, tags
+            SELECT node_id, keyword, summary, aliases, tags, weight, ref_count
             FROM nodes
             ORDER BY keyword, node_id
             """
@@ -207,10 +217,34 @@ class GraphEngine:
         depth: int,
         direction: str,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        expanded, edges, _ = self._expand_graph(
+            connection,
+            start_nodes,
+            depth,
+            direction,
+        )
+        return expanded, edges
+
+    def _expand_graph(
+        self,
+        connection: sqlite3.Connection,
+        start_nodes: list[str],
+        depth: int,
+        direction: str,
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
         visited = set(start_nodes)
         frontier = list(dict.fromkeys(start_nodes))
         expanded: list[dict[str, Any]] = []
         edges_found: dict[str, dict[str, Any]] = {}
+        traces_by_node: dict[str, dict[str, Any]] = {
+            node_id: {"node_ids": [node_id], "edges": [], "directions": []}
+            for node_id in frontier
+        }
+        path_traces: list[dict[str, Any]] = []
 
         for current_depth in range(1, depth + 1):
             next_frontier: list[str] = []
@@ -226,11 +260,21 @@ class GraphEngine:
                     if node.node_id not in next_frontier_ids:
                         next_frontier_ids.add(node.node_id)
                         next_frontier.append(node.node_id)
+                    parent_trace = traces_by_node[node_id]
+                    trace = {
+                        "node_ids": [*parent_trace["node_ids"], node.node_id],
+                        "edges": [*parent_trace["edges"], edge],
+                        "directions": [*parent_trace["directions"], edge_direction],
+                    }
+                    traces_by_node[node.node_id] = trace
+                    path_traces.append(trace)
                     expanded.append(
                         {
                             "node_id": node.node_id,
                             "keyword": node.keyword,
                             "summary": node.summary,
+                            "weight": node.weight,
+                            "ref_count": node.ref_count,
                             "depth": current_depth,
                             "direction": edge_direction,
                         }
@@ -238,7 +282,7 @@ class GraphEngine:
             frontier = next_frontier
             if not frontier:
                 break
-        return expanded, list(edges_found.values())
+        return expanded, list(edges_found.values()), path_traces
 
     def _get_groups(
         self,
@@ -250,7 +294,7 @@ class GraphEngine:
         placeholders = ",".join("?" for _ in node_ids)
         rows = connection.execute(
             f"""
-            SELECT DISTINCT g.group_id, g.summary
+            SELECT DISTINCT g.group_id, g.summary, g.node_count, g.edge_count
             FROM group_nodes gn
             JOIN groups g ON g.group_id = gn.group_id
             WHERE gn.node_id IN ({placeholders})
@@ -259,7 +303,12 @@ class GraphEngine:
             tuple(sorted(node_ids)),
         ).fetchall()
         return [
-            {"group_id": row["group_id"], "summary": row["summary"]}
+            {
+                "group_id": row["group_id"],
+                "summary": row["summary"],
+                "node_count": int(row["node_count"] or 0),
+                "edge_count": int(row["edge_count"] or 0),
+            }
             for row in rows
         ]
 
@@ -276,7 +325,8 @@ def _get_neighbors(
             SELECT
                 e.edge_id, e.source_node_id, e.relation, e.target_node_id,
                 e.weight, e.support_count,
-                n.node_id, n.keyword, n.summary, n.aliases, n.tags
+                n.node_id, n.keyword, n.summary, n.aliases, n.tags,
+                n.weight, n.ref_count
             FROM edges e
             JOIN nodes n ON n.node_id = e.target_node_id
             WHERE e.source_node_id = ?
@@ -293,7 +343,8 @@ def _get_neighbors(
             SELECT
                 e.edge_id, e.source_node_id, e.relation, e.target_node_id,
                 e.weight, e.support_count,
-                n.node_id, n.keyword, n.summary, n.aliases, n.tags
+                n.node_id, n.keyword, n.summary, n.aliases, n.tags,
+                n.weight, n.ref_count
             FROM edges e
             JOIN nodes n ON n.node_id = e.source_node_id
             WHERE e.target_node_id = ?
@@ -314,6 +365,8 @@ def _node_from_row(row: sqlite3.Row) -> _Node:
         summary=row["summary"],
         aliases=_parse_string_array(row["aliases"], "nodes.aliases", row["node_id"]),
         tags=_parse_string_array(row["tags"], "nodes.tags", row["node_id"]),
+        weight=float(row["weight"] or 0.0),
+        ref_count=int(row["ref_count"] or 0),
     )
 
 
@@ -386,6 +439,8 @@ def _matched_node_to_dict(item: _MatchedNode) -> dict[str, Any]:
         "summary": item.node.summary,
         "aliases": item.node.aliases,
         "tags": item.node.tags,
+        "weight": item.node.weight,
+        "ref_count": item.node.ref_count,
         "match_score": item.match_score,
     }
 
@@ -399,6 +454,107 @@ def _edge_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "weight": float(row["weight"]),
         "support_count": int(row["support_count"]),
     }
+
+
+def _build_relations(
+    connection: sqlite3.Connection,
+    edges: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not edges:
+        return []
+    node_ids = {
+        str(node_id)
+        for edge in edges
+        for node_id in (edge["source_node_id"], edge["target_node_id"])
+    }
+    keywords = _load_node_keywords(connection, node_ids)
+    return [
+        {
+            "text": (
+                f"{keywords[str(edge['source_node_id'])]}"
+                f"->[{edge['relation']}]->"
+                f"{keywords[str(edge['target_node_id'])]}"
+            ),
+            **edge,
+        }
+        for edge in edges
+    ]
+
+
+def _build_paths(
+    connection: sqlite3.Connection,
+    traces: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    # 直接一跳关系已由 relations 承载；paths 专注多跳链，避免前端重复。
+    multi_hop = [trace for trace in traces if len(trace["edges"]) >= 2]
+    if not multi_hop:
+        return []
+    node_ids = {
+        str(node_id)
+        for trace in multi_hop
+        for node_id in trace["node_ids"]
+    }
+    keywords = _load_node_keywords(connection, node_ids)
+    results: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for trace in multi_hop:
+        edges = list(trace["edges"])
+        directions = list(trace["directions"])
+        traversal_nodes = [str(node_id) for node_id in trace["node_ids"]]
+        if all(value == "backward" for value in directions):
+            # 整条链是逆向 BFS 时整体反转，文本仍保持数据库边的语义方向。
+            output_nodes = list(reversed(traversal_nodes))
+            output_edges = list(reversed(edges))
+            output_directions = ["forward"] * len(output_edges)
+        else:
+            output_nodes = traversal_nodes
+            output_edges = edges
+            output_directions = directions
+        edge_ids = tuple(str(edge["edge_id"]) for edge in output_edges)
+        if edge_ids in seen:
+            continue
+        seen.add(edge_ids)
+        text = keywords[output_nodes[0]]
+        for index, edge in enumerate(output_edges):
+            next_keyword = keywords[output_nodes[index + 1]]
+            if output_directions[index] == "backward":
+                text += f"<-[{edge['relation']}]<-{next_keyword}"
+            else:
+                text += f"->[{edge['relation']}]->{next_keyword}"
+        results.append(
+            {
+                "text": text,
+                "node_ids": output_nodes,
+                "edge_ids": list(edge_ids),
+                "weight": min(float(edge["weight"]) for edge in output_edges),
+                "depth": len(output_edges),
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _load_node_keywords(
+    connection: sqlite3.Connection,
+    node_ids: set[str],
+) -> dict[str, str]:
+    if not node_ids:
+        return {}
+    placeholders = ",".join("?" for _ in node_ids)
+    rows = connection.execute(
+        f"SELECT node_id, keyword FROM nodes WHERE node_id IN ({placeholders})",
+        tuple(sorted(node_ids)),
+    ).fetchall()
+    keywords = {str(row["node_id"]): str(row["keyword"]) for row in rows}
+    missing = node_ids - keywords.keys()
+    if missing:
+        raise GraphIntegrityError(
+            "关系或路径引用了不存在的节点：" + ", ".join(sorted(missing))
+        )
+    return keywords
 
 
 def _validate_query_parameters(

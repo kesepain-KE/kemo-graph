@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -25,6 +26,7 @@ from provider.rerank import clear_cache, rerank
 from .chunker import chunk, chunking_signature
 from .config import AppConfig, load_config
 from .db import (
+    connect_graph,
     connect_rag,
     connect_sources,
     initialize_databases,
@@ -334,15 +336,26 @@ class RAGEngine:
             self.settings.models.embedding_dimensions,
             autoload=False,
         )
-        self._embedder = embedder or (
-            lambda texts: embed(texts, settings=self.settings)
+        self.entity_index = FaissIndexManager(
+            self.paths.entity_faiss_index,
+            self.settings.models.embedding_dimensions,
+            autoload=False,
         )
+        self.community_index = FaissIndexManager(
+            self.paths.community_faiss_index,
+            self.settings.models.embedding_dimensions,
+            autoload=False,
+        )
+        self._embedder = embedder
         self._reranker = reranker
         self._logger = DailyTSVLogger(
             self.settings.resolve_log_dir(),
             self.settings.log_level,
         )
+        self._prune_stale_auxiliary_embeddings()
         self._ensure_index_consistency()
+        self._ensure_entity_index_consistency()
+        self._ensure_community_index_consistency()
 
     def query(
         self,
@@ -378,7 +391,7 @@ class RAGEngine:
         query_chunks = chunk(query, settings=self.settings)
         embedding_started_at = time.perf_counter()
         try:
-            query_embedding = _coerce_embedding_result(self._embedder(query_chunks))
+            query_embedding = self._embed_texts(query_chunks, input_type="query")
         except Exception:
             self._log_event(
                 "embedding_request",
@@ -528,6 +541,109 @@ class RAGEngine:
                 break
         return {"query": query, "results": results}
 
+    def build_entity_vectors(self, node_id: str, summary: str) -> dict[str, Any]:
+        """为单个实体建立或刷新向量；新鲜度由摘要及向量元数据决定。"""
+
+        return self.sync_entity_vectors([(node_id, summary)])
+
+    def build_community_vectors(
+        self,
+        group_id: str,
+        summary: str,
+    ) -> dict[str, Any]:
+        """为单个群组建立或刷新向量。"""
+
+        return self.sync_community_vectors([(group_id, summary)])
+
+    def sync_entity_vectors(
+        self,
+        entities: Sequence[tuple[str, str]],
+    ) -> dict[str, Any]:
+        """批量补齐或刷新实体向量，跳过摘要和模型元数据均未变化的项。"""
+
+        result = self._sync_auxiliary_vectors("entity", entities)
+        self._refresh_entity_embedding_flags()
+        return result
+
+    def sync_community_vectors(
+        self,
+        communities: Sequence[tuple[str, str]],
+    ) -> dict[str, Any]:
+        """批量补齐或刷新群组向量。"""
+
+        return self._sync_auxiliary_vectors("community", communities)
+
+    def search_entities(
+        self,
+        query: str,
+        top_k: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """在实体摘要索引中执行语义检索。"""
+
+        effective_top_k = (
+            top_k if top_k is not None else self.settings.vector_search.entity_top_k
+        )
+        return self._search_auxiliary_vectors(
+            "entity",
+            query,
+            effective_top_k,
+            self.settings.vector_search.entity_weight,
+        )
+
+    def search_communities(
+        self,
+        query: str,
+        top_k: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """在群组总结索引中执行语义检索。"""
+
+        effective_top_k = (
+            top_k
+            if top_k is not None
+            else self.settings.vector_search.community_top_k
+        )
+        return self._search_auxiliary_vectors(
+            "community",
+            query,
+            effective_top_k,
+            self.settings.vector_search.community_weight,
+        )
+
+    def delete_entity_vectors(self, node_ids: Sequence[str]) -> int:
+        """删除实体向量，并在索引增量删除失败时从 SQLite 恢复。"""
+
+        removed = self._delete_auxiliary_vectors("entity", node_ids)
+        self._refresh_entity_embedding_flags()
+        return removed
+
+    def delete_community_vectors(self, group_ids: Sequence[str]) -> int:
+        """删除群组向量，并在索引增量删除失败时从 SQLite 恢复。"""
+
+        return self._delete_auxiliary_vectors("community", group_ids)
+
+    def rebuild_entity_index(self) -> int:
+        """从 entity_embeddings 全量重建实体索引。"""
+
+        return self._rebuild_auxiliary_index("entity")
+
+    def rebuild_community_index(self) -> int:
+        """从 community_embeddings 全量重建群组索引。"""
+
+        return self._rebuild_auxiliary_index("community")
+
+    def ensure_entity_index_consistency(self) -> None:
+        self._ensure_entity_index_consistency()
+
+    def ensure_community_index_consistency(self) -> None:
+        self._ensure_community_index_consistency()
+
+    def refresh_auxiliary_consistency(self) -> None:
+        """清理图谱对象已删除或摘要已变化的辅助向量并同步两个索引。"""
+
+        self._prune_stale_auxiliary_embeddings()
+        self._ensure_entity_index_consistency()
+        self._ensure_community_index_consistency()
+
     def add_vectors(
         self,
         vector_ids: Sequence[int],
@@ -644,6 +760,528 @@ class RAGEngine:
             _elapsed_ms(started_at),
         )
         return len(vector_ids)
+
+    def _embed_texts(self, texts: list[str], *, input_type: str) -> EmbeddingResult:
+        if self._embedder is None:
+            value = embed(
+                texts,
+                settings=self.settings,
+                input_type=input_type,
+            )
+        else:
+            value = self._embedder(texts)
+        return _coerce_embedding_result(value)
+
+    def _sync_auxiliary_vectors(
+        self,
+        kind: str,
+        records: Sequence[tuple[str, str]],
+    ) -> dict[str, Any]:
+        table, id_column, manager = self._auxiliary_spec(kind)
+        normalized = _normalize_auxiliary_records(records, id_column)
+        if not normalized:
+            return {"updated": 0, "skipped": 0, "vector_space_id": None}
+
+        object_ids = list(normalized)
+        placeholders = ",".join("?" for _ in object_ids)
+        connection = connect_rag(self.paths)
+        try:
+            existing_rows = connection.execute(
+                f"""
+                SELECT vector_id, {id_column}, summary_hash, dimensions,
+                       model_name, vector_space_id
+                FROM {table}
+                WHERE {id_column} IN ({placeholders})
+                """,
+                tuple(object_ids),
+            ).fetchall()
+        finally:
+            connection.close()
+        existing = {str(row[id_column]): row for row in existing_rows}
+        pending = [
+            (object_id, summary)
+            for object_id, summary in normalized.items()
+            if not _auxiliary_row_is_fresh(
+                existing.get(object_id),
+                summary,
+                self.settings,
+            )
+        ]
+        if not pending:
+            return {
+                "updated": 0,
+                "skipped": len(normalized),
+                "vector_space_id": self._auxiliary_vector_space_id(kind),
+            }
+
+        started_at = time.perf_counter()
+        embedding_result = self._embed_texts(
+            [summary for _, summary in pending],
+            input_type="document",
+        )
+        matrix = _as_float32_matrix(
+            embedding_result.vectors,
+            self.settings.models.embedding_dimensions,
+        )
+        if len(matrix) != len(pending):
+            raise IndexIntegrityError(
+                f"{kind} Embedding 返回数量不一致："
+                f"期望 {len(pending)}，实际 {len(matrix)}"
+            )
+        vector_space_id = _validate_vector_space_id(
+            embedding_result.vector_space_id
+        )
+        pending_ids = [object_id for object_id, _ in pending]
+        pending_placeholders = ",".join("?" for _ in pending_ids)
+        connection = connect_rag(self.paths)
+        try:
+            retained_spaces = {
+                _validate_vector_space_id(row["vector_space_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT DISTINCT vector_space_id FROM {table}
+                    WHERE {id_column} NOT IN ({pending_placeholders})
+                    """,
+                    tuple(pending_ids),
+                ).fetchall()
+            }
+            if retained_spaces.difference({vector_space_id}):
+                raise IndexIntegrityError(
+                    f"不能在 {table} 中混用 vector_space_id："
+                    f"现有={sorted(retained_spaces)}，新增={vector_space_id}"
+                )
+            connection.execute("BEGIN IMMEDIATE")
+            old_vector_ids = [
+                int(row["vector_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT vector_id FROM {table}
+                    WHERE {id_column} IN ({pending_placeholders})
+                    """,
+                    tuple(pending_ids),
+                ).fetchall()
+            ]
+            connection.execute(
+                f"DELETE FROM {table} WHERE {id_column} IN ({pending_placeholders})",
+                tuple(pending_ids),
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            new_vector_ids: list[int] = []
+            for (object_id, summary), vector in zip(pending, matrix, strict=True):
+                cursor = connection.execute(
+                    f"""
+                    INSERT INTO {table} (
+                        {id_column}, summary, summary_hash, vector_blob,
+                        dimensions, model_name, vector_space_id,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        object_id,
+                        summary,
+                        _summary_hash(summary),
+                        vector.tobytes(),
+                        self.settings.models.embedding_dimensions,
+                        self.settings.models.embedding,
+                        vector_space_id,
+                        now,
+                        now,
+                    ),
+                )
+                new_vector_ids.append(int(cursor.lastrowid))
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        try:
+            manager.replace(old_vector_ids, new_vector_ids, matrix)
+        except Exception as replace_error:
+            try:
+                self._rebuild_auxiliary_index(kind)
+            except Exception as rebuild_error:
+                raise IndexIntegrityError(
+                    f"{kind} FAISS 增量替换失败，且无法从 SQLite 恢复："
+                    f"replace={replace_error}; rebuild={rebuild_error}"
+                ) from rebuild_error
+        self._log_event(
+            "auxiliary_embedding_build",
+            f"kind={kind}, updated={len(pending)}, model={self.settings.models.embedding}",
+            _elapsed_ms(started_at),
+        )
+        return {
+            "updated": len(pending),
+            "skipped": len(normalized) - len(pending),
+            "vector_space_id": vector_space_id,
+        }
+
+    def _search_auxiliary_vectors(
+        self,
+        kind: str,
+        query: str,
+        top_k: int,
+        weight: float,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(query, str) or not query.strip():
+            raise RAGQueryError("query 必须是非空字符串")
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1:
+            raise RAGQueryError("top_k 必须是大于等于 1 的整数")
+        _, _, manager = self._auxiliary_spec(kind)
+        if manager.count == 0:
+            return []
+
+        query_chunks = chunk(query, settings=self.settings)
+        embedding = self._embed_texts(query_chunks, input_type="query")
+        if len(embedding.vectors) != len(query_chunks):
+            raise RAGQueryError("Embedding 返回向量数量与查询切片数量不一致")
+        database_space = self._auxiliary_vector_space_id(kind)
+        if database_space is not None and embedding.vector_space_id != database_space:
+            raise RAGQueryError(
+                f"查询向量空间与 {kind} 索引不一致："
+                f"查询={embedding.vector_space_id}，索引={database_space}"
+            )
+        raw_hits = manager.search(embedding.vectors, top_k)
+        vector_scores: dict[int, float] = {}
+        for hits in raw_hits:
+            for vector_id, score in hits:
+                vector_scores[vector_id] = max(
+                    score,
+                    vector_scores.get(vector_id, float("-inf")),
+                )
+        return self._load_auxiliary_results(kind, vector_scores, float(weight))
+
+    def _load_auxiliary_results(
+        self,
+        kind: str,
+        vector_scores: Mapping[int, float],
+        weight: float,
+    ) -> list[dict[str, Any]]:
+        if not vector_scores:
+            return []
+        table, id_column, _ = self._auxiliary_spec(kind)
+        placeholders = ",".join("?" for _ in vector_scores)
+        connection = connect_rag(self.paths)
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT vector_id, {id_column} FROM {table}
+                WHERE vector_id IN ({placeholders})
+                """,
+                tuple(vector_scores),
+            ).fetchall()
+        finally:
+            connection.close()
+        found_ids = {int(row["vector_id"]) for row in rows}
+        if found_ids != set(vector_scores):
+            raise IndexIntegrityError(
+                f"{kind} FAISS 中存在 SQLite 缺失的 vector_id："
+                f"{sorted(set(vector_scores).difference(found_ids))}"
+            )
+        object_by_vector = {
+            int(row["vector_id"]): str(row[id_column]) for row in rows
+        }
+        object_ids = set(object_by_vector.values())
+        object_placeholders = ",".join("?" for _ in object_ids)
+        graph = connect_graph(self.paths)
+        try:
+            if kind == "entity":
+                graph_rows = graph.execute(
+                    f"""
+                    SELECT node_id, keyword, summary FROM nodes
+                    WHERE node_id IN ({object_placeholders})
+                    """,
+                    tuple(sorted(object_ids)),
+                ).fetchall()
+                details = {
+                    str(row["node_id"]): {
+                        "node_id": str(row["node_id"]),
+                        "keyword": str(row["keyword"]),
+                        "summary": str(row["summary"]),
+                        "source": "entity",
+                    }
+                    for row in graph_rows
+                }
+            else:
+                graph_rows = graph.execute(
+                    f"""
+                    SELECT group_id, summary, node_count FROM groups
+                    WHERE group_id IN ({object_placeholders})
+                    """,
+                    tuple(sorted(object_ids)),
+                ).fetchall()
+                details = {
+                    str(row["group_id"]): {
+                        "group_id": str(row["group_id"]),
+                        "summary": str(row["summary"]),
+                        "node_count": int(row["node_count"] or 0),
+                        "source": "community",
+                    }
+                    for row in graph_rows
+                }
+        finally:
+            graph.close()
+        missing_objects = object_ids.difference(details)
+        if missing_objects:
+            raise IndexIntegrityError(
+                f"{table} 引用了不存在的图谱对象：{sorted(missing_objects)}"
+            )
+
+        results: list[dict[str, Any]] = []
+        for vector_id, score in sorted(
+            vector_scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        ):
+            detail = details[object_by_vector[vector_id]].copy()
+            detail["score"] = float(score) * weight
+            results.append(detail)
+        return results
+
+    def _delete_auxiliary_vectors(
+        self,
+        kind: str,
+        object_ids: Sequence[str],
+    ) -> int:
+        table, id_column, manager = self._auxiliary_spec(kind)
+        normalized_ids = _normalize_object_ids(object_ids, id_column)
+        if not normalized_ids:
+            return 0
+        placeholders = ",".join("?" for _ in normalized_ids)
+        connection = connect_rag(self.paths)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            vector_ids = [
+                int(row["vector_id"])
+                for row in connection.execute(
+                    f"""
+                    SELECT vector_id FROM {table}
+                    WHERE {id_column} IN ({placeholders})
+                    """,
+                    tuple(normalized_ids),
+                ).fetchall()
+            ]
+            connection.execute(
+                f"DELETE FROM {table} WHERE {id_column} IN ({placeholders})",
+                tuple(normalized_ids),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        try:
+            manager.delete(vector_ids)
+        except Exception:
+            self._rebuild_auxiliary_index(kind)
+        return len(vector_ids)
+
+    def _ensure_entity_index_consistency(self) -> None:
+        self._ensure_auxiliary_index_consistency("entity")
+
+    def _ensure_community_index_consistency(self) -> None:
+        self._ensure_auxiliary_index_consistency("community")
+
+    def _ensure_auxiliary_index_consistency(self, kind: str) -> None:
+        _, _, manager = self._auxiliary_spec(kind)
+        database_ids = self._database_auxiliary_vector_ids(kind)
+        if manager.index_path.exists():
+            try:
+                manager.load()
+                if manager.ids == database_ids:
+                    return
+            except IndexIntegrityError:
+                pass
+        self._rebuild_auxiliary_index(kind)
+
+    def _rebuild_auxiliary_index(self, kind: str) -> int:
+        table, _, manager = self._auxiliary_spec(kind)
+        connection = connect_rag(self.paths)
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT vector_id, vector_blob, dimensions, model_name,
+                       vector_space_id FROM {table} ORDER BY vector_id
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+        vector_ids, matrix = self._validated_auxiliary_matrix(rows, table)
+        manager.rebuild(vector_ids, matrix)
+        self._log_event(
+            "faiss_rebuild",
+            f"kind={kind}, vectors={len(vector_ids)}",
+        )
+        return len(vector_ids)
+
+    def _database_auxiliary_vector_ids(self, kind: str) -> set[int]:
+        table, _, _ = self._auxiliary_spec(kind)
+        connection = connect_rag(self.paths)
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT vector_id, vector_blob, dimensions, model_name,
+                       vector_space_id FROM {table}
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+        self._validated_auxiliary_matrix(rows, table)
+        return {int(row["vector_id"]) for row in rows}
+
+    def _validated_auxiliary_matrix(
+        self,
+        rows: Sequence[Any],
+        table: str,
+    ) -> tuple[list[int], np.ndarray]:
+        spaces = {
+            _validate_vector_space_id(row["vector_space_id"], int(row["vector_id"]))
+            for row in rows
+        }
+        if len(spaces) > 1:
+            raise IndexIntegrityError(
+                f"{table} 包含多个 vector_space_id：{sorted(spaces)}"
+            )
+        vector_ids: list[int] = []
+        vectors: list[np.ndarray] = []
+        for row in rows:
+            vector_id = int(row["vector_id"])
+            if int(row["dimensions"]) != self.settings.models.embedding_dimensions:
+                raise IndexIntegrityError(f"{table}.vector_id={vector_id} 维度不一致")
+            if str(row["model_name"]) != self.settings.models.embedding:
+                raise IndexIntegrityError(f"{table}.vector_id={vector_id} 模型不一致")
+            vector = np.frombuffer(row["vector_blob"], dtype=np.float32)
+            if (
+                len(vector) != self.settings.models.embedding_dimensions
+                or not np.isfinite(vector).all()
+            ):
+                raise IndexIntegrityError(
+                    f"{table}.vector_id={vector_id} 的向量 BLOB 无效"
+                )
+            vector_ids.append(vector_id)
+            vectors.append(vector.copy())
+        matrix = (
+            np.vstack(vectors).astype(np.float32, copy=False)
+            if vectors
+            else np.empty(
+                (0, self.settings.models.embedding_dimensions),
+                dtype=np.float32,
+            )
+        )
+        return vector_ids, matrix
+
+    def _auxiliary_vector_space_id(self, kind: str) -> str | None:
+        table, _, _ = self._auxiliary_spec(kind)
+        connection = connect_rag(self.paths)
+        try:
+            rows = connection.execute(
+                f"SELECT vector_id, vector_space_id FROM {table}"
+            ).fetchall()
+        finally:
+            connection.close()
+        spaces = {
+            _validate_vector_space_id(row["vector_space_id"], int(row["vector_id"]))
+            for row in rows
+        }
+        if len(spaces) > 1:
+            raise IndexIntegrityError(
+                f"{table} 包含多个 vector_space_id：{sorted(spaces)}"
+            )
+        return next(iter(spaces), None)
+
+    def _prune_stale_auxiliary_embeddings(self) -> None:
+        graph = connect_graph(self.paths)
+        try:
+            entity_hashes = {
+                str(row["node_id"]): _summary_hash(str(row["summary"]))
+                for row in graph.execute("SELECT node_id, summary FROM nodes").fetchall()
+            }
+            community_hashes = {
+                str(row["group_id"]): _summary_hash(str(row["summary"]))
+                for row in graph.execute(
+                    "SELECT group_id, summary FROM groups"
+                ).fetchall()
+            }
+        finally:
+            graph.close()
+        connection = connect_rag(self.paths)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for table, id_column, expected_hashes in (
+                ("entity_embeddings", "node_id", entity_hashes),
+                ("community_embeddings", "group_id", community_hashes),
+            ):
+                rows = connection.execute(
+                    f"""
+                    SELECT vector_id, {id_column}, summary_hash, vector_blob,
+                           dimensions, model_name FROM {table}
+                    """
+                ).fetchall()
+                stale_ids = [
+                    int(row["vector_id"])
+                    for row in rows
+                    if not _auxiliary_row_matches_graph(
+                        row,
+                        expected_hashes.get(str(row[id_column])),
+                        self.settings,
+                    )
+                ]
+                if stale_ids:
+                    placeholders = ",".join("?" for _ in stale_ids)
+                    connection.execute(
+                        f"DELETE FROM {table} WHERE vector_id IN ({placeholders})",
+                        tuple(stale_ids),
+                    )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        self._refresh_entity_embedding_flags()
+
+    def _refresh_entity_embedding_flags(self) -> None:
+        rag = connect_rag(self.paths)
+        try:
+            node_ids = {
+                str(row["node_id"])
+                for row in rag.execute(
+                    "SELECT node_id FROM entity_embeddings"
+                ).fetchall()
+            }
+        finally:
+            rag.close()
+        graph = connect_graph(self.paths)
+        try:
+            graph.execute("BEGIN IMMEDIATE")
+            graph.execute("UPDATE nodes SET has_entity_embedding = 0")
+            if node_ids:
+                placeholders = ",".join("?" for _ in node_ids)
+                graph.execute(
+                    f"""
+                    UPDATE nodes SET has_entity_embedding = 1
+                    WHERE node_id IN ({placeholders})
+                    """,
+                    tuple(sorted(node_ids)),
+                )
+            graph.commit()
+        except Exception:
+            graph.rollback()
+            raise
+        finally:
+            graph.close()
+
+    def _auxiliary_spec(
+        self,
+        kind: str,
+    ) -> tuple[str, str, FaissIndexManager]:
+        if kind == "entity":
+            return "entity_embeddings", "node_id", self.entity_index
+        if kind == "community":
+            return "community_embeddings", "group_id", self.community_index
+        raise ValueError(f"未知辅助向量类型：{kind}")
 
     def _ensure_index_consistency(self) -> None:
         try:
@@ -904,6 +1542,83 @@ def _coerce_embedding_result(
     if isinstance(value, list):
         return EmbeddingResult(vectors=value, vector_space_id="unknown")
     raise TypeError("Embedding 返回值必须是 EmbeddingResult")
+
+
+def _normalize_auxiliary_records(
+    records: Sequence[tuple[str, str]],
+    id_column: str,
+) -> dict[str, str]:
+    if isinstance(records, (str, bytes)):
+        raise TypeError("records 必须是 (id, summary) 序列")
+    normalized: dict[str, str] = {}
+    for item in records:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError("records 中每一项必须是 (id, summary) 二元组")
+        object_id, summary = item
+        if not isinstance(object_id, str) or not object_id.strip():
+            raise ValueError(f"{id_column} 必须是非空字符串")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError("summary 必须是非空字符串")
+        normalized_id = object_id.strip()
+        normalized_summary = summary.strip()
+        previous = normalized.get(normalized_id)
+        if previous is not None and previous != normalized_summary:
+            raise ValueError(f"同一 {id_column} 对应了不同 summary：{normalized_id}")
+        normalized[normalized_id] = normalized_summary
+    return normalized
+
+
+def _normalize_object_ids(values: Sequence[str], field_name: str) -> list[str]:
+    if isinstance(values, (str, bytes)):
+        raise TypeError(f"{field_name} 列表不能是字符串")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field_name} 必须是非空字符串")
+        item = value.strip()
+        if item not in seen:
+            normalized.append(item)
+            seen.add(item)
+    return normalized
+
+
+def _summary_hash(summary: str) -> str:
+    return hashlib.sha256(summary.encode("utf-8")).hexdigest()
+
+
+def _auxiliary_row_is_fresh(
+    row: Any,
+    summary: str,
+    settings: AppConfig,
+) -> bool:
+    return bool(
+        row is not None
+        and str(row["summary_hash"]) == _summary_hash(summary)
+        and int(row["dimensions"]) == settings.models.embedding_dimensions
+        and str(row["model_name"]) == settings.models.embedding
+        and isinstance(row["vector_space_id"], str)
+        and bool(str(row["vector_space_id"]).strip())
+    )
+
+
+def _auxiliary_row_matches_graph(
+    row: Any,
+    expected_summary_hash: str | None,
+    settings: AppConfig,
+) -> bool:
+    if (
+        expected_summary_hash is None
+        or str(row["summary_hash"]) != expected_summary_hash
+        or int(row["dimensions"]) != settings.models.embedding_dimensions
+        or str(row["model_name"]) != settings.models.embedding
+    ):
+        return False
+    vector = np.frombuffer(row["vector_blob"], dtype=np.float32)
+    return bool(
+        len(vector) == settings.models.embedding_dimensions
+        and np.isfinite(vector).all()
+    )
 
 
 def _direct_lexical_match_score(query: str, document: str) -> float:
