@@ -908,11 +908,14 @@ class RAGEngineTests(unittest.TestCase):
             finally:
                 connection.close()
 
+            rerank_documents: list[str] = []
+
             def reranker(
                 query: str,
                 documents: list[str],
                 top_n: int,
             ) -> list[tuple[int, float]]:
+                rerank_documents.extend(documents)
                 scores = {
                     "needle": 0.95,
                     "medium needle context": 0.9,
@@ -940,6 +943,7 @@ class RAGEngineTests(unittest.TestCase):
 
             self.assertEqual(len(result["results"]), 1)
             item = result["results"][0]
+            self.assertEqual(rerank_documents, ["medium needle context"])
             self.assertEqual(item["chunk_id"], "small")
             self.assertEqual(item["granularity"], "small")
             self.assertEqual(item["parent_chunk_id"], "medium")

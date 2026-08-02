@@ -411,17 +411,11 @@ class RAGEngine:
                 "查询向量空间与 FAISS 索引不一致："
                 f"查询={query_embedding.vector_space_id}，索引={database_vector_space}"
             )
-        candidate_multiplier = (
-            6
-            if self.settings.chunking_mode in {"hierarchical", "semantic_hierarchical"}
-            else 2
+        candidate_pool_limit = max(
+            effective_top_k,
+            self.settings.query_planning.candidate_pool_size,
         )
-        search_limit = effective_top_k * candidate_multiplier
-        if len(prepared.plan.variants) > 1:
-            search_limit = max(
-                search_limit,
-                self.settings.query_planning.candidate_pool_size,
-            )
+        search_limit = max(effective_top_k * 3, candidate_pool_limit)
         raw_hits = self.index.search(
             query_vectors,
             search_limit,
@@ -448,6 +442,15 @@ class RAGEngine:
                 reverse=True,
             )
 
+        hierarchy = self._load_chunk_hierarchy(candidates)
+        candidates = _collapse_candidates_by_family(
+            candidates,
+            hierarchy,
+            candidate_pool_limit,
+        )
+        if not candidates:
+            return {"query": query, "results": []}
+
         requested_rerank_limit = max(effective_top_k, self.settings.rerank_top_n)
         if len(prepared.plan.variants) > 1:
             requested_rerank_limit = max(
@@ -455,7 +458,10 @@ class RAGEngine:
                 self.settings.query_planning.candidate_pool_size,
             )
         rerank_limit = min(len(candidates), requested_rerank_limit)
-        documents = [candidate.content for candidate in candidates]
+        documents = [
+            _candidate_context_content(candidate, hierarchy)
+            for candidate in candidates
+        ]
         rerank_started_at = time.perf_counter()
         if self._reranker is None:
             try:
@@ -488,7 +494,6 @@ class RAGEngine:
         source_paths = self._load_source_paths(
             {candidate.source_id for candidate in candidates}
         )
-        hierarchy = self._load_chunk_hierarchy(candidates)
         results: list[dict[str, Any]] = []
         rescue_candidates: list[tuple[_Candidate, float]] = []
         seen_indexes: set[int] = set()
@@ -508,7 +513,10 @@ class RAGEngine:
             candidate = candidates[candidate_index]
             effective_score = max(
                 float(score),
-                _planned_lexical_match_score(prepared.plan, candidate.content),
+                _planned_lexical_match_score(
+                    prepared.plan,
+                    _candidate_context_content(candidate, hierarchy),
+                ),
             )
             if effective_score < effective_threshold:
                 if effective_score > 0:
@@ -1725,6 +1733,54 @@ def _fuse_vector_hits(
         vector_id: max_scores[vector_id] + rrf_scores.get(vector_id, 0.0)
         for vector_id in max_scores
     }
+
+
+def _collapse_candidates_by_family(
+    candidates: Sequence[_Candidate],
+    hierarchy: Mapping[str, _ChunkContext],
+    limit: int,
+) -> list[_Candidate]:
+    """Keep one precise representative per hierarchy before Rerank.
+
+    Large chunks remain available as parent context.  They only become direct
+    candidates when a legacy or partial hierarchy has no smaller searchable
+    chunks at all.
+    """
+
+    if limit < 1:
+        raise RAGQueryError("候选池上限必须大于等于 1")
+    searchable = [candidate for candidate in candidates if candidate.granularity != "large"]
+    if not searchable:
+        searchable = list(candidates)
+    rank = {"small": 0, "medium": 1, "large": 2}
+    by_family: dict[str, _Candidate] = {}
+    for candidate in searchable:
+        family_id = _chunk_family_id(candidate.chunk_id, hierarchy)
+        previous = by_family.get(family_id)
+        if previous is None or (
+            candidate.faiss_score > previous.faiss_score
+            or (
+                candidate.faiss_score == previous.faiss_score
+                and rank.get(candidate.granularity, 3)
+                < rank.get(previous.granularity, 3)
+            )
+        ):
+            by_family[family_id] = candidate
+    return sorted(
+        by_family.values(),
+        key=lambda candidate: candidate.faiss_score,
+        reverse=True,
+    )[:limit]
+
+
+def _candidate_context_content(
+    candidate: _Candidate,
+    hierarchy: Mapping[str, _ChunkContext],
+) -> str:
+    if candidate.parent_chunk_id is None:
+        return candidate.content
+    parent = hierarchy.get(candidate.parent_chunk_id)
+    return parent.content if parent is not None and parent.content.strip() else candidate.content
 
 
 def _planned_lexical_match_score(plan: QueryPlan, document: str) -> float:

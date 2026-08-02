@@ -325,6 +325,12 @@ class TransparentCacheTests(unittest.TestCase):
                             "chunk_id": "c1",
                             "content": "中央画布使用图形方式展示知识节点。",
                             "score": 0.88,
+                            "granularity": "small",
+                            "context": {
+                                "chunk_id": "c-parent",
+                                "content": "图谱界面由中央画布和侧边详情共同组成。中央画布使用图形方式展示知识节点。",
+                                "granularity": "medium",
+                            },
                             "source": {
                                 "source_id": "s1",
                                 "relative_path": "README.md",
@@ -351,6 +357,8 @@ class TransparentCacheTests(unittest.TestCase):
             self.assertEqual(llm.call_count, 1)
             prompt = llm.call_args.args[1]
             self.assertIn("中央画布 →[显示]→ 知识节点", prompt)
+            self.assertIn("图谱界面由中央画布和侧边详情共同组成", prompt)
+            self.assertIn("matched_content", prompt)
             self.assertIn("README.md", prompt)
             cached = SearchCache(paths, settings).list()["items"]
             self.assertEqual(cached[0]["query_mode"], "answer")

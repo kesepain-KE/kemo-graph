@@ -2792,12 +2792,22 @@ def _build_answer_context(retrieval: Any) -> dict[str, Any]:
     for item in _dict_items(rag.get("results"))[:12]:
         source = item.get("source")
         source = source if isinstance(source, dict) else {}
+        parent = item.get("context")
+        parent = parent if isinstance(parent, dict) else {}
+        matched_content = _clip_context_text(item.get("content"), 1600)
+        parent_content = _clip_context_text(parent.get("content"), 3200)
         rag_passages.append(
             {
                 "chunk_id": str(item.get("chunk_id") or ""),
-                "content": _clip_context_text(item.get("content"), 2400),
+                "content": parent_content or matched_content,
+                "matched_content": (
+                    matched_content
+                    if parent_content and matched_content != parent_content
+                    else ""
+                ),
                 "score": item.get("score"),
                 "granularity": item.get("granularity"),
+                "context_granularity": parent.get("granularity"),
                 "source": str(
                     source.get("relative_path") or source.get("source_id") or "未知来源"
                 ),
