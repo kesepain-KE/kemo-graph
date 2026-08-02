@@ -58,11 +58,13 @@ class HybridEngine:
     ) -> dict[str, Any]:
         """执行图谱锚定 RAG，并补充实体与群组两路语义结果。"""
 
+        prepared_query = self.rag_engine.prepare_query(query)
         graph_result = self.graph_engine.query(
             query,
             depth=graph_depth,
             direction=direction,
             confidence=graph_confidence,
+            query_plan=prepared_query.plan,
         )
         graph_node_ids = {
             node["node_id"]
@@ -79,9 +81,16 @@ class HybridEngine:
             top_k=rag_top_k,
             threshold=rag_threshold,
             score_multipliers=score_multipliers,
+            prepared_query=prepared_query,
         )
-        entity_results = self.rag_engine.search_entities(query)
-        community_results = self.rag_engine.search_communities(query)
+        entity_results = self.rag_engine.search_entities(
+            query,
+            prepared_query=prepared_query,
+        )
+        community_results = self.rag_engine.search_communities(
+            query,
+            prepared_query=prepared_query,
+        )
         return {
             "graph": graph_result,
             "rag": rag_result,

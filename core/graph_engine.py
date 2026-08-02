@@ -11,10 +11,10 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from .chunker import chunk
 from .config import AppConfig, load_config
 from .db import DatabasePaths, connect_graph, initialize_databases
 from .entity_extractor import Entity, extract
+from .query_planner import QueryPlan, plan_query
 
 
 class GraphError(RuntimeError):
@@ -75,6 +75,7 @@ class GraphEngine:
         depth: int = 3,
         direction: str = "both",
         confidence: float | None = None,
+        query_plan: QueryPlan | None = None,
     ) -> dict[str, Any]:
         """执行完整图谱查询并返回文档约定结构。"""
 
@@ -90,8 +91,11 @@ class GraphEngine:
             effective_confidence,
             self.settings.max_query_depth,
         )
-        query_chunks = chunk(query, settings=self.settings)
-        entities = self._entity_extractor(query_chunks)
+        active_plan = query_plan or plan_query(query, settings=self.settings)
+        if active_plan.mode == "off":
+            entities = self._entity_extractor([active_plan.original])
+        else:
+            entities = _entities_from_query_plan(active_plan)
 
         connection = connect_graph(self.paths)
         try:
@@ -418,6 +422,30 @@ def _node_match_score(entity: Entity, node: _Node) -> float:
         ),
         default=0.0,
     )
+
+
+def _entities_from_query_plan(plan: QueryPlan) -> list[Entity]:
+    if plan.entities:
+        return [
+            Entity(
+                text=item.text,
+                type=item.type,
+                normalized=item.normalized,
+                aliases=list(item.aliases),
+                confidence=item.confidence,
+            )
+            for item in plan.entities
+        ]
+    return [
+        Entity(
+            text=variant.text,
+            type="concept",
+            normalized=variant.text,
+            aliases=[],
+            confidence=variant.weight,
+        )
+        for variant in plan.variants
+    ]
 
 
 def _is_meaningful_contains_match(left: str, right: str) -> bool:

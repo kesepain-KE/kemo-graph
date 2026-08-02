@@ -100,6 +100,63 @@ class VectorSearchConfig(BaseModel):
     community_top_k: int = Field(default=3, ge=1, le=100)
 
 
+class QueryPlanningConfig(BaseModel):
+    """查询改写、多路召回与候选融合参数。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    # 默认模型配置保持关闭，避免库调用方在未显式授权时新增 LLM 请求；
+    # 项目的 config.json 使用 auto 作为面向用户的推荐档位。
+    mode: str = "off"
+    max_rewrites: int = Field(default=4, ge=0, le=12)
+    max_subqueries: int = Field(default=3, ge=0, le=8)
+    max_total_queries: int = Field(default=6, ge=1, le=16)
+    semantic_drift_threshold: float = Field(default=0.58, ge=-1.0, le=1.0)
+    candidate_pool_size: int = Field(default=40, ge=5, le=200)
+    rrf_k: int = Field(default=60, ge=1, le=1000)
+    low_confidence_rescue_count: int = Field(default=2, ge=0, le=10)
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        if value not in {"off", "rule", "llm", "auto"}:
+            raise ValueError("query_planning.mode 必须为 off、rule、llm 或 auto")
+        return value
+
+    @model_validator(mode="after")
+    def validate_query_limits(self) -> "QueryPlanningConfig":
+        if self.max_total_queries < 1:
+            raise ValueError("max_total_queries 必须大于等于 1")
+        return self
+
+
+class PortableStoreConfig(BaseModel):
+    """分布式绝对路径知识库存储与 API 访问边界。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    allowed_roots: list[str] = Field(default_factory=list)
+
+    @field_validator("allowed_roots")
+    @classmethod
+    def validate_allowed_roots(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("portable_stores.allowed_roots 不能包含空路径")
+            path = Path(value.strip()).expanduser()
+            if not path.is_absolute():
+                raise ValueError("portable_stores.allowed_roots 必须全部使用绝对路径")
+            resolved = str(path.resolve(strict=False))
+            key = os.path.normcase(resolved)
+            if key not in seen:
+                seen.add(key)
+                normalized.append(resolved)
+        return normalized
+
+
 class AppConfig(BaseModel):
     """config/config.json 的权威配置模型。"""
 
@@ -143,6 +200,8 @@ class AppConfig(BaseModel):
     kemo: KemoConfig = Field(default_factory=KemoConfig)
     models: ModelSelectionConfig = Field(default_factory=ModelSelectionConfig)
     vector_search: VectorSearchConfig = Field(default_factory=VectorSearchConfig)
+    query_planning: QueryPlanningConfig = Field(default_factory=QueryPlanningConfig)
+    portable_stores: PortableStoreConfig = Field(default_factory=PortableStoreConfig)
 
     hybrid_enhancement_factor: float = Field(default=1.2, ge=1.0, le=2.0)
     entity_extraction: EntityExtractionConfig = Field(
@@ -181,8 +240,10 @@ class AppConfig(BaseModel):
     @field_validator("chunking_mode")
     @classmethod
     def validate_chunking_mode(cls, value: str) -> str:
-        if value not in {"fixed", "hierarchical", "llm"}:
-            raise ValueError("chunking_mode 必须为 fixed、hierarchical 或 llm")
+        if value not in {"fixed", "hierarchical", "llm", "semantic_hierarchical"}:
+            raise ValueError(
+                "chunking_mode 必须为 fixed、hierarchical、llm 或 semantic_hierarchical"
+            )
         return value
 
     @field_validator("graph_build_mode")

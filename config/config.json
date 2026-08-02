@@ -9,7 +9,7 @@
   "recycle_life_days": 30,
   "rag_similarity_threshold": 0.6,
   "default_top_k": 10,
-  "chunking_mode": "llm",
+  "chunking_mode": "semantic_hierarchical",
   "chunking_llm_max_input_chars": 8000,
   "chunk_small_size": 512,
   "chunk_size": 1024,
@@ -44,6 +44,20 @@
     "community_weight": 0.6,
     "entity_top_k": 5,
     "community_top_k": 3
+  },
+  "query_planning": {
+    "mode": "auto",
+    "max_rewrites": 4,
+    "max_subqueries": 3,
+    "max_total_queries": 6,
+    "semantic_drift_threshold": 0.58,
+    "candidate_pool_size": 40,
+    "rrf_k": 60,
+    "low_confidence_rescue_count": 2
+  },
+  "portable_stores": {
+    "enabled": true,
+    "allowed_roots": []
   },
   "hybrid_enhancement_factor": 1.2,
   "entity_extraction": {

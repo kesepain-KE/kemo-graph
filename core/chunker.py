@@ -154,6 +154,17 @@ def document_chunks(
             for index, span in enumerate(spans)
         ]
 
+    if active_settings.chunking_mode == "semantic_hierarchical":
+        try:
+            ranges = _llm_chunk_ranges(text, active_settings)
+            semantic_spans = _char_ranges_to_spans(text, ranges)
+            if not semantic_spans:
+                raise ValueError("LLM 未生成有效的语义切片")
+            spans = _semantic_hierarchy_spans(text, semantic_spans, active_settings)
+            return _hierarchical_document_chunks(spans)
+        except Exception as exc:
+            LOGGER.warning("LLM 语义分层切分失败，已回退机械分层切片：%s", exc)
+
     sizes = {
         "small": active_settings.chunk_small_size,
         "medium": active_settings.chunk_size,
@@ -172,34 +183,13 @@ def document_chunks(
             granularity,
         )
 
-    # 短文档在多个层级可能产生完全相同的区间，只保留最小有效粒度。
-    unique_spans: dict[tuple[int, int], _ChunkSpan] = {}
-    for granularity in ("small", "medium", "large"):
-        for span in spans_by_level[granularity]:
-            unique_spans.setdefault((span.token_start, span.token_end), span)
-    ordered_spans = sorted(
-        unique_spans.values(),
-        key=lambda span: (
-            -_GRANULARITY_ORDER[span.granularity],
-            span.token_start,
-            span.token_end,
-        ),
+    return _hierarchical_document_chunks(
+        [
+            span
+            for granularity in ("small", "medium", "large")
+            for span in spans_by_level[granularity]
+        ]
     )
-    chunks = [
-        DocumentChunk(
-            content=span.content,
-            granularity=span.granularity,
-            chunk_index=index,
-            token_start=span.token_start,
-            token_end=span.token_end,
-        )
-        for index, span in enumerate(ordered_spans)
-    ]
-    for index, child in enumerate(chunks):
-        parent_index = _find_parent_index(chunks, index)
-        if parent_index is not None:
-            chunks[index] = replace(child, parent_index=parent_index)
-    return chunks
 
 
 def chunking_signature(settings: AppConfig) -> str:
@@ -212,7 +202,7 @@ def chunking_signature(settings: AppConfig) -> str:
         "large": settings.chunk_large_size,
         "overlap": settings.chunk_overlap,
     }
-    if settings.chunking_mode == "llm":
+    if settings.chunking_mode in {"llm", "semantic_hierarchical"}:
         payload.update(
             {
                 "llm_max_input_chars": settings.chunking_llm_max_input_chars,
@@ -415,6 +405,125 @@ def _char_ranges_to_spans(
                 )
             )
     return spans
+
+
+def _semantic_hierarchy_spans(
+    text: str,
+    semantic_spans: list[_ChunkSpan],
+    settings: AppConfig,
+) -> list[_ChunkSpan]:
+    """以 LLM 语义片段为叶子，确定性组合中、大粒度父级。"""
+
+    leaves = [replace(span, granularity="small") for span in semantic_spans]
+    medium = _group_adjacent_semantic_spans(
+        text,
+        leaves,
+        settings.chunk_size,
+        "medium",
+    )
+    large = _group_adjacent_semantic_spans(
+        text,
+        medium,
+        settings.chunk_large_size,
+        "large",
+    )
+    return [*leaves, *medium, *large]
+
+
+def _group_adjacent_semantic_spans(
+    text: str,
+    spans: list[_ChunkSpan],
+    target_tokens: int,
+    granularity: str,
+) -> list[_ChunkSpan]:
+    if not spans:
+        return []
+    token_matches = list(_TOKEN_PATTERN.finditer(text))
+    grouped: list[_ChunkSpan] = []
+    group_start = spans[0].token_start
+    group_end = spans[0].token_end
+    for span in spans[1:]:
+        proposed_size = span.token_end - group_start
+        if proposed_size > target_tokens and group_end > group_start:
+            grouped.append(
+                _span_from_token_range(
+                    text,
+                    token_matches,
+                    group_start,
+                    group_end,
+                    granularity,
+                )
+            )
+            group_start = span.token_start
+        group_end = span.token_end
+    grouped.append(
+        _span_from_token_range(
+            text,
+            token_matches,
+            group_start,
+            group_end,
+            granularity,
+        )
+    )
+    return grouped
+
+
+def _span_from_token_range(
+    text: str,
+    token_matches: list[re.Match[str]],
+    token_start: int,
+    token_end: int,
+    granularity: str,
+) -> _ChunkSpan:
+    if not 0 <= token_start < token_end <= len(token_matches):
+        raise ValueError("语义层级切片 token 区间无效")
+    char_start = token_matches[token_start].start()
+    char_end = token_matches[token_end - 1].end()
+    return _ChunkSpan(
+        content=text[char_start:char_end].strip(),
+        granularity=granularity,
+        token_start=token_start,
+        token_end=token_end,
+    )
+
+
+def _hierarchical_document_chunks(spans: list[_ChunkSpan]) -> list[DocumentChunk]:
+    """去除重复区间、稳定排序并建立最近一级父子关系。"""
+
+    unique_spans: dict[tuple[int, int], _ChunkSpan] = {}
+    for span in sorted(
+        spans,
+        key=lambda item: (
+            _GRANULARITY_ORDER[item.granularity],
+            item.token_start,
+            item.token_end,
+        ),
+    ):
+        # 短文档多个层级区间完全相同时，只保留最小有效粒度。
+        unique_spans.setdefault((span.token_start, span.token_end), span)
+    ordered_spans = sorted(
+        unique_spans.values(),
+        key=lambda span: (
+            -_GRANULARITY_ORDER[span.granularity],
+            span.token_start,
+            span.token_end,
+        ),
+    )
+    chunks = [
+        DocumentChunk(
+            content=span.content,
+            granularity=span.granularity,
+            chunk_index=index,
+            token_start=span.token_start,
+            token_end=span.token_end,
+        )
+        for index, span in enumerate(ordered_spans)
+    ]
+    for index, child in enumerate(chunks):
+        parent_index = _find_parent_index(chunks, index)
+        if parent_index is not None:
+            chunks[index] = replace(child, parent_index=parent_index)
+    return chunks
 
 
 def _chunking_prompt_digest() -> str:

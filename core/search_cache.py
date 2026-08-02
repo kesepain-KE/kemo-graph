@@ -48,6 +48,8 @@ def normalize_query(query: str) -> str:
 def search_config_hash(settings: AppConfig) -> str:
     """返回所有会影响查询结果的配置摘要，不包含密钥等敏感字段。"""
 
+    from .query_planner import query_planner_signature
+
     payload = {
         "cache_format": CACHE_FORMAT_VERSION,
         "default_confidence": settings.default_confidence,
@@ -60,6 +62,7 @@ def search_config_hash(settings: AppConfig) -> str:
         "entity_extraction": settings.entity_extraction.model_dump(mode="json"),
         "models": settings.models.model_dump(mode="json"),
         "vector_search": settings.vector_search.model_dump(mode="json"),
+        "query_planner": query_planner_signature(settings),
         "kemo": {
             "base_url": settings.kemo.base_url.rstrip("/"),
             "protocol_version": settings.kemo.protocol_version,

@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - 由运行时依赖检查覆盖
 from provider.embedding import EmbeddingResult, embed
 from provider.rerank import clear_cache, rerank
 
-from .chunker import chunk, chunking_signature
+from .chunker import chunking_signature
 from .config import AppConfig, load_config
 from .db import (
     connect_graph,
@@ -34,6 +34,7 @@ from .db import (
     write_rag_meta,
 )
 from .logger import DailyTSVLogger
+from .query_planner import QueryPlan, filter_semantic_drift, plan_query
 
 
 class RAGError(RuntimeError):
@@ -310,6 +311,14 @@ class _ChunkContext:
     parent_chunk_id: str | None
 
 
+@dataclass(frozen=True)
+class PreparedQuery:
+    """已完成规划和一次批量向量化、可供多个 FAISS 索引复用的查询。"""
+
+    plan: QueryPlan
+    embedding: EmbeddingResult
+
+
 Embedder = Callable[[list[str]], EmbeddingResult | list[list[float]]]
 Reranker = Callable[[str, list[str], int], list[tuple[int, float]]]
 
@@ -364,6 +373,7 @@ class RAGEngine:
         top_k: int | None = None,
         threshold: float | None = None,
         score_multipliers: Mapping[str, float] | None = None,
+        prepared_query: PreparedQuery | None = None,
     ) -> dict[str, Any]:
         """执行完整 RAG 查询并返回 API 约定的结构化结果。"""
 
@@ -388,32 +398,10 @@ class RAGEngine:
         if self.index.count == 0:
             return {"query": query, "results": []}
 
-        query_chunks = chunk(query, settings=self.settings)
-        embedding_started_at = time.perf_counter()
-        try:
-            query_embedding = self._embed_texts(query_chunks, input_type="query")
-        except Exception:
-            self._log_event(
-                "embedding_request",
-                (
-                    f"purpose=query, model={self.settings.models.embedding}, "
-                    f"count={len(query_chunks)}, status=failed"
-                ),
-                _elapsed_ms(embedding_started_at),
-                level="ERROR",
-            )
-            raise
-        self._log_event(
-            "embedding_request",
-            (
-                f"purpose=query, model={self.settings.models.embedding}, "
-                f"count={len(query_chunks)}"
-            ),
-            _elapsed_ms(embedding_started_at),
-        )
+        prepared = prepared_query or self.prepare_query(query)
+        _validate_prepared_query(query, prepared)
+        query_embedding = prepared.embedding
         query_vectors = query_embedding.vectors
-        if len(query_vectors) != len(query_chunks):
-            raise RAGQueryError("Embedding 返回向量数量与查询切片数量不一致")
         database_vector_space = self._database_vector_space_id()
         if (
             database_vector_space is not None
@@ -423,12 +411,26 @@ class RAGEngine:
                 "查询向量空间与 FAISS 索引不一致："
                 f"查询={query_embedding.vector_space_id}，索引={database_vector_space}"
             )
-        candidate_multiplier = 6 if self.settings.chunking_mode == "hierarchical" else 2
+        candidate_multiplier = (
+            6
+            if self.settings.chunking_mode in {"hierarchical", "semantic_hierarchical"}
+            else 2
+        )
+        search_limit = effective_top_k * candidate_multiplier
+        if len(prepared.plan.variants) > 1:
+            search_limit = max(
+                search_limit,
+                self.settings.query_planning.candidate_pool_size,
+            )
         raw_hits = self.index.search(
             query_vectors,
-            effective_top_k * candidate_multiplier,
+            search_limit,
         )
-        candidates = self._load_candidates(raw_hits)
+        candidates = self._load_candidates(
+            raw_hits,
+            query_weights=prepared.plan.weights,
+            rrf_k=self.settings.query_planning.rrf_k,
+        )
         if not candidates:
             return {"query": query, "results": []}
         if score_multipliers:
@@ -446,10 +448,13 @@ class RAGEngine:
                 reverse=True,
             )
 
-        rerank_limit = min(
-            len(candidates),
-            max(effective_top_k, self.settings.rerank_top_n),
-        )
+        requested_rerank_limit = max(effective_top_k, self.settings.rerank_top_n)
+        if len(prepared.plan.variants) > 1:
+            requested_rerank_limit = max(
+                requested_rerank_limit,
+                self.settings.query_planning.candidate_pool_size,
+            )
+        rerank_limit = min(len(candidates), requested_rerank_limit)
         documents = [candidate.content for candidate in candidates]
         rerank_started_at = time.perf_counter()
         if self._reranker is None:
@@ -485,6 +490,7 @@ class RAGEngine:
         )
         hierarchy = self._load_chunk_hierarchy(candidates)
         results: list[dict[str, Any]] = []
+        rescue_candidates: list[tuple[_Candidate, float]] = []
         seen_indexes: set[int] = set()
         seen_families: set[str] = set()
         for candidate_index, score in ranked:
@@ -502,44 +508,90 @@ class RAGEngine:
             candidate = candidates[candidate_index]
             effective_score = max(
                 float(score),
-                _direct_lexical_match_score(query, candidate.content),
+                _planned_lexical_match_score(prepared.plan, candidate.content),
             )
             if effective_score < effective_threshold:
+                if effective_score > 0:
+                    rescue_candidates.append((candidate, effective_score))
                 continue
             family_id = _chunk_family_id(candidate.chunk_id, hierarchy)
             if family_id in seen_families:
                 continue
             seen_families.add(family_id)
-            parent = (
-                hierarchy.get(candidate.parent_chunk_id)
-                if candidate.parent_chunk_id is not None
-                else None
-            )
             results.append(
-                {
-                    "chunk_id": candidate.chunk_id,
-                    "content": candidate.content,
-                    "score": effective_score,
-                    "granularity": candidate.granularity,
-                    "parent_chunk_id": candidate.parent_chunk_id,
-                    "context": (
-                        {
-                            "chunk_id": parent.chunk_id,
-                            "content": parent.content,
-                            "granularity": parent.granularity,
-                        }
-                        if parent is not None
-                        else None
-                    ),
-                    "source": {
-                        "source_id": candidate.source_id,
-                        "relative_path": source_paths.get(candidate.source_id),
-                    },
-                }
+                _rag_result_item(candidate, effective_score, hierarchy, source_paths)
             )
             if len(results) == effective_top_k:
                 break
+        if (
+            not results
+            and threshold is None
+            and len(prepared.plan.variants) > 1
+            and self.settings.query_planning.low_confidence_rescue_count > 0
+        ):
+            for candidate, score in sorted(
+                rescue_candidates,
+                key=lambda item: item[1],
+                reverse=True,
+            ):
+                family_id = _chunk_family_id(candidate.chunk_id, hierarchy)
+                if family_id in seen_families:
+                    continue
+                seen_families.add(family_id)
+                item = _rag_result_item(candidate, score, hierarchy, source_paths)
+                item["low_confidence"] = True
+                results.append(item)
+                if len(results) == min(
+                    effective_top_k,
+                    self.settings.query_planning.low_confidence_rescue_count,
+                ):
+                    break
         return {"query": query, "results": results}
+
+    def prepare_query(self, query: str) -> PreparedQuery:
+        """规划查询并一次批量向量化，供 chunk、实体和群组索引共同使用。"""
+
+        if not isinstance(query, str) or not query.strip():
+            raise RAGQueryError("query 必须是非空字符串")
+        plan = plan_query(query, settings=self.settings)
+        embedding_started_at = time.perf_counter()
+        try:
+            embedding = self._embed_texts(plan.texts, input_type="query")
+        except Exception:
+            self._log_event(
+                "embedding_request",
+                (
+                    f"purpose=query, model={self.settings.models.embedding}, "
+                    f"count={len(plan.variants)}, status=failed"
+                ),
+                _elapsed_ms(embedding_started_at),
+                level="ERROR",
+            )
+            raise
+        if len(embedding.vectors) != len(plan.variants):
+            raise RAGQueryError("Embedding 返回向量数量与查询计划数量不一致")
+        try:
+            filtered_plan, kept_indexes = filter_semantic_drift(
+                plan,
+                embedding.vectors,
+                self.settings.query_planning.semantic_drift_threshold,
+            )
+        except Exception as exc:
+            raise RAGQueryError(f"查询扩展向量校验失败：{exc}") from exc
+        filtered_embedding = EmbeddingResult(
+            vectors=[embedding.vectors[index] for index in kept_indexes],
+            vector_space_id=embedding.vector_space_id,
+        )
+        self._log_event(
+            "embedding_request",
+            (
+                f"purpose=query, model={self.settings.models.embedding}, "
+                f"planned={len(plan.variants)}, retained={len(filtered_plan.variants)}, "
+                f"planner_mode={plan.mode}, degraded={str(plan.degraded).lower()}"
+            ),
+            _elapsed_ms(embedding_started_at),
+        )
+        return PreparedQuery(filtered_plan, filtered_embedding)
 
     def build_entity_vectors(self, node_id: str, summary: str) -> dict[str, Any]:
         """为单个实体建立或刷新向量；新鲜度由摘要及向量元数据决定。"""
@@ -577,6 +629,8 @@ class RAGEngine:
         self,
         query: str,
         top_k: int | None = None,
+        *,
+        prepared_query: PreparedQuery | None = None,
     ) -> list[dict[str, Any]]:
         """在实体摘要索引中执行语义检索。"""
 
@@ -588,12 +642,15 @@ class RAGEngine:
             query,
             effective_top_k,
             self.settings.vector_search.entity_weight,
+            prepared_query=prepared_query,
         )
 
     def search_communities(
         self,
         query: str,
         top_k: int | None = None,
+        *,
+        prepared_query: PreparedQuery | None = None,
     ) -> list[dict[str, Any]]:
         """在群组总结索引中执行语义检索。"""
 
@@ -607,6 +664,7 @@ class RAGEngine:
             query,
             effective_top_k,
             self.settings.vector_search.community_weight,
+            prepared_query=prepared_query,
         )
 
     def delete_entity_vectors(self, node_ids: Sequence[str]) -> int:
@@ -923,6 +981,8 @@ class RAGEngine:
         query: str,
         top_k: int,
         weight: float,
+        *,
+        prepared_query: PreparedQuery | None = None,
     ) -> list[dict[str, Any]]:
         if not isinstance(query, str) or not query.strip():
             raise RAGQueryError("query 必须是非空字符串")
@@ -932,25 +992,25 @@ class RAGEngine:
         if manager.count == 0:
             return []
 
-        query_chunks = chunk(query, settings=self.settings)
-        embedding = self._embed_texts(query_chunks, input_type="query")
-        if len(embedding.vectors) != len(query_chunks):
-            raise RAGQueryError("Embedding 返回向量数量与查询切片数量不一致")
+        prepared = prepared_query or self.prepare_query(query)
+        _validate_prepared_query(query, prepared)
+        embedding = prepared.embedding
         database_space = self._auxiliary_vector_space_id(kind)
         if database_space is not None and embedding.vector_space_id != database_space:
             raise RAGQueryError(
                 f"查询向量空间与 {kind} 索引不一致："
                 f"查询={embedding.vector_space_id}，索引={database_space}"
             )
-        raw_hits = manager.search(embedding.vectors, top_k)
-        vector_scores: dict[int, float] = {}
-        for hits in raw_hits:
-            for vector_id, score in hits:
-                vector_scores[vector_id] = max(
-                    score,
-                    vector_scores.get(vector_id, float("-inf")),
-                )
-        return self._load_auxiliary_results(kind, vector_scores, float(weight))
+        per_query_limit = top_k
+        if len(prepared.plan.variants) > 1:
+            per_query_limit = max(top_k * 2, self.settings.query_planning.candidate_pool_size)
+        raw_hits = manager.search(embedding.vectors, per_query_limit)
+        vector_scores = _fuse_vector_hits(
+            raw_hits,
+            prepared.plan.weights,
+            self.settings.query_planning.rrf_k,
+        )
+        return self._load_auxiliary_results(kind, vector_scores, float(weight))[:top_k]
 
     def _load_auxiliary_results(
         self,
@@ -1349,14 +1409,15 @@ class RAGEngine:
         return next(iter(spaces), None)
 
     def _load_candidates(
-        self, raw_hits: Iterable[Iterable[tuple[int, float]]]
+        self,
+        raw_hits: Iterable[Iterable[tuple[int, float]]],
+        *,
+        query_weights: Sequence[float] | None = None,
+        rrf_k: int = 60,
     ) -> list[_Candidate]:
-        vector_scores: dict[int, float] = {}
-        for query_hits in raw_hits:
-            for vector_id, score in query_hits:
-                vector_scores[vector_id] = max(
-                    vector_scores.get(vector_id, float("-inf")), score
-                )
+        hit_lists = [list(query_hits) for query_hits in raw_hits]
+        weights = list(query_weights) if query_weights is not None else [1.0] * len(hit_lists)
+        vector_scores = _fuse_vector_hits(hit_lists, weights, rrf_k)
         if not vector_scores:
             return []
 
@@ -1621,6 +1682,96 @@ def _auxiliary_row_matches_graph(
     )
 
 
+def _fuse_vector_hits(
+    raw_hits: Iterable[Iterable[tuple[int, float]]],
+    query_weights: Sequence[float],
+    rrf_k: int,
+) -> dict[int, float]:
+    """融合多查询 FAISS 排名，同时保留向量相似度的局部顺序。"""
+
+    hit_lists = [list(hits) for hits in raw_hits]
+    if len(hit_lists) != len(query_weights):
+        raise RAGQueryError("FAISS 查询结果数量与查询权重数量不一致")
+    if rrf_k < 1:
+        raise RAGQueryError("rrf_k 必须大于等于 1")
+    if len(hit_lists) == 1:
+        weight = float(query_weights[0])
+        if not np.isfinite(weight) or weight <= 0:
+            raise RAGQueryError("查询权重必须是正有限数")
+        return {
+            vector_id: weight * float(score)
+            for vector_id, score in hit_lists[0]
+        }
+
+    max_scores: dict[int, float] = {}
+    rrf_scores: dict[int, float] = {}
+    for hits, raw_weight in zip(hit_lists, query_weights):
+        weight = float(raw_weight)
+        if not np.isfinite(weight) or weight <= 0:
+            raise RAGQueryError("查询权重必须是正有限数")
+        for rank, (vector_id, raw_score) in enumerate(hits, start=1):
+            score = float(raw_score)
+            if not np.isfinite(score):
+                raise RAGQueryError("FAISS 返回了 NaN 或 Infinity")
+            weighted_score = weight * score
+            max_scores[vector_id] = max(
+                weighted_score,
+                max_scores.get(vector_id, float("-inf")),
+            )
+            rrf_scores[vector_id] = rrf_scores.get(vector_id, 0.0) + weight / (
+                rrf_k + rank
+            )
+    return {
+        vector_id: max_scores[vector_id] + rrf_scores.get(vector_id, 0.0)
+        for vector_id in max_scores
+    }
+
+
+def _planned_lexical_match_score(plan: QueryPlan, document: str) -> float:
+    """原始词优先，并允许通过漂移校验的扩展词提供较弱字面保底。"""
+
+    return max(
+        (
+            _direct_lexical_match_score(variant.text, document) * variant.weight
+            for variant in plan.variants
+        ),
+        default=0.0,
+    )
+
+
+def _rag_result_item(
+    candidate: _Candidate,
+    score: float,
+    hierarchy: Mapping[str, _ChunkContext],
+    source_paths: Mapping[str, str | None],
+) -> dict[str, Any]:
+    parent = (
+        hierarchy.get(candidate.parent_chunk_id)
+        if candidate.parent_chunk_id is not None
+        else None
+    )
+    return {
+        "chunk_id": candidate.chunk_id,
+        "content": candidate.content,
+        "score": score,
+        "granularity": candidate.granularity,
+        "parent_chunk_id": candidate.parent_chunk_id,
+        "context": (
+            {
+                "chunk_id": parent.chunk_id,
+                "content": parent.content,
+                "granularity": parent.granularity,
+            }
+            if parent is not None
+            else None
+        ),
+        "source": {
+            "source_id": candidate.source_id,
+            "relative_path": source_paths.get(candidate.source_id),
+        },
+    }
+
+
 def _direct_lexical_match_score(query: str, document: str) -> float:
     """为文档中的直接关键词命中提供保底分，避免短词被 Rerank 尺度吞没。"""
 
@@ -1653,6 +1804,16 @@ def _chunk_family_id(
 
 def _normalize_lexical_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _validate_prepared_query(query: str, prepared: PreparedQuery) -> None:
+    if not isinstance(prepared, PreparedQuery):
+        raise RAGQueryError("prepared_query 类型无效")
+    normalized = " ".join(unicodedata.normalize("NFKC", query).strip().split())
+    if prepared.plan.original != normalized:
+        raise RAGQueryError("prepared_query 与当前 query 不一致")
+    if len(prepared.plan.variants) != len(prepared.embedding.vectors):
+        raise RAGQueryError("prepared_query 的计划与向量数量不一致")
 
 
 def _elapsed_ms(started_at: float) -> int:

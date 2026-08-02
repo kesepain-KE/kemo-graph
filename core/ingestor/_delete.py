@@ -139,6 +139,12 @@ def _delete_graph_for_source(self, source_id: str) -> bool:
         }
         connection.execute("DELETE FROM node_sources WHERE source_id = ?", (source_id,))
         connection.execute("DELETE FROM edge_sources WHERE source_id = ?", (source_id,))
+        connection.execute(
+            "DELETE FROM relation_mentions WHERE source_id = ?", (source_id,)
+        )
+        connection.execute(
+            "DELETE FROM entity_mentions WHERE source_id = ?", (source_id,)
+        )
         _recalculate_edges(connection, old_edge_ids)
         orphan_node_ids = _recalculate_nodes(connection, old_node_ids)
         if old_node_ids or old_edge_ids:

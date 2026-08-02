@@ -53,6 +53,12 @@ class MaintenanceScheduler:
         with self._lifecycle_lock:
             return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def is_executing(self) -> bool:
+        """是否正在执行当日维护，供安全重启预检使用。"""
+
+        return self._run_lock.locked()
+
     def start(self) -> bool:
         """幂等启动 daemon 线程；首次启动返回 ``True``。"""
 
