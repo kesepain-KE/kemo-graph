@@ -13,9 +13,11 @@ from uuid import uuid4
 
 from .config import AppConfig, load_config
 from .db import DatabasePaths, connect_sources, initialize_databases
+from update import ApplicationUpdater
 
 
 ServiceFactory = Callable[[], Any]
+UpdaterFactory = Callable[[], ApplicationUpdater]
 SUPPORTED_JOB_KINDS = frozenset(
     {
         "ingest",
@@ -24,6 +26,7 @@ SUPPORTED_JOB_KINDS = frozenset(
         "rebuild_all",
         "summarize",
         "cleanup_recycle",
+        "update",
     }
 )
 
@@ -39,10 +42,12 @@ class MaintenanceJobManager:
         *,
         data_dir: Path | str | None = None,
         settings: AppConfig | None = None,
+        updater_factory: UpdaterFactory | None = None,
     ) -> None:
         self.settings = settings or load_config()
         self.paths: DatabasePaths = initialize_databases(data_dir, self.settings)
         self._service_factory = service_factory
+        self._updater_factory = updater_factory or ApplicationUpdater
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._thread: threading.Thread | None = None
@@ -167,40 +172,53 @@ class MaintenanceJobManager:
             self._set_progress(job_id, value, detail)
 
         try:
-            service = self._service_factory()
-            if kind == "ingest":
-                progress(0.05, "扫描文档并构建 Graph/RAG")
-                result = service.ingest(
-                    paths=options.get("paths"),
-                    mode=options.get("mode", "both"),
-                )
-                if int(result.get("failed", 0)):
-                    raise RuntimeError(f"文档整理有 {result['failed']} 个失败项")
-            elif kind == "organize_graph":
-                progress(0.05, "扫描重叠节点与关系候选")
-                result = service.organize_graph(
-                    use_llm=bool(options.get("use_llm", True)),
-                    summarize=bool(options.get("summarize", True)),
-                )
-            elif kind == "rebuild_knowledge_base":
-                result = service.rebuild_knowledge_base(progress=progress)
-            elif kind == "rebuild_all":
-                result = service.rebuild_all(progress=progress)
-            elif kind == "summarize":
-                progress(0.1, "重新生成节点群总结")
-                result = service.generate_group_summaries(
-                    force=bool(options.get("force", False))
-                )
-            elif kind == "cleanup_recycle":
-                progress(0.2, "清理回收站")
-                result = service.cleanup_recycle(
-                    force=bool(options.get("force", False))
-                )
-            else:  # pragma: no cover - submit 已校验
-                raise ValueError(f"未知任务类型：{kind}")
+            if kind == "update":
+                result = self._updater_factory().apply(progress=progress)
+            else:
+                service = self._service_factory()
+                result = self._run_service_job(service, kind, options, progress)
             self._complete(job_id, result)
         except Exception as exc:
             self._fail(job_id, str(exc) or type(exc).__name__)
+
+    @staticmethod
+    def _run_service_job(
+        service: Any,
+        kind: str,
+        options: dict[str, Any],
+        progress: Callable[[float, str], None],
+    ) -> Any:
+        if kind == "ingest":
+            progress(0.05, "扫描文档并构建 Graph/RAG")
+            result = service.ingest(
+                paths=options.get("paths"),
+                mode=options.get("mode", "both"),
+            )
+            if int(result.get("failed", 0)):
+                raise RuntimeError(f"文档整理有 {result['failed']} 个失败项")
+        elif kind == "organize_graph":
+            progress(0.05, "扫描重叠节点与关系候选")
+            result = service.organize_graph(
+                use_llm=bool(options.get("use_llm", True)),
+                summarize=bool(options.get("summarize", True)),
+            )
+        elif kind == "rebuild_knowledge_base":
+            result = service.rebuild_knowledge_base(progress=progress)
+        elif kind == "rebuild_all":
+            result = service.rebuild_all(progress=progress)
+        elif kind == "summarize":
+            progress(0.1, "重新生成节点群总结")
+            result = service.generate_group_summaries(
+                force=bool(options.get("force", False))
+            )
+        elif kind == "cleanup_recycle":
+            progress(0.2, "清理回收站")
+            result = service.cleanup_recycle(
+                force=bool(options.get("force", False))
+            )
+        else:  # pragma: no cover - submit 已校验
+            raise ValueError(f"未知任务类型：{kind}")
+        return result
 
     def _set_running(self, job_id: str) -> None:
         now = _now_iso()
@@ -420,6 +438,7 @@ def _initial_detail(kind: str) -> str:
         "rebuild_all": "等待全项目影子重建",
         "summarize": "等待生成节点群总结",
         "cleanup_recycle": "等待清理回收站",
+        "update": "等待下载并安装应用更新",
     }[kind]
 
 
