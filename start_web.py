@@ -6,22 +6,33 @@ import argparse
 import logging
 import mimetypes
 import os
+import sys
+import threading
 from contextlib import asynccontextmanager
 from collections.abc import Sequence
 from pathlib import Path
 from typing import AsyncIterator
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.deps import create_context, create_service
-from api.errors import install_exception_handlers
-from api.routes import router
+from api.errors import install_exception_handlers, success_response
+from api.routes import _is_loopback_host, router
+from api.schemas import RestartRequest
 from core.scheduler import MaintenanceScheduler
 from core.jobs import MaintenanceJobManager
+from update import ApplicationUpdater, read_local_version
+from restart import (
+    RestartPermissionError,
+    RestartUnavailableError,
+    remove_runtime_state,
+    schedule_restart,
+    write_runtime_state,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -83,10 +94,12 @@ def create_app(
         external_dir=external_dir,
     )
     scheduler = MaintenanceScheduler(lambda: create_service(context))
+    updater = ApplicationUpdater()
     job_manager = MaintenanceJobManager(
         lambda: create_service(context),
         data_dir=context.data_dir,
         settings=context.settings,
+        updater_factory=lambda: updater,
     )
 
     @asynccontextmanager
@@ -101,12 +114,14 @@ def create_app(
 
     application = FastAPI(
         title="kemo-graph Web",
-        version="1.0.0",
+        version=read_local_version(),
         lifespan=lifespan,
     )
     application.state.kemo_context = context
     application.state.kemo_scheduler = scheduler
     application.state.kemo_job_manager = job_manager
+    application.state.kemo_updater = updater
+    application.state.kemo_restart_pending = False
     install_exception_handlers(application)
     application.add_middleware(
         CORSMiddleware,
@@ -124,6 +139,61 @@ def create_app(
         allow_headers=["*"],
     )
     application.include_router(router, prefix="/api/v1")
+
+    @application.get("/api/v1/system/runtime", include_in_schema=True)
+    def get_web_runtime() -> dict:
+        return success_response(
+            {
+                "pid": os.getpid(),
+                "restart_available": callable(
+                    getattr(application.state, "kemo_request_shutdown", None)
+                ),
+                "restart_pending": bool(application.state.kemo_restart_pending),
+                "version": read_local_version(),
+            }
+        )
+
+    @application.post("/api/v1/system/restart", include_in_schema=True)
+    def restart_web_service(payload: RestartRequest, request: Request) -> dict:
+        del payload  # Literal["restart"] 已由 Pydantic 完成二次确认校验。
+        host = request.client.host if request.client is not None else ""
+        if not _is_loopback_host(host):
+            raise RestartPermissionError("底层重启只允许从本机访问")
+        if application.state.kemo_restart_pending:
+            raise RestartUnavailableError("重启已在执行，请等待服务重新上线")
+        active_jobs = job_manager.list(limit=1, status="running") + job_manager.list(
+            limit=1, status="queued"
+        )
+        if active_jobs:
+            raise RestartUnavailableError(
+                "仍有后台任务正在运行或排队，请等待任务结束后再重启"
+            )
+        if scheduler.is_executing:
+            raise RestartUnavailableError("每日维护任务正在执行，请稍后再重启")
+        command = getattr(application.state, "kemo_restart_command", None)
+        cwd = getattr(application.state, "kemo_restart_cwd", None)
+        shutdown = getattr(application.state, "kemo_request_shutdown", None)
+        if not command or cwd is None or not callable(shutdown):
+            raise RestartUnavailableError(
+                "当前实例不受重启守护器管理；请使用 python start_web.py 启动"
+            )
+
+        result = schedule_restart(
+            target_pid=os.getpid(),
+            command=command,
+            cwd=cwd,
+        )
+        application.state.kemo_restart_pending = True
+        timer = threading.Timer(0.35, shutdown)
+        timer.daemon = True
+        timer.start()
+        return success_response(
+            {
+                **result,
+                "message": "旧进程将完整退出，新 Python 进程会在端口释放后启动",
+            }
+        )
+
     _mount_frontend(application)
     return application
 
@@ -146,14 +216,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    args = build_parser().parse_args(raw_arguments)
     application = create_app(
         config_path=args.config,
         data_dir=args.data_dir,
         external_dir=args.external_dir,
     )
-    uvicorn.run(application, host=args.host, port=args.port)
-    return 0
+    command = [sys.executable, str(Path(__file__).resolve()), *raw_arguments]
+    application.state.kemo_restart_command = command
+    application.state.kemo_restart_cwd = Path(__file__).resolve().parent
+    server = uvicorn.Server(
+        uvicorn.Config(application, host=args.host, port=args.port)
+    )
+    application.state.kemo_request_shutdown = lambda: setattr(
+        server, "should_exit", True
+    )
+    write_runtime_state(
+        pid=os.getpid(),
+        command=command,
+        cwd=Path(__file__).resolve().parent,
+        host=args.host,
+        port=args.port,
+    )
+    try:
+        server.run()
+        return 0
+    finally:
+        remove_runtime_state(os.getpid())
 
 
 if __name__ == "__main__":
