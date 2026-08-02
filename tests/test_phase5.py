@@ -21,6 +21,7 @@ from core.config import AppConfig
 from core.db import connect_graph, connect_rag, connect_sources
 from core.ingestor import Ingestor
 from core.knowledge_base import (
+    DocumentContentConflictError,
     KnowledgeBaseNotInitializedError,
     KnowledgeBaseService,
 )
@@ -84,6 +85,85 @@ def _tool_graph(system, user, tools, tool_handler, **kwargs) -> str:
 
 
 class KnowledgeBaseServiceTests(unittest.TestCase):
+    def test_document_edit_marks_pending_without_destroying_old_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            data_dir = root / "data"
+            external_dir = root / "external" / "markdown"
+            service = KnowledgeBaseService(
+                settings=_settings(),
+                data_dir=data_dir,
+                external_dir=external_dir,
+            )
+            uploaded = service.upload_file("# Original\n", "editable.md")
+            source_id = str(uploaded["source_id"])
+            before = service.get_document_content(source_id)
+            old_hash = str(before["content_hash"])
+            connection = connect_sources(service.paths)
+            try:
+                connection.execute(
+                    """
+                    UPDATE sources
+                    SET graph_hash = content_hash, rag_hash = content_hash,
+                        graph_status = 'ready', rag_status = 'ready'
+                    WHERE source_id = ?
+                    """,
+                    (source_id,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            updated = service.update_document_content(
+                source_id,
+                "# Updated\n\nBody\n",
+                expected_content_hash=old_hash,
+            )
+
+            self.assertTrue(updated["changed"])
+            self.assertEqual(updated["graph_status"], "pending")
+            self.assertEqual(updated["rag_status"], "pending")
+            after = service.get_document_content(source_id)
+            self.assertEqual(after["content"], "# Updated\n\nBody\n")
+            self.assertEqual(after["graph_hash"], old_hash)
+            self.assertEqual(after["rag_hash"], old_hash)
+            self.assertNotEqual(after["content_hash"], old_hash)
+            with self.assertRaises(DocumentContentConflictError):
+                service.update_document_content(
+                    source_id,
+                    "stale overwrite",
+                    expected_content_hash=old_hash,
+                )
+
+    def test_batch_and_all_document_delete_stay_in_current_library(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            service = KnowledgeBaseService(
+                settings=_settings(),
+                data_dir=root / "data",
+                external_dir=root / "external" / "markdown",
+            )
+            first = service.upload_file("# A", "a.md")
+            second = service.upload_file("# B", "b.md")
+            third = service.upload_file("# C", "c.md")
+
+            batch = service.delete_documents(
+                [str(first["source_id"]), str(second["source_id"])]
+            )
+            self.assertEqual(batch["requested"], 2)
+            self.assertEqual(batch["deleted"], 2)
+            self.assertEqual(batch["failed"], 0)
+            self.assertEqual(service.status()["sources"]["active"], 1)
+
+            all_result = service.delete_all_documents()
+            self.assertEqual(all_result["requested"], 1)
+            self.assertEqual(all_result["deleted"], 1)
+            self.assertEqual(
+                all_result["documents"][0]["deleted_source_id"],
+                third["source_id"],
+            )
+            self.assertEqual(service.status()["sources"]["active"], 0)
+
     @patch("core.ingestor.chat_with_tools", side_effect=_tool_graph)
     def test_status_full_graph_and_document_delete(self, _mock_chat) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -203,6 +283,15 @@ class _FakeService:
     def delete_document(self, source_id):
         return {"deleted_source_id": source_id}
 
+    def update_document_content(self, source_id, content, **kwargs):
+        return {"source_id": source_id, "content": content, **kwargs}
+
+    def delete_documents(self, source_ids):
+        return {"requested": len(source_ids), "deleted": len(source_ids), "failed": 0}
+
+    def delete_all_documents(self):
+        return {"requested": 2, "deleted": 2, "failed": 0}
+
     def list_documents(self, status=None, page=1, page_size=20):
         return {
             "documents": [],
@@ -271,6 +360,21 @@ class APITests(unittest.TestCase):
             self.assertEqual(answer_response.json()["data"]["query"], "mixed context")
             self.assertEqual(answer_response.json()["data"]["graph_depth"], 4)
             self.assertEqual(answer_response.json()["data"]["rag_top_k"], 8)
+            edited = client.put(
+                "/api/v1/documents/source-1/content",
+                json={"content": "# Updated", "expected_content_hash": "a" * 64},
+            )
+            self.assertEqual(edited.status_code, 200)
+            self.assertEqual(edited.json()["data"]["source_id"], "source-1")
+            batch_deleted = client.post(
+                "/api/v1/documents/delete-batch",
+                json={"source_ids": ["source-1", "source-2"]},
+            )
+            self.assertEqual(batch_deleted.json()["data"]["deleted"], 2)
+            all_deleted = client.delete(
+                "/api/v1/documents?confirm=delete-all"
+            )
+            self.assertEqual(all_deleted.json()["data"]["deleted"], 2)
             self.assertEqual(
                 client.delete("/api/v1/documents/source-1").json()["data"],
                 {"deleted_source_id": "source-1"},
@@ -309,6 +413,8 @@ class APITests(unittest.TestCase):
                 "/api/v1/query/global",
                 "/api/v1/status",
                 "/api/v1/documents/{source_id}",
+                "/api/v1/documents/{source_id}/content",
+                "/api/v1/documents/delete-batch",
                 "/api/v1/graph",
                 "/api/v1/maintenance/recycle",
             }

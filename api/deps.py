@@ -11,6 +11,7 @@ from fastapi import Depends, Request
 from core.config import AppConfig, DEFAULT_CONFIG_PATH, load_config
 from core.knowledge_base import KnowledgeBaseService
 from core.jobs import MaintenanceJobManager
+from update import ApplicationUpdater
 
 
 @dataclass(frozen=True)
@@ -74,3 +75,7 @@ def get_service(
 
 def get_job_manager(request: Request) -> MaintenanceJobManager:
     return request.app.state.kemo_job_manager
+
+
+def get_updater(request: Request) -> ApplicationUpdater:
+    return request.app.state.kemo_updater

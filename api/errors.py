@@ -21,6 +21,7 @@ from core.ingestor import (
 )
 from core.knowledge_base import (
     DocumentImportError,
+    DocumentContentConflictError,
     DocumentImportPathError,
     DocumentIngestError,
     DocumentTooLargeError,
@@ -31,7 +32,19 @@ from core.knowledge_base import (
 from core.logger import DailyTSVLogger
 from core.jobs import JobNotFoundError
 from core.rag_engine import RAGQueryError
+from core.portable_store import (
+    PortableStoreAccessError,
+    PortableStoreError,
+    PortableStoreNotInitializedError,
+)
 from provider.tools.document_tools import DocumentConversionError
+from update import (
+    UpdateBlockedError,
+    UpdateError,
+    UpdatePermissionError,
+    UpdateSourceError,
+)
+from restart import RestartError, RestartPermissionError, RestartUnavailableError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -63,10 +76,13 @@ def install_exception_handlers(app: FastAPI) -> None:
         GraphQueryError,
         RAGQueryError,
         IngestError,
+        PortableStoreError,
         DocumentImportError,
         DocumentConversionError,
         ValueError,
         TypeError,
+        UpdateError,
+        RestartError,
     ):
         app.add_exception_handler(exception_type, _application_error_handler)
     app.add_exception_handler(Exception, _application_error_handler)
@@ -97,6 +113,72 @@ async def _http_error_handler(request: Request, exc: HTTPException) -> JSONRespo
 
 
 async def _application_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, RestartPermissionError):
+        _log_api_error(request, 403, "RESTART_FORBIDDEN", exc)
+        return JSONResponse(
+            status_code=403,
+            content=error_payload("RESTART_FORBIDDEN", str(exc)),
+        )
+    if isinstance(exc, RestartUnavailableError):
+        _log_api_error(request, 503, "RESTART_UNAVAILABLE", exc)
+        return JSONResponse(
+            status_code=503,
+            content=error_payload("RESTART_UNAVAILABLE", str(exc)),
+        )
+    if isinstance(exc, RestartError):
+        _log_api_error(request, 500, "RESTART_FAILED", exc)
+        return JSONResponse(
+            status_code=500,
+            content=error_payload("RESTART_FAILED", str(exc)),
+        )
+    if isinstance(exc, UpdatePermissionError):
+        _log_api_error(request, 403, "UPDATE_FORBIDDEN", exc)
+        return JSONResponse(
+            status_code=403,
+            content=error_payload("UPDATE_FORBIDDEN", str(exc)),
+        )
+    if isinstance(exc, UpdateBlockedError):
+        _log_api_error(request, 409, "UPDATE_BLOCKED", exc)
+        return JSONResponse(
+            status_code=409,
+            content=error_payload("UPDATE_BLOCKED", str(exc)),
+        )
+    if isinstance(exc, UpdateSourceError):
+        _log_api_error(request, 502, "UPDATE_SOURCE_FAILED", exc)
+        return JSONResponse(
+            status_code=502,
+            content=error_payload("UPDATE_SOURCE_FAILED", str(exc)),
+        )
+    if isinstance(exc, UpdateError):
+        _log_api_error(request, 500, "UPDATE_FAILED", exc)
+        return JSONResponse(
+            status_code=500,
+            content=error_payload("UPDATE_FAILED", str(exc)),
+        )
+    if isinstance(exc, DocumentContentConflictError):
+        _log_api_error(request, 409, "CONTENT_CONFLICT", exc)
+        return JSONResponse(
+            status_code=409,
+            content=error_payload("CONTENT_CONFLICT", str(exc)),
+        )
+    if isinstance(exc, PortableStoreAccessError):
+        _log_api_error(request, 403, "STORE_ACCESS_DENIED", exc)
+        return JSONResponse(
+            status_code=403,
+            content=error_payload("STORE_ACCESS_DENIED", str(exc)),
+        )
+    if isinstance(exc, PortableStoreNotInitializedError):
+        _log_api_error(request, 404, "STORE_NOT_INITIALIZED", exc)
+        return JSONResponse(
+            status_code=404,
+            content=error_payload("STORE_NOT_INITIALIZED", str(exc)),
+        )
+    if isinstance(exc, PortableStoreError):
+        _log_api_error(request, 422, "STORE_INVALID", exc)
+        return JSONResponse(
+            status_code=422,
+            content=error_payload("STORE_INVALID", str(exc)),
+        )
     if isinstance(exc, KnowledgeBaseNotInitializedError):
         _log_api_error(request, 503, "NOT_INITIALIZED", exc)
         return JSONResponse(

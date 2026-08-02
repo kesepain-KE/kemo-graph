@@ -9,6 +9,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from core.jobs import MaintenanceJobManager
+from update import ApplicationUpdater, read_local_version
 
 from .deps import create_context, create_service
 from .errors import install_exception_handlers
@@ -26,10 +27,12 @@ def create_app(
         data_dir=data_dir,
         external_dir=external_dir,
     )
+    updater = ApplicationUpdater()
     jobs = MaintenanceJobManager(
         lambda: create_service(context),
         data_dir=context.data_dir,
         settings=context.settings,
+        updater_factory=lambda: updater,
     )
 
     @asynccontextmanager
@@ -40,9 +43,14 @@ def create_app(
         finally:
             jobs.stop()
 
-    app = FastAPI(title="kemo-graph API", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(
+        title="kemo-graph API",
+        version=read_local_version(),
+        lifespan=lifespan,
+    )
     app.state.kemo_context = context
     app.state.kemo_job_manager = jobs
+    app.state.kemo_updater = updater
     install_exception_handlers(app)
     app.include_router(router, prefix="/api/v1")
     return app

@@ -285,6 +285,10 @@ class MaintenanceEntryTests(unittest.TestCase):
                 "organize_graph",
             )
             self.assertEqual(
+                client.post("/api/v1/jobs/summarize").json()["data"]["kind"],
+                "summarize",
+            )
+            self.assertEqual(
                 client.post("/api/v1/maintenance/rebuild-knowledge-base").json()[
                     "data"
                 ]["kind"],
