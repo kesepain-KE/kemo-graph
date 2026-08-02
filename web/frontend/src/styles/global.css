@@ -83,6 +83,123 @@ button:disabled {
   opacity: 0.55;
 }
 
+.themed-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.themed-select__trigger {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text-soft);
+  background: var(--surface-soft);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.25px;
+  text-align: left;
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.themed-select__trigger:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.themed-select.is-open .themed-select__trigger {
+  border-color: rgba(8, 127, 106, 0.46);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px rgba(8, 127, 106, 0.075);
+}
+
+.themed-select__trigger > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.themed-select__trigger svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: color 160ms ease, transform 160ms ease;
+}
+
+.themed-select.is-open .themed-select__trigger svg {
+  color: var(--cyan);
+  transform: rotate(180deg);
+}
+
+.themed-select__menu {
+  position: fixed;
+  z-index: 1200;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid rgba(211, 217, 214, 0.96);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow: 0 20px 52px rgba(28, 39, 35, 0.16), 0 4px 14px rgba(28, 39, 35, 0.07);
+  backdrop-filter: blur(20px);
+  animation: themed-select-enter 140ms ease-out;
+}
+
+.themed-select__menu button {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted-strong);
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.25px;
+  text-align: left;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.themed-select__menu button:hover,
+.themed-select__menu button.is-active {
+  color: var(--text);
+  background: var(--surface-strong);
+}
+
+.themed-select__menu button.is-selected {
+  color: var(--cyan);
+  background: var(--cyan-soft);
+  font-weight: 680;
+}
+
+.themed-select__menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.themed-select__menu button svg { flex: 0 0 auto; }
+
+@keyframes themed-select-enter {
+  from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .themed-select__menu { animation: none; }
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -363,8 +480,7 @@ a {
 .runtime-task-item li { padding-left: 2px; }
 .runtime-task-item li time { margin-right: 7px; color: #9aa39f; }
 
-.service-pill,
-.database-pill {
+.service-pill {
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--line);
@@ -390,6 +506,13 @@ a {
 .app-workspace.is-settings .page-stage {
   overflow: hidden;
   scrollbar-gutter: auto;
+}
+
+.app-workspace.is-documents .page-stage {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
 }
 
 .page-stack {
@@ -570,12 +693,12 @@ a {
   .app-workspace { height: auto; min-height: calc(100dvh - 74px); margin-top: 8px; border-radius: 17px; overflow: hidden; }
   .topbar { min-height: 70px; padding: 13px 15px; }
   .topbar h1 { font-size: 20.25px; }
-  .database-pill { display: none; }
   .service-pill { height: 33px; padding: 0 9px; font-size: 11.25px; }
   .runtime-task-pill { height: 33px; padding: 0 9px; font-size: 11.25px; }
   .runtime-task-popover { position: fixed; top: 146px; right: 16px; left: 16px; width: auto; max-height: calc(100dvh - 162px); }
   .page-stage { padding: 10px; overflow: visible; scrollbar-gutter: auto; }
-  .app-workspace.is-settings .page-stage { overflow: visible; }
+  .app-workspace.is-settings .page-stage,
+  .app-workspace.is-documents .page-stage { overflow: visible; }
   .page-intro { align-items: flex-start; padding: 8px 4px; flex-direction: column; }
   .page-actions { width: 100%; }
   .page-actions .button { flex: 1; }

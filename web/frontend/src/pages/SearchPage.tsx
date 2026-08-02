@@ -2,6 +2,8 @@ import {
   ArrowRight,
   Bot,
   BookOpen,
+  Code2,
+  FileText,
   GitFork,
   Globe2,
   History,
@@ -14,7 +16,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/api";
@@ -39,6 +41,14 @@ type SearchResult =
   | HybridQueryData
   | GlobalQueryData;
 
+type ResultDisplayMode = "markdown" | "source";
+
+const SearchMarkdownContent = lazy(() =>
+  import("../components/SearchMarkdownContent").then((module) => ({
+    default: module.SearchMarkdownContent,
+  })),
+);
+
 const modes: Array<{ value: SearchMode; label: string; icon: typeof Network }> = [
   { value: "answer", label: "LLM 回答", icon: Bot },
   { value: "graph", label: "图谱", icon: Network },
@@ -61,6 +71,27 @@ const granularityLabels = {
   medium: "中粒度",
   large: "大粒度",
 } as const;
+
+function SearchResultText({
+  content,
+  displayMode,
+  compact = false,
+}: {
+  content: string;
+  displayMode: ResultDisplayMode;
+  compact?: boolean;
+}) {
+  if (displayMode === "source") {
+    return <pre className={`search-result-source ${compact ? "is-compact" : ""}`}>{content}</pre>;
+  }
+  return (
+    <div className={`search-result-markdown ${compact ? "is-compact" : ""}`}>
+      <Suspense fallback={<pre className="search-result-source">{content}</pre>}>
+        <SearchMarkdownContent content={content} />
+      </Suspense>
+    </div>
+  );
+}
 
 function RelationChain({
   nodeIds,
@@ -149,7 +180,15 @@ function RelationshipResults({
   );
 }
 
-function GraphResults({ data, onNode }: { data: GraphQueryData; onNode: (node: GraphNode) => void }) {
+function GraphResults({
+  data,
+  onNode,
+  displayMode,
+}: {
+  data: GraphQueryData;
+  onNode: (node: GraphNode) => void;
+  displayMode: ResultDisplayMode;
+}) {
   const nodes = [...data.hit_nodes, ...data.expanded_nodes];
   return (
     <section className="result-column">
@@ -165,7 +204,9 @@ function GraphResults({ data, onNode }: { data: GraphQueryData; onNode: (node: G
             <span>
               <strong>{node.keyword}</strong>
               <small>{node.depth ? `第 ${node.depth} 层邻居` : `匹配度 ${Math.round((node.match_score ?? 1) * 100)}%`}</small>
-              <p>{node.summary}</p>
+              <div className="node-result-card__summary">
+                <SearchResultText content={node.summary} displayMode={displayMode} compact />
+              </div>
             </span>
             <ArrowRight size={15} />
           </button>
@@ -175,14 +216,16 @@ function GraphResults({ data, onNode }: { data: GraphQueryData; onNode: (node: G
       {data.groups.length ? (
         <div className="group-summary">
           <span>群组摘要</span>
-          {data.groups.map((group) => <p key={group.group_id}>{group.summary}</p>)}
+          {data.groups.map((group) => (
+            <SearchResultText key={group.group_id} content={group.summary} displayMode={displayMode} />
+          ))}
         </div>
       ) : null}
     </section>
   );
 }
 
-function RagResults({ data }: { data: RagQueryData }) {
+function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: ResultDisplayMode }) {
   return (
     <section className="result-column">
       <div className="result-column__heading">
@@ -199,7 +242,9 @@ function RagResults({ data }: { data: RagQueryData }) {
               </span>
               <strong>{Math.round(result.score * 100)}%</strong>
             </div>
-            <p>{result.content}</p>
+            <div className="rag-result-card__content">
+              <SearchResultText content={result.content} displayMode={displayMode} />
+            </div>
             <footer>
               <FileBadge />
               <span>{result.source.relative_path ?? result.source.source_id}</span>
@@ -216,20 +261,22 @@ function FileBadge() {
   return <span className="mini-file-badge">MD</span>;
 }
 
-function GlobalResults({ data }: { data: GlobalQueryData }) {
+function GlobalResults({ data, displayMode }: { data: GlobalQueryData; displayMode: ResultDisplayMode }) {
   return (
     <section className="result-column global-result">
       <div className="result-column__heading">
         <span className="result-icon result-icon--global"><Globe2 size={17} /></span>
         <div><h3>全局回答</h3><p>{data.communities.length} 个相关节点群</p></div>
       </div>
-      <div className="global-result__answer">{data.answer}</div>
+      <div className={`global-result__answer is-${displayMode}`}>
+        <SearchResultText content={data.answer} displayMode={displayMode} />
+      </div>
       {data.communities.length ? (
         <div className="global-result__groups">
           {data.communities.map((group) => (
             <article key={group.group_id}>
               <strong>{group.group_id}</strong>
-              <p>{group.summary}</p>
+              <SearchResultText content={group.summary} displayMode={displayMode} />
             </article>
           ))}
         </div>
@@ -241,9 +288,11 @@ function GlobalResults({ data }: { data: GlobalQueryData }) {
 function AnswerResults({
   data,
   onNode,
+  displayMode,
 }: {
   data: AnswerQueryData;
   onNode: (node: GraphNode) => void;
+  displayMode: ResultDisplayMode;
 }) {
   return (
     <div className="answer-results">
@@ -256,7 +305,9 @@ function AnswerResults({
           </div>
           <span className="answer-result__badge"><Sparkles size={13} />混合增强</span>
         </div>
-        <div className="answer-result__body">{data.answer}</div>
+        <div className={`answer-result__body is-${displayMode}`}>
+          <SearchResultText content={data.answer} displayMode={displayMode} />
+        </div>
       </section>
 
       <section className="answer-evidence" aria-label="回答依据">
@@ -265,8 +316,8 @@ function AnswerResults({
           <small>以下内容是本次回答实际使用的检索结果</small>
         </header>
         <div className="answer-evidence__grid">
-          <GraphResults data={data.retrieval.graph} onNode={onNode} />
-          <RagResults data={data.retrieval.rag} />
+          <GraphResults data={data.retrieval.graph} onNode={onNode} displayMode={displayMode} />
+          <RagResults data={data.retrieval.rag} displayMode={displayMode} />
         </div>
       </section>
     </div>
@@ -299,6 +350,7 @@ export function SearchPage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyNotice, setHistoryNotice] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [resultDisplayMode, setResultDisplayMode] = useState<ResultDisplayMode>("markdown");
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -498,21 +550,46 @@ export function SearchPage() {
           {loading ? <div className="search-loading card"><LoadingState label="正在执行召回、重排与阈值过滤…" /></div> : null}
 
           {result ? (
-            <div className={`search-results ${mode === "hybrid" ? "is-hybrid" : ""} ${mode === "answer" ? "is-answer" : ""}`}>
-              {answerData ? (
-                <AnswerResults
-                  data={answerData}
-                  onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
-                />
-              ) : null}
-              {graphData ? (
-                <GraphResults
-                  data={graphData}
-                  onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
-                />
-              ) : null}
-              {ragData ? <RagResults data={ragData} /> : null}
-              {globalData ? <GlobalResults data={globalData} /> : null}
+            <div className="search-results-frame">
+              <div className="search-result-view-bar" aria-label="结果显示方式">
+                <span>内容显示</span>
+                <div className="search-result-view-switch" role="group" aria-label="Markdown 或原文显示">
+                  <button
+                    className={resultDisplayMode === "markdown" ? "is-active" : ""}
+                    type="button"
+                    aria-pressed={resultDisplayMode === "markdown"}
+                    onClick={() => setResultDisplayMode("markdown")}
+                  >
+                    <FileText size={14} />Markdown
+                  </button>
+                  <button
+                    className={resultDisplayMode === "source" ? "is-active" : ""}
+                    type="button"
+                    aria-pressed={resultDisplayMode === "source"}
+                    onClick={() => setResultDisplayMode("source")}
+                  >
+                    <Code2 size={14} />原文
+                  </button>
+                </div>
+              </div>
+              <div className={`search-results ${mode === "hybrid" ? "is-hybrid" : ""} ${mode === "answer" ? "is-answer" : ""}`}>
+                {answerData ? (
+                  <AnswerResults
+                    data={answerData}
+                    displayMode={resultDisplayMode}
+                    onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
+                  />
+                ) : null}
+                {graphData ? (
+                  <GraphResults
+                    data={graphData}
+                    displayMode={resultDisplayMode}
+                    onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
+                  />
+                ) : null}
+                {ragData ? <RagResults data={ragData} displayMode={resultDisplayMode} /> : null}
+                {globalData ? <GlobalResults data={globalData} displayMode={resultDisplayMode} /> : null}
+              </div>
             </div>
           ) : null}
 

@@ -2,7 +2,6 @@ import {
   Activity,
   CheckCircle2,
   CircleAlert,
-  Database,
   FileText,
   History,
   LoaderCircle,
@@ -142,7 +141,7 @@ export function AppShell() {
 
       </aside>
 
-      <div className={`app-workspace ${location.pathname === "/settings" ? "is-settings" : ""}`}>
+      <div className={`app-workspace ${location.pathname === "/settings" ? "is-settings" : ""} ${location.pathname === "/documents" ? "is-documents" : ""}`}>
         <header className="topbar">
           <div>
             <p className="eyebrow">{meta.eyebrow}</p>
@@ -225,10 +224,6 @@ export function AppShell() {
                 : serviceState === "offline"
                   ? "服务未连接"
                   : "正在检查"}
-            </div>
-            <div className="database-pill">
-              <Database size={15} />
-              <span>Local Knowledge Base</span>
             </div>
           </div>
         </header>

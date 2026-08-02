@@ -3,7 +3,9 @@ import type {
   ApiEnvelope,
   ConfigData,
   DeleteDocumentData,
+  DocumentBatchDeleteData,
   DocumentContentData,
+  DocumentContentUpdateData,
   DocumentListData,
   FullGraphData,
   GlobalQueryData,
@@ -20,11 +22,14 @@ import type {
   MaintenanceJobListData,
   RagQueryData,
   RecycleCleanupData,
+  RestartData,
+  RuntimeStatusData,
   SearchCacheClearData,
   SearchCacheDetailData,
   SearchCacheListData,
   StatusData,
   UploadData,
+  UpdateStatusData,
 } from "../types/api";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -104,6 +109,20 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export const api = {
   status: () => request<StatusData>("/status", { timeoutMs: 5_000 }),
+  getUpdateStatus: () =>
+    request<UpdateStatusData>("/update/status", { timeoutMs: 5_000 }),
+  checkUpdate: () =>
+    request<UpdateStatusData>("/update/check", { method: "POST", timeoutMs: 15_000 }),
+  applyUpdate: () =>
+    request<MaintenanceJob>("/update/apply", { method: "POST", timeoutMs: 15_000 }),
+  getRuntimeStatus: () =>
+    request<RuntimeStatusData>("/system/runtime", { timeoutMs: 3_000 }),
+  restartService: () =>
+    request<RestartData>("/system/restart", {
+      method: "POST",
+      body: JSON.stringify({ confirm: "restart" }),
+      timeoutMs: 10_000,
+    }),
   ingest: (paths: string[] | null = null, mode: IngestMode = "both") =>
     request<IngestData>("/ingest", {
       method: "POST",
@@ -115,6 +134,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ paths, mode }),
     }),
+  startSummarizeJob: () =>
+    request<MaintenanceJob>("/jobs/summarize", { method: "POST" }),
   organizeGraph: (options: { use_llm?: boolean; summarize?: boolean } = {}) =>
     request<MaintenanceJob>("/maintenance/organize-graph", {
       method: "POST",
@@ -298,6 +319,33 @@ export const api = {
     request<DocumentContentData>(
       `/documents/${encodeURIComponent(sourceId)}/content`,
     ),
+  updateDocumentContent: (
+    sourceId: string,
+    content: string,
+    expectedContentHash?: string,
+  ) =>
+    request<DocumentContentUpdateData>(
+      `/documents/${encodeURIComponent(sourceId)}/content`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          content,
+          expected_content_hash: expectedContentHash ?? null,
+        }),
+        timeoutMs: 2 * 60_000,
+      },
+    ),
+  deleteDocuments: (sourceIds: string[]) =>
+    request<DocumentBatchDeleteData>("/documents/delete-batch", {
+      method: "POST",
+      body: JSON.stringify({ source_ids: sourceIds }),
+      timeoutMs: 2 * 60_000,
+    }),
+  deleteAllDocuments: () =>
+    request<DocumentBatchDeleteData>("/documents?confirm=delete-all", {
+      method: "DELETE",
+      timeoutMs: null,
+    }),
   getConfig: () => request<ConfigData>("/config"),
   saveConfig: (config: ConfigData) =>
     request<ConfigData>("/config", {

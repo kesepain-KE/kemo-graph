@@ -249,6 +249,9 @@ export type DocumentRecord = {
   source_id: string;
   relative_path: string;
   original_path?: string;
+  content_hash?: string;
+  graph_hash?: string | null;
+  rag_hash?: string | null;
   graph_status: "pending" | "processing" | "ready" | "failed";
   rag_status: "pending" | "processing" | "ready" | "failed";
   exists_status?: "active" | "missing" | "deleted";
@@ -264,7 +267,32 @@ export type DocumentListData = {
 export type DocumentContentData = {
   source_id: string;
   relative_path: string;
+  content_hash: string;
+  graph_hash?: string | null;
+  rag_hash?: string | null;
+  graph_status: DocumentRecord["graph_status"];
+  rag_status: DocumentRecord["rag_status"];
   content: string;
+};
+
+export type DocumentContentUpdateData = {
+  source_id: string;
+  relative_path: string;
+  changed: boolean;
+  previous_content_hash: string;
+  content_hash: string;
+  graph_status: DocumentRecord["graph_status"];
+  rag_status: DocumentRecord["rag_status"];
+  updated_at?: string;
+};
+
+export type DocumentBatchDeleteData = {
+  requested: number;
+  deleted: number;
+  failed: number;
+  documents: DeleteDocumentData[];
+  failures: Array<{ source_id: string; error_type: string; message: string }>;
+  search_cache_deleted: number;
 };
 
 export type UploadData = {
@@ -294,7 +322,39 @@ export type MaintenanceJobKind =
   | "rebuild_knowledge_base"
   | "rebuild_all"
   | "summarize"
-  | "cleanup_recycle";
+  | "cleanup_recycle"
+  | "update";
+
+export type UpdateStatusData = {
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  installation_mode: "git" | "source" | string;
+  checked_at: string | null;
+  worktree_clean: boolean;
+  dirty_files: string[];
+  can_apply: boolean;
+  blocking_reasons: string[];
+  phase: "idle" | "checking" | "updating" | "completed" | "failed" | string;
+  restart_required: boolean;
+  error: string | null;
+  repository_url: string;
+  version_url: string;
+};
+
+export type RuntimeStatusData = {
+  pid: number;
+  restart_available: boolean;
+  restart_pending: boolean;
+  version: string;
+};
+
+export type RestartData = {
+  restart_id: string;
+  old_pid: number;
+  status: "scheduled";
+  message: string;
+};
 
 export type MaintenanceJobStatus = "queued" | "running" | "completed" | "failed";
 

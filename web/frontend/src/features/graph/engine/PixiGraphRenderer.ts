@@ -1,5 +1,6 @@
 import {
   Application,
+  Circle,
   Container,
   FederatedPointerEvent,
   Graphics,
@@ -23,6 +24,7 @@ import {
   graphNodeCollisionRadius,
   type LayoutWorld,
 } from "./layoutTypes";
+import { distanceToSegment, isPointInsideCircle } from "./hitTesting";
 
 type ScreenPoint = { x: number; y: number };
 type WorldBounds = { minX: number; minY: number; maxX: number; maxY: number };
@@ -39,6 +41,9 @@ const COLORS = {
   text: 0x26332f,
   muted: 0x788580,
 } as const;
+
+const NODE_POINTER_SAFETY_PX = 12;
+const EDGE_POINTER_THRESHOLD_PX = 10;
 
 export class PixiGraphRenderer implements GraphRenderer {
   readonly backend = "pixi-webgl";
@@ -305,7 +310,17 @@ export class PixiGraphRenderer implements GraphRenderer {
     if (!this.scene || !this.callbacks?.onSelectEdge || !this.app) return;
     const point = this.world.toLocal(event.global);
     const positions = this.positions();
-    const threshold = 10 / Math.max(0.0001, this.world.scale.x);
+    const worldScale = Math.max(0.0001, this.world.scale.x);
+    const nodeSafety = NODE_POINTER_SAFETY_PX / worldScale;
+    const insideNodeProtection = this.scene.nodes.some((node) => {
+      const position = positions.get(node.node_id);
+      if (!position) return false;
+      const radius = nodeRadius(node.ref_count) * this.scene!.appearance.nodeScale;
+      return isPointInsideCircle(point, position, radius + nodeSafety);
+    });
+    if (insideNodeProtection) return;
+
+    const threshold = EDGE_POINTER_THRESHOLD_PX / worldScale;
     let match: GraphEdge | null = null;
     let matchDistance = threshold;
     for (const edge of this.scene.edges) {
@@ -471,6 +486,11 @@ export class PixiGraphRenderer implements GraphRenderer {
     );
 
     const mode = this.scene.appearance.relationLabels;
+    const focusedEdgeId = this.scene.selectedEdgeId;
+    if (focusedEdgeId) {
+      this.edgeLabelIds = new Set([focusedEdgeId]);
+      return;
+    }
     if (mode === "never") {
       this.edgeLabelIds = new Set();
       return;
@@ -551,7 +571,7 @@ export class PixiGraphRenderer implements GraphRenderer {
     container.position.set(position.x, position.y);
     container.eventMode = "static";
     container.cursor = "pointer";
-    container.hitArea = new Rectangle(-radius, -radius, radius * 2, radius * 2);
+    container.hitArea = new Circle(0, 0, radius + this.nodeHitPaddingWorld());
     container.alpha = visualStyle?.alpha ?? 1;
 
     const body = new Graphics();
@@ -651,7 +671,23 @@ export class PixiGraphRenderer implements GraphRenderer {
         - this.layoutWorld.minY * scale
         + this.pan.y,
     );
+    this.updateNodeHitAreas();
     this.edgesDirty = true;
+  }
+
+  private nodeHitPaddingWorld(): number {
+    return NODE_POINTER_SAFETY_PX / Math.max(0.0001, this.world.scale.x);
+  }
+
+  private updateNodeHitAreas(): void {
+    if (!this.scene) return;
+    const padding = this.nodeHitPaddingWorld();
+    for (const node of this.scene.nodes) {
+      const container = this.nodeContainers.get(node.node_id);
+      if (!container) continue;
+      const radius = nodeRadius(node.ref_count) * this.scene.appearance.nodeScale;
+      container.hitArea = new Circle(0, 0, radius + padding);
+    }
   }
 
   private updateLayoutWorld(scene: GraphRenderScene): void {
@@ -731,23 +767,5 @@ function segmentIntersectsBounds(
     || Math.min(source.x, target.x) > bounds.maxX
     || Math.max(source.y, target.y) < bounds.minY
     || Math.min(source.y, target.y) > bounds.maxY
-  );
-}
-
-function distanceToSegment(
-  point: ScreenPoint,
-  source: ScreenPoint,
-  target: ScreenPoint,
-): number {
-  const dx = target.x - source.x;
-  const dy = target.y - source.y;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared <= 0.0001) return Math.hypot(point.x - source.x, point.y - source.y);
-  const projection = Math.max(0, Math.min(1, (
-    (point.x - source.x) * dx + (point.y - source.y) * dy
-  ) / lengthSquared));
-  return Math.hypot(
-    point.x - (source.x + projection * dx),
-    point.y - (source.y + projection * dy),
   );
 }

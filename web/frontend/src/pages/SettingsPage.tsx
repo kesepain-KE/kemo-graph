@@ -3,10 +3,13 @@ import {
   ChevronRight,
   Combine,
   Database,
+  DownloadCloud,
   History,
   KeyRound,
   Network,
+  Power,
   RotateCcw,
+  RefreshCw,
   Save,
   ServerCog,
   Sparkles,
@@ -17,8 +20,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
+import { ThemedSelect } from "../components/ThemedSelect";
 import { useRuntimeTasks } from "../context/RuntimeTasksContext";
-import type { ConfigData } from "../types/api";
+import type { ConfigData, UpdateStatusData } from "../types/api";
 
 type FieldKind = "boolean" | "number" | "password" | "select" | "text" | "time";
 
@@ -41,6 +45,11 @@ type ConfigField = {
   readOnly?: boolean;
   placeholder?: string;
 };
+
+const BOOLEAN_OPTIONS = [
+  { value: "true", label: "启用" },
+  { value: "false", label: "停用" },
+];
 
 type ConfigSection = {
   title: string;
@@ -97,7 +106,7 @@ const groups: ConfigGroup[] = [
         title: "切片与向量召回",
         description: "定义固定、分层或 LLM 保真语义切片，以及向量候选参数。",
         fields: [
-          { path: "chunking_mode", label: "切片模式", description: "LLM 模式只选择原文边界；分层模式建立小、中、大三类切片。", kind: "select", options: [{ label: "LLM 语义切片", value: "llm" }, { label: "分层切片", value: "hierarchical" }, { label: "固定切片", value: "fixed" }] },
+          { path: "chunking_mode", label: "切片模式", description: "语义分层模式以 LLM 边界为叶子，再建立中、大粒度父级。", kind: "select", options: [{ label: "LLM 语义分层（推荐）", value: "semantic_hierarchical" }, { label: "LLM 单层语义切片", value: "llm" }, { label: "机械分层切片", value: "hierarchical" }, { label: "固定切片", value: "fixed" }] },
           { path: "chunking_llm_max_input_chars", label: "LLM 切分输入上限", description: "长文档会先按自然边界预切，再逐段请求 LLM 选择语义边界。", kind: "number", min: 2000, max: 50000, step: 100, suffix: "字符" },
           { path: "chunk_small_size", label: "小粒度切片", description: "负责关键词、实体和精确片段召回。", kind: "number", min: 64, max: 2048, step: 1, suffix: "tokens" },
           { path: "chunk_size", label: "中粒度切片", description: "负责段落级语义与命中后的主要上下文。", kind: "number", min: 128, max: 4096, step: 1, suffix: "tokens" },
@@ -106,6 +115,20 @@ const groups: ConfigGroup[] = [
           { path: "embedding_batch_size", label: "Embedding 单批数量", description: "每次发送给网关的最大切片数；实际值不会超过模型能力上限。", kind: "number", min: 1, max: 256, step: 1, suffix: "条" },
           { path: "default_top_k", label: "默认召回数量", description: "向量检索默认取回的候选片段数量。", kind: "number", min: 1, step: 1, suffix: "条" },
           { path: "rag_similarity_threshold", label: "相似度阈值", description: "低于该分数的向量候选不会进入结果集。", kind: "number", min: 0, max: 1, step: 0.05 },
+        ],
+      },
+      {
+        title: "查询理解与扩展",
+        description: "由 LLM 拆分复杂问题、生成受控同义表达，并通过多路向量召回提升命中率。",
+        fields: [
+          { path: "query_planning.mode", label: "查询规划模式", description: "自动模式优先使用 LLM，失败时保留原始查询安全降级。", kind: "select", options: [{ label: "自动（推荐）", value: "auto" }, { label: "始终使用 LLM", value: "llm" }, { label: "仅规则规范化", value: "rule" }, { label: "关闭扩展", value: "off" }] },
+          { path: "query_planning.max_rewrites", label: "最大改写数量", description: "最多生成的同义表达、别名和相关概念数量。", kind: "number", min: 0, max: 12, step: 1, suffix: "条" },
+          { path: "query_planning.max_subqueries", label: "最大子问题数", description: "复杂多意图问题最多拆分出的独立检索问题数量。", kind: "number", min: 0, max: 8, step: 1, suffix: "条" },
+          { path: "query_planning.max_total_queries", label: "查询总数上限", description: "包含原始问题在内，一次检索允许使用的查询向量总数。", kind: "number", min: 1, max: 16, step: 1, suffix: "条" },
+          { path: "query_planning.semantic_drift_threshold", label: "语义漂移阈值", description: "扩展词与原始问题向量低于此相似度时会被丢弃。", kind: "number", min: -1, max: 1, step: 0.05 },
+          { path: "query_planning.candidate_pool_size", label: "候选池大小", description: "多路召回融合后送入 Rerank 的最大候选规模。", kind: "number", min: 5, max: 200, step: 5, suffix: "条" },
+          { path: "query_planning.rrf_k", label: "RRF 平滑常数", description: "控制多路排名融合的平滑程度，普通用户建议保持默认。", kind: "number", min: 1, max: 1000, step: 1 },
+          { path: "query_planning.low_confidence_rescue_count", label: "低置信度兜底数", description: "严格阈值无命中时最多保留的候选数量。", kind: "number", min: 0, max: 10, step: 1, suffix: "条" },
         ],
       },
       {
@@ -250,7 +273,7 @@ function validateConfig(config: ConfigData): string | null {
   if (typeof chunkSize === "number" && typeof chunkOverlap === "number" && chunkOverlap >= chunkSize) {
     return "切片重叠必须小于切片大小";
   }
-  if (getConfigValue(config, "chunking_mode") === "hierarchical") {
+  if (["hierarchical", "semantic_hierarchical"].includes(String(getConfigValue(config, "chunking_mode")))) {
     const small = getConfigValue(config, "chunk_small_size");
     const large = getConfigValue(config, "chunk_large_size");
     if (
@@ -275,6 +298,10 @@ export function SettingsPage() {
   const [emptyingRecycle, setEmptyingRecycle] = useState(false);
   const [clearingCache, setClearingCache] = useState<"all" | "stale" | null>(null);
   const [maintenanceSubmitting, setMaintenanceSubmitting] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusData | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [applyingUpdate, setApplyingUpdate] = useState(false);
+  const [restartingService, setRestartingService] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -307,6 +334,18 @@ export function SettingsPage() {
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
+
+  const loadUpdateStatus = useCallback(async () => {
+    try {
+      setUpdateStatus(await api.getUpdateStatus());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "无法读取更新状态");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUpdateStatus();
+  }, [loadUpdateStatus]);
 
   useEffect(() => {
     panelRef.current?.scrollTo({ top: 0, behavior: "auto" });
@@ -421,6 +460,75 @@ export function SettingsPage() {
     }
   };
 
+  const checkForUpdate = async () => {
+    setCheckingUpdate(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const status = await api.checkUpdate();
+      setUpdateStatus(status);
+      setNotice(
+        status.update_available
+          ? `发现新版本 ${status.latest_version}，请确认安装条件后执行更新。`
+          : `当前 ${status.current_version} 已是最新版本。`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "检查更新失败");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const applyApplicationUpdate = async () => {
+    if (!updateStatus?.latest_version) return;
+    if (!window.confirm(
+      `确认从 GitHub 更新至 ${updateStatus.latest_version}？更新完成后需要重启 kemo-graph。`,
+    )) return;
+    setApplyingUpdate(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const job = await api.applyUpdate();
+      await refreshServerTasks();
+      setNotice(`更新任务已进入后台队列（${job.job_id.slice(0, 8)}）。完成后请重启服务。`);
+      await loadUpdateStatus();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "无法启动更新任务");
+    } finally {
+      setApplyingUpdate(false);
+    }
+  };
+
+  const restartWebService = async () => {
+    if (!window.confirm(
+      "确认底层重启 kemo-graph？当前 FastAPI、调度器和后台线程会完整退出，再启动新的 Python 进程。",
+    )) return;
+    setRestartingService(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const restart = await api.restartService();
+      setNotice("旧服务正在退出；新进程启动后页面会自动恢复连接并刷新。");
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
+        try {
+          const runtime = await api.getRuntimeStatus();
+          if (runtime.pid !== restart.old_pid) {
+            globalThis.location.reload();
+            return;
+          }
+        } catch {
+          // 旧进程退出与新进程监听端口之间出现短暂断线是正常重启阶段。
+        }
+      }
+        setError("新服务在 90 秒内未恢复，请检查 update/runtime/restart.log。");
+      setRestartingService(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "无法重启 Web 服务");
+      setRestartingService(false);
+    }
+  };
+
   return (
     <section className="settings-page page-stack">
       <PageIntro
@@ -486,7 +594,7 @@ export function SettingsPage() {
                     {section.fields.map((field) => {
                       const value = getFieldDisplayValue(config, field);
                       return (
-                        <label className={`settings-field ${field.readOnly ? "is-readonly" : ""}`} key={field.path}>
+                        <div className={`settings-field ${field.readOnly ? "is-readonly" : ""}`} key={field.path}>
                           <span className="settings-field__meta">
                             <strong>{field.label}</strong>
                             <small>{field.description}</small>
@@ -494,18 +602,14 @@ export function SettingsPage() {
                           </span>
                           <span className="settings-control">
                             {field.kind === "select" || field.kind === "boolean" ? (
-                              <select
-                                aria-label={field.label}
+                              <ThemedSelect
+                                ariaLabel={field.label}
                                 value={field.kind === "boolean" ? String(Boolean(value)) : typeof value === "string" ? value : ""}
-                                onChange={(event) => updateField(field, event.target.value)}
-                              >
-                                {field.kind === "boolean" ? (
-                                  <>
-                                    <option value="true">启用</option>
-                                    <option value="false">停用</option>
-                                  </>
-                                ) : field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                              </select>
+                                options={field.kind === "boolean" ? BOOLEAN_OPTIONS : field.options ?? []}
+                                onChange={(nextValue) => updateField(field, nextValue)}
+                                disabled={field.readOnly}
+                                className="settings-themed-select"
+                              />
                             ) : (
                               <input
                                 aria-label={field.label}
@@ -524,7 +628,7 @@ export function SettingsPage() {
                             )}
                             {field.suffix ? <em>{field.suffix}</em> : null}
                           </span>
-                        </label>
+                        </div>
                       );
                     })}
                   </div>
@@ -532,6 +636,64 @@ export function SettingsPage() {
               ))}
               {activeGroup.id === "system" ? (
                 <>
+                  <div className="settings-update-zone">
+                    <span className="settings-update-zone__icon"><DownloadCloud size={18} /></span>
+                    <span className="settings-update-zone__content">
+                      <strong>kemo-graph 应用更新</strong>
+                      <small>
+                        当前版本 <b>{updateStatus?.current_version ?? "读取中"}</b>
+                        {updateStatus?.latest_version
+                          ? <> · GitHub 最新 <b>{updateStatus.latest_version}</b></>
+                          : " · 尚未检查 GitHub"}
+                      </small>
+                      {updateStatus?.restart_required ? (
+                        <em>新版本已安装，请重启 Web 服务以加载全部代码。</em>
+                      ) : null}
+                      {updateStatus?.blocking_reasons.length ? (
+                        <em className="is-warning">
+                          {updateStatus.blocking_reasons.join("；")}
+                          {updateStatus.dirty_files.length
+                            ? `（${updateStatus.dirty_files.length} 个程序文件）`
+                            : ""}
+                        </em>
+                      ) : null}
+                    </span>
+                    <span className="settings-update-zone__actions">
+                      <button
+                        className="button button--secondary"
+                        disabled={checkingUpdate || applyingUpdate || restartingService}
+                        onClick={() => void checkForUpdate()}
+                        type="button"
+                      >
+                        <RefreshCw className={checkingUpdate ? "spin" : ""} size={15} />
+                        {checkingUpdate ? "检查中" : "检查更新"}
+                      </button>
+                      <button
+                        className="button button--primary"
+                        disabled={
+                          applyingUpdate
+                          || checkingUpdate
+                          || restartingService
+                          || !updateStatus?.update_available
+                          || !updateStatus.can_apply
+                        }
+                        onClick={() => void applyApplicationUpdate()}
+                        type="button"
+                      >
+                        <DownloadCloud size={15} />
+                        {applyingUpdate ? "提交中" : "下载并更新"}
+                      </button>
+                      <button
+                        className="button button--secondary"
+                        disabled={restartingService || checkingUpdate || applyingUpdate}
+                        onClick={() => void restartWebService()}
+                        type="button"
+                      >
+                        <Power size={15} />
+                        {restartingService ? "重启中" : "重启服务"}
+                      </button>
+                    </span>
+                  </div>
                   <div className="settings-maintenance-actions">
                     <article>
                       <span><Combine size={17} /></span>

@@ -37,6 +37,49 @@ describe("management API", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/documents/s%2F1/content");
   });
 
+  it("updates Markdown with a hash precondition and supports scoped bulk deletion", async () => {
+    const previousHash = "a".repeat(64);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response({
+          source_id: "s1",
+          relative_path: "a.md",
+          changed: true,
+          previous_content_hash: previousHash,
+          content_hash: "b".repeat(64),
+          graph_status: "pending",
+          rag_status: "pending",
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({ requested: 2, deleted: 2, failed: 0, documents: [], failures: [] }),
+      )
+      .mockResolvedValueOnce(
+        response({ requested: 2, deleted: 2, failed: 0, documents: [], failures: [] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.updateDocumentContent("s/1", "# Changed", previousHash);
+    await api.deleteDocuments(["s1", "s2"]);
+    await api.deleteAllDocuments();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/documents/s%2F1/content",
+      "/api/v1/documents/delete-batch",
+      "/api/v1/documents?confirm=delete-all",
+    ]);
+    expect(fetchMock.mock.calls[0][1].method).toBe("PUT");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
+      content: "# Changed",
+      expected_content_hash: previousHash,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toEqual({
+      source_ids: ["s1", "s2"],
+    });
+    expect(fetchMock.mock.calls[2][1].method).toBe("DELETE");
+  });
+
   it("uploads Markdown content as the JSON contract requires", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       response({ source_id: "s1", filename: "a.md", path: "a.md", size: 3 }),
@@ -87,6 +130,91 @@ describe("management API", () => {
     expect(init.method).toBe("DELETE");
   });
 
+  it("checks and applies GitHub updates through the maintenance API", async () => {
+    const updateStatus = {
+      current_version: "1.0.0",
+      latest_version: "1.1.0",
+      update_available: true,
+      installation_mode: "git",
+      checked_at: "2026-08-02T00:00:00Z",
+      worktree_clean: true,
+      dirty_files: [],
+      can_apply: true,
+      blocking_reasons: [],
+      phase: "idle",
+      restart_required: false,
+      error: null,
+      repository_url: "https://github.com/kesepain-KE/kemo-graph",
+      version_url: "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.json",
+    };
+    const updateJob = {
+      job_id: "update-1",
+      kind: "update",
+      status: "queued",
+      progress: 0,
+      detail: "queued",
+      result: null,
+      error: null,
+      created_at: "2026-08-02T00:00:00Z",
+      started_at: null,
+      finished_at: null,
+      updated_at: "2026-08-02T00:00:00Z",
+      events: [],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(updateStatus))
+      .mockResolvedValueOnce(response(updateStatus))
+      .mockResolvedValueOnce(response(updateJob));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getUpdateStatus();
+    await api.checkUpdate();
+    await api.applyUpdate();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/update/status",
+      "/api/v1/update/check",
+      "/api/v1/update/apply",
+    ]);
+    expect(fetchMock.mock.calls[1][1].method).toBe("POST");
+    expect(fetchMock.mock.calls[2][1].method).toBe("POST");
+  });
+
+  it("requests a process-level restart and reads the replacement PID", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response({
+          restart_id: "restart-1",
+          old_pid: 123,
+          status: "scheduled",
+          message: "scheduled",
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          pid: 456,
+          restart_available: true,
+          restart_pending: false,
+          version: "1.0.0",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.restartService();
+    await api.getRuntimeStatus();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/system/restart",
+      "/api/v1/system/runtime",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
+      confirm: "restart",
+    });
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST");
+  });
+
   it("submits ingest and graph maintenance work to persistent background jobs", async () => {
     const job = {
       job_id: "job-1",
@@ -105,18 +233,21 @@ describe("management API", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response(job))
+      .mockResolvedValueOnce(response({ ...job, kind: "summarize" }))
       .mockResolvedValueOnce(response({ ...job, kind: "organize_graph" }))
       .mockResolvedValueOnce(response({ ...job, kind: "rebuild_knowledge_base" }))
       .mockResolvedValueOnce(response({ ...job, kind: "rebuild_all" }));
     vi.stubGlobal("fetch", fetchMock);
 
     await api.startIngestJob(["a.md"], "both");
+    await api.startSummarizeJob();
     await api.organizeGraph({ use_llm: false, summarize: false });
     await api.rebuildKnowledgeBase();
     await api.rebuildAll();
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/jobs/ingest",
+      "/api/v1/jobs/summarize",
       "/api/v1/maintenance/organize-graph",
       "/api/v1/maintenance/rebuild-knowledge-base",
       "/api/v1/maintenance/rebuild-all",
@@ -125,7 +256,7 @@ describe("management API", () => {
       paths: ["a.md"],
       mode: "both",
     });
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toEqual({
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1].body))).toEqual({
       use_llm: false,
       summarize: false,
     });

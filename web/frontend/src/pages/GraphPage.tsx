@@ -24,6 +24,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
+import { useRuntimeTasks } from "../context/RuntimeTasksContext";
 import { GraphControlPanel } from "../features/graph/GraphControlPanel";
 import { GraphDetails } from "../features/graph/GraphDetails";
 import { GraphRelationDetails } from "../features/graph/GraphRelationDetails";
@@ -48,6 +49,7 @@ import type {
   GraphRenderScene,
 } from "../features/graph/engine/GraphRenderer";
 import type { LayoutRuntimeStatus } from "../features/graph/engine/layoutTypes";
+import { trimSegmentForNodeProtection } from "../features/graph/engine/hitTesting";
 import {
   calculateLayoutWorld,
   graphNodeCollisionRadius,
@@ -69,6 +71,8 @@ type Point = { x: number; y: number };
 type Interaction =
   | { kind: "pan"; client: Point; pan: Point }
   | { kind: "node"; nodeId: string };
+
+const SVG_NODE_POINTER_SAFETY = 12;
 
 function nodeRadius(node: GraphNode): number {
   return Math.min(48, 27 + Math.sqrt(Math.max(1, node.ref_count)) * 5.5);
@@ -126,6 +130,10 @@ function GraphCanvas({
   );
   const nodeLabels = useMemo(
     () => new Map(nodes.map((node) => [node.node_id, node.keyword])),
+    [nodes],
+  );
+  const nodesById = useMemo(
+    () => new Map(nodes.map((node) => [node.node_id, node])),
     [nodes],
   );
 
@@ -249,6 +257,16 @@ function GraphCanvas({
             const midpoint = { x: (source.x + target.x) / 2, y: (source.y + target.y) / 2 };
             const selected = scene.selectedEdgeId === edge.edge_id;
             const related = scene.contextMode === "local" && scene.relatedEdgeIds.has(edge.edge_id);
+            const sourceNode = nodesById.get(edge.source_node_id);
+            const targetNode = nodesById.get(edge.target_node_id);
+            const hitSegment = sourceNode && targetNode
+              ? trimSegmentForNodeProtection(
+                source,
+                target,
+                nodeRadius(sourceNode) * scene.appearance.nodeScale + SVG_NODE_POINTER_SAFETY / zoom,
+                nodeRadius(targetNode) * scene.appearance.nodeScale + SVG_NODE_POINTER_SAFETY / zoom,
+              )
+              : null;
             const stroke = selected || related
               ? scene.appearance.colors.selectedRelation
               : scene.contextMode === "local"
@@ -288,12 +306,12 @@ function GraphCanvas({
                     {edge.relation}
                   </text>
                 ) : null}
-                <line
+                {hitSegment ? <line
                   className="graph-edge-hit-target"
-                  x1={source.x}
-                  y1={source.y}
-                  x2={target.x}
-                  y2={target.y}
+                  x1={hitSegment.source.x}
+                  y1={hitSegment.source.y}
+                  x2={hitSegment.target.x}
+                  y2={hitSegment.target.y}
                   role="button"
                   tabIndex={0}
                   aria-label={`${nodeLabels.get(edge.source_node_id) ?? edge.source_node_id} 到 ${nodeLabels.get(edge.target_node_id) ?? edge.target_node_id} 的关系：${edge.relation}`}
@@ -304,7 +322,7 @@ function GraphCanvas({
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") onSelectEdge(edge.edge_id);
                   }}
-                />
+                /> : null}
               </g>
             );
           })}
@@ -335,6 +353,7 @@ function GraphCanvas({
                   if (event.key === "Enter" || event.key === " ") onSelect(node.node_id);
                 }}
               >
+                <circle className="graph-node__hit-target" r={radius + SVG_NODE_POINTER_SAFETY / zoom} />
                 <circle
                   className="graph-node__halo"
                   r={radius + 8}
@@ -434,6 +453,7 @@ function shouldShowSvgEdgeLabel(
   scene: GraphRenderScene,
   zoom: number,
 ): boolean {
+  if (scene.selectedEdgeId === edge.edge_id) return true;
   if (scene.appearance.relationLabels === "never") return false;
   if (scene.appearance.relationLabels === "always") return scene.edges.length <= 2000;
   const touchesSelected = Boolean(scene.selectedId) && (
@@ -463,6 +483,7 @@ export function GraphPage() {
   const viewportRef = useRef<GraphViewportHandle>(null);
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  const { refreshServerTasks } = useRuntimeTasks();
   const [catalog, setCatalog] = useState<GraphCatalog | null>(null);
   const [localGraph, setLocalGraph] = useState<GraphNeighborhoodData | null>(null);
   const [globalEdges, setGlobalEdges] = useState<GraphEdge[] | null>(null);
@@ -478,6 +499,7 @@ export function GraphPage() {
   const [fullscreenPanelOpen, setFullscreenPanelOpen] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("node"));
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [summarySubmitting, setSummarySubmitting] = useState(false);
 
   const viewMode = preferences.view.mode;
   const depth = preferences.view.depth;
@@ -527,6 +549,19 @@ export function GraphPage() {
       setError(caught instanceof Error ? caught.message : "无法加载图谱");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const summarizeGroups = async () => {
+    setSummarySubmitting(true);
+    setError(null);
+    try {
+      await api.startSummarizeJob();
+      await refreshServerTasks();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "无法启动节点群总结");
+    } finally {
+      setSummarySubmitting(false);
     }
   };
 
@@ -670,10 +705,14 @@ export function GraphPage() {
   const selected = catalog?.nodes.find((node) => node.node_id === selectedId) ?? null;
   const selectedEdge = visibleEdges.find((edge) => edge.edge_id === selectedEdgeId) ?? null;
   const relatedRelationEdges = useMemo(() => (
-    selectedEdge
-      ? visibleEdges.filter((edge) => edge.relation === selectedEdge.relation)
-      : []
-  ), [selectedEdge, visibleEdges]);
+    selectedEdge ? [selectedEdge] : []
+  ), [selectedEdge]);
+  const selectedRelationNodeIds = useMemo(() => new Set(
+    relatedRelationEdges.flatMap((edge) => [edge.source_node_id, edge.target_node_id]),
+  ), [relatedRelationEdges]);
+  const selectedRelationEdgeIds = useMemo(() => new Set(
+    relatedRelationEdges.map((edge) => edge.edge_id),
+  ), [relatedRelationEdges]);
   const selectedEdges = visibleEdges.filter((edge) => (
     edge.source_node_id === selectedId || edge.target_node_id === selectedId
   ));
@@ -695,14 +734,28 @@ export function GraphPage() {
       const highlighted = highlightedIds.has(node.node_id);
       const isSelected = viewMode === "local" && node.node_id === selectedId;
       const isRelated = viewMode === "local" && relatedNodeIds.has(node.node_id);
-      const color = viewMode === "global"
+      const isSelectedRelationEndpoint = selectedEdge !== null && (
+        node.node_id === selectedEdge.source_node_id || node.node_id === selectedEdge.target_node_id
+      );
+      const isRelationNode = selectedRelationNodeIds.has(node.node_id);
+      const color = selectedEdge
+        ? isSelectedRelationEndpoint
+          ? preferences.appearance.colors.selectedNode
+          : isRelationNode
+            ? preferences.appearance.colors.relatedNode
+            : preferences.appearance.colors.unrelatedNode
+        : viewMode === "global"
         ? preferences.appearance.colors.globalNode
         : isSelected
           ? preferences.appearance.colors.selectedNode
           : isRelated
             ? preferences.appearance.colors.relatedNode
             : preferences.appearance.colors.unrelatedNode;
-      const alpha = viewMode === "global" || isSelected || isRelated || highlighted
+      const alpha = selectedEdge
+        ? isSelectedRelationEndpoint || isRelationNode || highlighted
+          ? 1
+          : preferences.appearance.unrelatedOpacity
+        : viewMode === "global" || isSelected || isRelated || highlighted
         ? 1
         : preferences.appearance.unrelatedOpacity;
       return [
@@ -719,7 +772,9 @@ export function GraphPage() {
     highlightedIds,
     preferences.appearance,
     relatedNodeIds,
+    selectedEdge,
     selectedId,
+    selectedRelationNodeIds,
     visibleNodes,
     viewMode,
   ]);
@@ -735,22 +790,27 @@ export function GraphPage() {
     [contextEdges, nodesById, selectedId],
   );
   const selectedIsCore = selected ? isCoreNode(selected, maxRefCount) : false;
+  const sceneHighlightedIds = useMemo(() => (
+    selectedEdge
+      ? new Set([...highlightedIds, ...selectedRelationNodeIds])
+      : highlightedIds
+  ), [highlightedIds, selectedEdge, selectedRelationNodeIds]);
 
   const graphScene = useMemo<GraphRenderScene>(() => ({
     nodes: positionedNodes,
     edges: visibleEdges,
-    selectedId,
+    selectedId: selectedEdge ? null : selectedId,
     selectedEdgeId,
-    highlightedIds,
-    relatedNodeIds,
-    relatedEdgeIds,
-    contextMode: viewMode,
+    highlightedIds: sceneHighlightedIds,
+    relatedNodeIds: selectedEdge ? selectedRelationNodeIds : relatedNodeIds,
+    relatedEdgeIds: selectedEdge ? selectedRelationEdgeIds : relatedEdgeIds,
+    contextMode: selectedEdge ? "local" : viewMode,
     nodeKinds,
     nodeStyles,
     appearance: preferences.appearance,
     performance: preferences.performance,
   }), [
-    highlightedIds,
+    sceneHighlightedIds,
     nodeKinds,
     nodeStyles,
     positionedNodes,
@@ -758,8 +818,11 @@ export function GraphPage() {
     preferences.performance,
     relatedEdgeIds,
     relatedNodeIds,
+    selectedEdge,
     selectedEdgeId,
     selectedId,
+    selectedRelationEdgeIds,
+    selectedRelationNodeIds,
     visibleEdges,
     viewMode,
   ]);
@@ -818,11 +881,22 @@ export function GraphPage() {
     <section className="graph-page page-stack">
       <PageIntro
         title="探索知识之间的连接"
-        description="默认以当前节点为锚点强化局部关系；无关知识保留并虚化，随时可回归全局。"
         actions={
-          <button className="button button--secondary" type="button" onClick={loadGraph} disabled={loading}>
-            <RefreshCw className={loading ? "spin" : ""} size={16} />刷新图谱
-          </button>
+          <>
+            <button className="button button--secondary" type="button" onClick={loadGraph} disabled={loading}>
+              <RefreshCw className={loading ? "spin" : ""} size={16} />刷新图谱
+            </button>
+            <button
+              className="button button--primary"
+              type="button"
+              onClick={() => void summarizeGroups()}
+              disabled={summarySubmitting}
+              title="根据当前图谱重新生成节点群摘要"
+            >
+              <Network className={summarySubmitting ? "spin" : ""} size={16} />
+              {summarySubmitting ? "正在提交" : "总结节点群"}
+            </button>
+          </>
         }
       />
       {error ? <ErrorNotice message={error} /> : null}

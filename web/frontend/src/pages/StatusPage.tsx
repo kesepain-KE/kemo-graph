@@ -1,6 +1,8 @@
 import {
   Activity,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Database,
   FileText,
@@ -17,6 +19,8 @@ import { PageIntro } from "../components/PageIntro";
 import { loadIngestHistory, type IngestHistoryItem } from "../lib/history";
 import type { StatusData } from "../types/api";
 
+const HISTORY_PAGE_SIZE = 6;
+
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
@@ -29,6 +33,7 @@ function formatTime(value: string): string {
 export function StatusPage() {
   const [status, setStatus] = useState<StatusData | null>(null);
   const [history, setHistory] = useState<IngestHistoryItem[]>(loadIngestHistory());
+  const [historyPage, setHistoryPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,11 +51,24 @@ export function StatusPage() {
 
   useEffect(() => {
     void load();
-    const updateHistory = () => setHistory(loadIngestHistory());
+    const updateHistory = () => {
+      setHistory(loadIngestHistory());
+      setHistoryPage(1);
+    };
     window.addEventListener("kemo:history-updated", updateHistory);
     return () => window.removeEventListener("kemo:history-updated", updateHistory);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const historyPageCount = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+  const visibleHistory = history.slice(
+    (historyPage - 1) * HISTORY_PAGE_SIZE,
+    historyPage * HISTORY_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    if (historyPage > historyPageCount) setHistoryPage(historyPageCount);
+  }, [historyPage, historyPageCount]);
 
   const metrics = status
     ? [
@@ -96,7 +114,7 @@ export function StatusPage() {
             <section className="history-panel card">
               <div className="panel-title-row"><div><p className="eyebrow">Recent ingest</p><h3>最近整理</h3></div><span className="count-chip">{history.length}</span></div>
               <div className="history-list">
-                {history.map((item) => (
+                {visibleHistory.map((item) => (
                   <article key={item.id}>
                     <span className={`history-dot ${item.failed ? "is-failed" : ""}`} />
                     <div><strong>{item.failed ? "整理部分失败" : "整理完成"}</strong><small>{formatTime(item.createdAt)}</small></div>
@@ -105,6 +123,23 @@ export function StatusPage() {
                 ))}
                 {!history.length ? <div className="empty-compact"><Clock3 size={25} /><strong>暂无本地记录</strong><span>从文档管理页触发整理后会记录在这里。</span></div> : null}
               </div>
+              {history.length ? (
+                <nav className="history-pagination" aria-label="最近整理翻页">
+                  <button
+                    type="button"
+                    aria-label="上一页"
+                    disabled={historyPage <= 1}
+                    onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                  ><ChevronLeft size={15} /></button>
+                  <span>第 {historyPage} / {historyPageCount} 页<small>每页 6 条</small></span>
+                  <button
+                    type="button"
+                    aria-label="下一页"
+                    disabled={historyPage >= historyPageCount}
+                    onClick={() => setHistoryPage((page) => Math.min(historyPageCount, page + 1))}
+                  ><ChevronRight size={15} /></button>
+                </nav>
+              ) : null}
             </section>
           </div>
         </>

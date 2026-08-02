@@ -42,12 +42,12 @@ export function GraphRelationDetails({
       <div className="graph-inspector__metrics">
         <span><strong>{Math.round(selected.weight * 100)}%</strong>关系权重</span>
         <span><strong>{selected.support_count ?? 0}</strong>证据支持</span>
-        <span><strong>{related.length}</strong>同类串联</span>
+        <span><strong>{related.length}</strong>当前连线</span>
       </div>
 
       <section className="graph-relation-usages">
-        <h4><GitBranch size={14} />使用该关系串联的节点</h4>
-        <p>展示当前知识图谱中使用“{selected.relation}”连接的节点对。</p>
+        <h4><GitBranch size={14} />当前关系线连接的节点</h4>
+        <p>仅展示刚刚点击的“{selected.relation}”关系线及其两个端点。</p>
         <div className="graph-relation-usage-list">
           {related.slice(0, 40).map((edge) => (
             <button

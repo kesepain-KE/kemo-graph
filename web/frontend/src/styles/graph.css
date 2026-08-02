@@ -237,12 +237,10 @@
   top: 15px;
   left: 15px;
   z-index: 10;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 8px 25px rgba(28, 39, 35, 0.09);
+  background: transparent;
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
 }
 
 .graph-fullscreen-button {
@@ -392,6 +390,12 @@
 .graph-node {
   outline: none;
   cursor: pointer;
+}
+
+.graph-node__hit-target {
+  fill: transparent;
+  stroke: transparent;
+  pointer-events: all;
 }
 
 .graph-node__halo {
@@ -894,9 +898,15 @@
 }
 
 /* Phase 14 studio: one canvas region + one unified right-side bubble. */
+.graph-page {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .graph-layout.graph-layout--studio {
-  height: max(590px, calc(100dvh - 232px));
-  min-height: 590px;
+  height: 100%;
+  min-height: 420px;
   grid-template-columns: minmax(0, 1fr) minmax(310px, 360px);
   align-items: stretch;
   gap: 18px;
@@ -2013,8 +2023,8 @@
 }
 
 .graph-canvas.is-obsidian .graph-fullscreen-toolbar {
-  background: #191d29;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.28);
+  background: transparent;
+  box-shadow: none;
 }
 
 .graph-canvas.is-obsidian .canvas-tools .icon-button,
