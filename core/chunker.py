@@ -19,7 +19,7 @@ _TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.UNICODE)
 _PARAGRAPH_BREAK_PATTERN = re.compile(r"\n[ \t]*\n")
 _GRANULARITY_ORDER = {"small": 0, "medium": 1, "large": 2}
 _CHUNKING_PROMPT_PATH = Path(__file__).resolve().parents[1] / "config" / "chunking_prompt.md"
-_CHUNKING_PROMPT_VERSION = "boundary-v1"
+_CHUNKING_PROMPT_VERSION = "boundary-v2"
 _CHUNKING_SCHEMA = {
     "type": "object",
     "properties": {
@@ -414,7 +414,11 @@ def _semantic_hierarchy_spans(
 ) -> list[_ChunkSpan]:
     """以 LLM 语义片段为叶子，确定性组合中、大粒度父级。"""
 
-    leaves = [replace(span, granularity="small") for span in semantic_spans]
+    leaves = _normalize_semantic_leaf_spans(
+        text,
+        semantic_spans,
+        settings.chunk_small_size,
+    )
     medium = _group_adjacent_semantic_spans(
         text,
         leaves,
@@ -428,6 +432,84 @@ def _semantic_hierarchy_spans(
         "large",
     )
     return [*leaves, *medium, *large]
+
+
+def _normalize_semantic_leaf_spans(
+    text: str,
+    semantic_spans: list[_ChunkSpan],
+    target_tokens: int,
+) -> list[_ChunkSpan]:
+    """Bound LLM-selected leaves and merge heading-sized semantic fragments.
+
+    The model remains responsible for choosing semantic boundaries, while the
+    service enforces the configured small-granularity target.  This prevents a
+    title or a one-line paragraph from becoming an independent embedding.
+    """
+
+    if not semantic_spans:
+        return []
+    if target_tokens < 1:
+        raise ValueError("chunk_small_size 必须大于等于 1")
+    token_matches = list(_TOKEN_PATTERN.finditer(text))
+    units: list[_ChunkSpan] = []
+    for span in semantic_spans:
+        cursor = span.token_start
+        while cursor < span.token_end:
+            end = min(cursor + target_tokens, span.token_end)
+            units.append(
+                _span_from_token_range(
+                    text,
+                    token_matches,
+                    cursor,
+                    end,
+                    "small",
+                )
+            )
+            cursor = end
+    if len(units) == 1:
+        return units
+
+    minimum_tokens = max(16, target_tokens // 2)
+    grouped: list[_ChunkSpan] = []
+    group_start = units[0].token_start
+    group_end = units[0].token_end
+    for unit in units[1:]:
+        current_size = group_end - group_start
+        proposed_size = unit.token_end - group_start
+        if current_size >= minimum_tokens and proposed_size > target_tokens:
+            grouped.append(
+                _span_from_token_range(
+                    text,
+                    token_matches,
+                    group_start,
+                    group_end,
+                    "small",
+                )
+            )
+            group_start = unit.token_start
+        group_end = unit.token_end
+
+    tail = _span_from_token_range(
+        text,
+        token_matches,
+        group_start,
+        group_end,
+        "small",
+    )
+    if grouped and tail.token_end - tail.token_start < minimum_tokens:
+        previous = grouped.pop()
+        grouped.append(
+            _span_from_token_range(
+                text,
+                token_matches,
+                previous.token_start,
+                tail.token_end,
+                "small",
+            )
+        )
+    else:
+        grouped.append(tail)
+    return grouped
 
 
 def _group_adjacent_semantic_spans(

@@ -131,6 +131,29 @@ class QueryPlannerTests(unittest.TestCase):
         self.assertEqual(len(small_chunks), 3)
         self.assertTrue(any(chunk.parent_index is not None for chunk in small_chunks))
 
+    def test_semantic_hierarchical_merges_heading_sized_fragments(self) -> None:
+        settings = _settings(Path("."))
+        settings.chunking_mode = "semantic_hierarchical"
+        settings.chunk_small_size = 64
+        settings.chunk_size = 128
+        settings.chunk_large_size = 256
+        text = "标题" * 4 + "\n\n" + "正文" * 10 + "\n\n" + "补充" * 20
+        boundaries = {
+            "chunks": [
+                {"start_block": 1, "end_block": 1},
+                {"start_block": 2, "end_block": 2},
+                {"start_block": 3, "end_block": 3},
+            ]
+        }
+
+        with patch("core.chunker.chat_structured", return_value=boundaries):
+            chunks = document_chunks(text, settings=settings)
+
+        small_chunks = [chunk for chunk in chunks if chunk.granularity == "small"]
+        self.assertEqual(len(small_chunks), 1)
+        self.assertIn("标题", small_chunks[0].content)
+        self.assertIn("补充", small_chunks[0].content)
+
 
 class MultiQueryRetrievalTests(unittest.TestCase):
     def test_expansion_recalls_synonym_and_batches_embedding_once(self) -> None:
