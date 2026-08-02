@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.1.0`
+> **当前版本**：`1.1.1`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
 
 ---
