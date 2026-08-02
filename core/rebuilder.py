@@ -81,7 +81,7 @@ class KnowledgeBaseRebuilder:
         *,
         progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """在同级影子目录重建，验证成功后才切换正式数据目录。"""
+        """在同级影子目录重建，验证成功后才切换正式数据投影。"""
 
         started_at = time.perf_counter()
         data_dir = self.paths.data_dir.resolve()
@@ -89,6 +89,7 @@ class KnowledgeBaseRebuilder:
         if data_dir == parent or not data_dir.name:
             raise RebuildError(f"拒绝重建不安全的数据目录：{data_dir}")
         parent.mkdir(parents=True, exist_ok=True)
+        preserve_embedded_external = _is_within(self.external_dir, data_dir)
 
         with self._write_lock:
             _progress(progress, 0.02, "创建影子知识库")
@@ -128,12 +129,20 @@ class KnowledgeBaseRebuilder:
                     shadow_paths.search_cache_db,
                 )
                 _progress(progress, 0.93, "影子知识库校验通过，切换正式目录")
-                backup_dir = parent / (
-                    f".{data_dir.name}.backup-"
-                    f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
-                    f"{uuid4().hex[:8]}"
+                backup_prefix = (
+                    f"{data_dir.name}-backup-"
+                    if preserve_embedded_external
+                    else f".{data_dir.name}.backup-"
                 )
-                _swap_directories(data_dir, shadow_dir, backup_dir)
+                backup_dir = parent / (
+                    backup_prefix
+                    + f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+                    + f"{uuid4().hex[:8]}"
+                )
+                if preserve_embedded_external:
+                    _swap_projection_storage(data_dir, shadow_dir, backup_dir)
+                else:
+                    _swap_directories(data_dir, shadow_dir, backup_dir)
                 _progress(progress, 0.98, "正式知识库已切换，旧版本保留为可恢复备份")
             except Exception:
                 if shadow_dir.exists():
@@ -186,8 +195,9 @@ def _seed_shadow_sources(
                 INSERT INTO sources (
                     source_id, original_path, relative_path, path_hash,
                     content_hash, graph_hash, rag_hash, graph_status, rag_status,
-                    exists_status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    exists_status, origin_hash, origin_size, origin_modified_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["source_id"],
@@ -200,6 +210,9 @@ def _seed_shadow_sources(
                     "pending" if active else row["graph_status"],
                     "pending" if active else row["rag_status"],
                     row["exists_status"],
+                    row["origin_hash"],
+                    row["origin_size"],
+                    row["origin_modified_at"],
                     row["created_at"],
                     row["updated_at"],
                 ),
@@ -477,6 +490,63 @@ def _swap_directories(data_dir: Path, shadow_dir: Path, backup_dir: Path) -> Non
         if moved_original and backup_dir.exists() and not data_dir.exists():
             _replace_with_retry(backup_dir, data_dir)
         raise
+
+
+def _swap_projection_storage(
+    data_dir: Path,
+    shadow_dir: Path,
+    backup_dir: Path,
+) -> None:
+    """只切换数据库/索引，保留 Store 内 manifest 与 content。"""
+
+    if backup_dir.exists():
+        raise RebuildError(f"备份目标已存在：{backup_dir}")
+    backup_dir.mkdir(parents=True)
+    moved_original: list[str] = []
+    installed_new: list[str] = []
+    try:
+        for source in _projection_entries(data_dir):
+            _replace_with_retry(source, backup_dir / source.name)
+            moved_original.append(source.name)
+        for source in _projection_entries(shadow_dir):
+            _replace_with_retry(source, data_dir / source.name)
+            installed_new.append(source.name)
+    except Exception:
+        for name in reversed(installed_new):
+            installed = data_dir / name
+            if installed.exists():
+                _replace_with_retry(installed, shadow_dir / name)
+        for name in reversed(moved_original):
+            backup = backup_dir / name
+            if backup.exists():
+                _replace_with_retry(backup, data_dir / name)
+        if backup_dir.exists() and not any(backup_dir.iterdir()):
+            backup_dir.rmdir()
+        raise
+    shutil.rmtree(shadow_dir)
+
+
+def _projection_entries(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    selected = [
+        child
+        for child in root.iterdir()
+        if child.name in {"Graph", "RAG"}
+        or child.name == "sources.db"
+        or child.name.startswith("sources.db-")
+        or child.name == "search_cache.db"
+        or child.name.startswith("search_cache.db-")
+    ]
+    return sorted(selected, key=lambda path: path.name.casefold())
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _replace_with_retry(source: Path, target: Path) -> None:
