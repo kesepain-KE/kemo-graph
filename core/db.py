@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS sources (
     graph_status TEXT DEFAULT 'pending',
     rag_status TEXT DEFAULT 'pending',
     exists_status TEXT DEFAULT 'active',
+    origin_hash TEXT,
+    origin_size INTEGER,
+    origin_modified_at TEXT,
     created_at TEXT,
     updated_at TEXT
 );
@@ -333,6 +336,7 @@ def initialize_databases(
     _initialize_sqlite(paths.graph_db, GRAPH_SCHEMA)
     _initialize_sqlite(paths.rag_db, RAG_SCHEMA)
     initialize_search_cache(paths)
+    _ensure_source_origin_columns(paths.sources_db)
     _ensure_rag_vector_space_column(paths.rag_db)
     _ensure_rag_chunk_hierarchy_columns(paths.rag_db)
     _ensure_rag_entity_community_tables(paths.rag_db)
@@ -346,6 +350,33 @@ def initialize_databases(
     paths.rerank_cache.touch(exist_ok=True)
 
     return paths
+
+
+def _ensure_source_origin_columns(path: Path) -> None:
+    """幂等补齐绝对路径导入所需的原始文件快照元数据。"""
+
+    connection = _connect(path)
+    try:
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(sources)").fetchall()
+        }
+        additions = {
+            "origin_hash": "TEXT",
+            "origin_size": "INTEGER",
+            "origin_modified_at": "TEXT",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE sources ADD COLUMN {name} {declaration}"
+                )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def connect_sources(paths: DatabasePaths) -> sqlite3.Connection:

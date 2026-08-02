@@ -78,6 +78,10 @@ class DocumentIngestError(DocumentImportError):
     """转换已完成，但后续知识库整理无法启动。"""
 
 
+class DocumentContentConflictError(DocumentImportError):
+    """文档在编辑期间已变化，拒绝覆盖较新的内容。"""
+
+
 SUPPORTED_IMPORT_SUFFIXES = frozenset(
     {".pdf", ".docx", ".md", ".markdown", ".txt", ".html", ".htm", ".rst", ".csv"}
 )
@@ -253,6 +257,8 @@ class KnowledgeBaseService:
             rows = connection.execute(
                 f"""
                 SELECT source_id, relative_path, original_path,
+                       content_hash, graph_hash, rag_hash,
+                       origin_hash, origin_size, origin_modified_at,
                        graph_status, rag_status, exists_status,
                        created_at, updated_at
                 FROM sources
@@ -273,6 +279,12 @@ class KnowledgeBaseService:
                     "source_id": row["source_id"],
                     "relative_path": row["relative_path"],
                     "original_path": row["original_path"],
+                    "content_hash": row["content_hash"],
+                    "graph_hash": row["graph_hash"],
+                    "rag_hash": row["rag_hash"],
+                    "origin_hash": row["origin_hash"],
+                    "origin_size": row["origin_size"],
+                    "origin_modified_at": row["origin_modified_at"],
                     "graph_status": row["graph_status"],
                     "rag_status": row["rag_status"],
                     "exists_status": row["exists_status"],
@@ -291,7 +303,9 @@ class KnowledgeBaseService:
         try:
             row = connection.execute(
                 """
-                SELECT source_id, relative_path, exists_status
+                SELECT source_id, original_path, relative_path, content_hash,
+                       graph_hash, rag_hash, origin_hash, origin_size,
+                       origin_modified_at, graph_status, rag_status, exists_status
                 FROM sources WHERE source_id = ?
                 """,
                 (source_id,),
@@ -316,9 +330,435 @@ class KnowledgeBaseService:
 
         return {
             "source_id": row["source_id"],
+            "original_path": row["original_path"],
             "relative_path": row["relative_path"],
+            "content_hash": row["content_hash"],
+            "graph_hash": row["graph_hash"],
+            "rag_hash": row["rag_hash"],
+            "origin_hash": row["origin_hash"],
+            "origin_size": row["origin_size"],
+            "origin_modified_at": row["origin_modified_at"],
+            "graph_status": row["graph_status"],
+            "rag_status": row["rag_status"],
+            "exists_status": row["exists_status"],
             "content": content,
         }
+
+    def update_document_content(
+        self,
+        source_id: str,
+        content: str,
+        *,
+        expected_content_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """原子保存 Markdown，并仅将派生 Graph/RAG 标记为待重建。"""
+
+        self._require_initialized()
+        normalized_source_id = str(source_id).strip()
+        if not normalized_source_id:
+            raise ValueError("source_id 必须是非空字符串")
+        if not isinstance(content, str):
+            raise TypeError("content 必须是字符串")
+        encoded = content.encode("utf-8")
+        if len(encoded) > MAX_IMPORT_BYTES:
+            raise DocumentTooLargeError(
+                f"Markdown 内容超过 {MAX_IMPORT_BYTES // (1024 * 1024)} MB 上限"
+            )
+        expected_hash = (
+            str(expected_content_hash).strip().casefold()
+            if expected_content_hash is not None
+            else None
+        )
+        if expected_hash is not None and (
+            len(expected_hash) != 64
+            or any(character not in "0123456789abcdef" for character in expected_hash)
+        ):
+            raise ValueError("expected_content_hash 必须是 64 位 SHA-256")
+
+        ingestor = Ingestor(
+            data_dir=self.data_dir,
+            external_dir=self.external_dir,
+            settings=self.settings,
+        )
+        with ingestor._write_lock:
+            connection = connect_sources(self.paths)
+            try:
+                row = connection.execute(
+                    """
+                    SELECT source_id, relative_path, content_hash,
+                           graph_hash, rag_hash, graph_status, rag_status,
+                           exists_status
+                    FROM sources WHERE source_id = ?
+                    """,
+                    (normalized_source_id,),
+                ).fetchone()
+            finally:
+                connection.close()
+            if row is None or row["exists_status"] != "active":
+                raise DocumentNotFoundError(
+                    f"活动文档不存在：{normalized_source_id}"
+                )
+
+            current_hash = str(row["content_hash"])
+            if expected_hash is not None and expected_hash != current_hash.casefold():
+                raise DocumentContentConflictError(
+                    "文档已被其他操作更新，请重新加载后再编辑"
+                )
+            destination = _safe_markdown_destination(
+                self.external_dir,
+                str(row["relative_path"]),
+            )
+            if not destination.is_file():
+                raise DocumentNotFoundError(
+                    f"文档文件缺失：{row['relative_path']}"
+                )
+            try:
+                previous_bytes = destination.read_bytes()
+            except OSError as exc:
+                raise DocumentNotFoundError(
+                    f"无法读取文档：{row['relative_path']}"
+                ) from exc
+            disk_hash = hashlib.sha256(previous_bytes).hexdigest()
+            if disk_hash != current_hash:
+                raise DocumentContentConflictError(
+                    "磁盘文档已在数据库外发生变化，请刷新文档列表后再编辑"
+                )
+
+            new_hash = hashlib.sha256(encoded).hexdigest()
+            if new_hash == current_hash:
+                return {
+                    "source_id": normalized_source_id,
+                    "relative_path": str(row["relative_path"]),
+                    "changed": False,
+                    "previous_content_hash": current_hash,
+                    "content_hash": current_hash,
+                    "graph_status": str(row["graph_status"]),
+                    "rag_status": str(row["rag_status"]),
+                }
+
+            _write_bytes_atomic(destination, encoded)
+            now = _now_iso()
+            connection = connect_sources(self.paths)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                cursor = connection.execute(
+                    """
+                    UPDATE sources
+                    SET content_hash = ?, graph_status = 'pending',
+                        rag_status = 'pending', updated_at = ?
+                    WHERE source_id = ? AND exists_status = 'active'
+                      AND content_hash = ?
+                    """,
+                    (new_hash, now, normalized_source_id, current_hash),
+                )
+                if cursor.rowcount != 1:
+                    raise DocumentContentConflictError(
+                        "文档状态已变化，请重新加载后再编辑"
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                _write_bytes_atomic(destination, previous_bytes)
+                raise
+            finally:
+                connection.close()
+
+        self._log_event(
+            "document_content_update",
+            f"source_id={normalized_source_id}, path={row['relative_path']}",
+        )
+        return {
+            "source_id": normalized_source_id,
+            "relative_path": str(row["relative_path"]),
+            "changed": True,
+            "previous_content_hash": current_hash,
+            "content_hash": new_hash,
+            "graph_status": "pending",
+            "rag_status": "pending",
+            "updated_at": now,
+        }
+
+    def get_node(self, node_id: str) -> dict[str, Any]:
+        """返回节点、双向关系和可追溯的来源绑定。"""
+
+        self._require_available("graph")
+        graph_connection = connect_graph(self.paths)
+        try:
+            node = graph_connection.execute(
+                """
+                SELECT node_id, keyword, summary, aliases, tags, weight,
+                       ref_count, created_at, updated_at
+                FROM nodes WHERE node_id = ?
+                """,
+                (node_id,),
+            ).fetchone()
+            if node is None:
+                raise DocumentNotFoundError(f"节点不存在：{node_id}")
+            bindings = graph_connection.execute(
+                """
+                SELECT source_id, content_hash, evidence_weight, evidence
+                FROM node_sources WHERE node_id = ? ORDER BY source_id
+                """,
+                (node_id,),
+            ).fetchall()
+            relations = graph_connection.execute(
+                """
+                SELECT e.edge_id, e.source_node_id, sn.keyword AS source_keyword,
+                       e.relation, e.target_node_id, tn.keyword AS target_keyword,
+                       e.weight, e.support_count, e.created_at
+                FROM edges e
+                JOIN nodes sn ON sn.node_id = e.source_node_id
+                JOIN nodes tn ON tn.node_id = e.target_node_id
+                WHERE e.source_node_id = ? OR e.target_node_id = ?
+                ORDER BY sn.keyword, e.relation, tn.keyword, e.edge_id
+                """,
+                (node_id, node_id),
+            ).fetchall()
+        finally:
+            graph_connection.close()
+
+        source_ids = [str(row["source_id"]) for row in bindings]
+        source_by_id: dict[str, Any] = {}
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            source_connection = connect_sources(self.paths)
+            try:
+                source_by_id = {
+                    str(row["source_id"]): row
+                    for row in source_connection.execute(
+                        f"""
+                        SELECT source_id, original_path, relative_path, content_hash,
+                               origin_hash, graph_status, rag_status, exists_status
+                        FROM sources WHERE source_id IN ({placeholders})
+                        """,
+                        tuple(source_ids),
+                    ).fetchall()
+                }
+            finally:
+                source_connection.close()
+
+        return {
+            "node_id": node["node_id"],
+            "keyword": node["keyword"],
+            "summary": node["summary"],
+            "aliases": _parse_json_list(node["aliases"]),
+            "tags": _parse_json_list(node["tags"]),
+            "weight": float(node["weight"] or 0.0),
+            "ref_count": int(node["ref_count"] or 0),
+            "created_at": node["created_at"],
+            "updated_at": node["updated_at"],
+            "sources": [
+                {
+                    "source_id": binding["source_id"],
+                    "content_hash": binding["content_hash"],
+                    "evidence_weight": float(binding["evidence_weight"] or 0.0),
+                    "evidence": binding["evidence"],
+                    "original_path": (
+                        source_by_id[str(binding["source_id"])]["original_path"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
+                    "relative_path": (
+                        source_by_id[str(binding["source_id"])]["relative_path"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
+                    "origin_hash": (
+                        source_by_id[str(binding["source_id"])]["origin_hash"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
+                    "graph_status": (
+                        source_by_id[str(binding["source_id"])]["graph_status"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
+                    "rag_status": (
+                        source_by_id[str(binding["source_id"])]["rag_status"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
+                    "exists_status": (
+                        source_by_id[str(binding["source_id"])]["exists_status"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
+                }
+                for binding in bindings
+            ],
+            "relations": [_relation_row(row) for row in relations],
+        }
+
+    def get_relation(self, edge_id: str) -> dict[str, Any]:
+        """返回一条关系、可读路径和全部文档证据绑定。"""
+
+        self._require_available("graph")
+        graph_connection = connect_graph(self.paths)
+        try:
+            edge = graph_connection.execute(
+                """
+                SELECT e.edge_id, e.source_node_id, sn.keyword AS source_keyword,
+                       e.relation, e.target_node_id, tn.keyword AS target_keyword,
+                       e.weight, e.support_count, e.created_at
+                FROM edges e
+                JOIN nodes sn ON sn.node_id = e.source_node_id
+                JOIN nodes tn ON tn.node_id = e.target_node_id
+                WHERE e.edge_id = ?
+                """,
+                (edge_id,),
+            ).fetchone()
+            if edge is None:
+                raise DocumentNotFoundError(f"关系不存在：{edge_id}")
+            evidence_rows = graph_connection.execute(
+                """
+                SELECT source_id, content_hash, evidence_weight
+                FROM edge_sources WHERE edge_id = ? ORDER BY source_id
+                """,
+                (edge_id,),
+            ).fetchall()
+        finally:
+            graph_connection.close()
+
+        source_ids = [str(row["source_id"]) for row in evidence_rows]
+        source_by_id: dict[str, Any] = {}
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            source_connection = connect_sources(self.paths)
+            try:
+                source_by_id = {
+                    str(row["source_id"]): row
+                    for row in source_connection.execute(
+                        f"""
+                        SELECT source_id, original_path, relative_path, origin_hash,
+                               graph_status, rag_status, exists_status
+                        FROM sources WHERE source_id IN ({placeholders})
+                        """,
+                        tuple(source_ids),
+                    ).fetchall()
+                }
+            finally:
+                source_connection.close()
+
+        result = _relation_row(edge)
+        result["sources"] = [
+            {
+                "source_id": evidence["source_id"],
+                "content_hash": evidence["content_hash"],
+                "evidence_weight": float(evidence["evidence_weight"] or 0.0),
+                "original_path": (
+                    source_by_id[str(evidence["source_id"])]["original_path"]
+                    if str(evidence["source_id"]) in source_by_id
+                    else None
+                ),
+                "relative_path": (
+                    source_by_id[str(evidence["source_id"])]["relative_path"]
+                    if str(evidence["source_id"]) in source_by_id
+                    else None
+                ),
+                "origin_hash": (
+                    source_by_id[str(evidence["source_id"])]["origin_hash"]
+                    if str(evidence["source_id"]) in source_by_id
+                    else None
+                ),
+                "graph_status": (
+                    source_by_id[str(evidence["source_id"])]["graph_status"]
+                    if str(evidence["source_id"]) in source_by_id
+                    else None
+                ),
+                "rag_status": (
+                    source_by_id[str(evidence["source_id"])]["rag_status"]
+                    if str(evidence["source_id"]) in source_by_id
+                    else None
+                ),
+                "exists_status": (
+                    source_by_id[str(evidence["source_id"])]["exists_status"]
+                    if str(evidence["source_id"]) in source_by_id
+                    else None
+                ),
+            }
+            for evidence in evidence_rows
+        ]
+        return result
+
+    def delete_relation(self, edge_id: str) -> dict[str, Any]:
+        """删除关系及其全部证据，并使群组总结和搜索缓存失效。"""
+
+        self._require_available("graph")
+        graph_connection = connect_graph(self.paths)
+        try:
+            graph_connection.execute("BEGIN IMMEDIATE")
+            edge = graph_connection.execute(
+                """
+                SELECT e.edge_id, e.source_node_id, sn.keyword AS source_keyword,
+                       e.relation, e.target_node_id, tn.keyword AS target_keyword,
+                       e.weight, e.support_count, e.created_at
+                FROM edges e
+                JOIN nodes sn ON sn.node_id = e.source_node_id
+                JOIN nodes tn ON tn.node_id = e.target_node_id
+                WHERE e.edge_id = ?
+                """,
+                (edge_id,),
+            ).fetchone()
+            if edge is None:
+                raise DocumentNotFoundError(f"关系不存在：{edge_id}")
+            evidence_count = int(
+                graph_connection.execute(
+                    "SELECT COUNT(*) FROM edge_sources WHERE edge_id = ?",
+                    (edge_id,),
+                ).fetchone()[0]
+            )
+            mention_rows = graph_connection.execute(
+                """
+                SELECT rm.mention_id
+                FROM relation_mentions rm
+                JOIN mention_nodes sm ON sm.mention_id = rm.source_mention_id
+                JOIN mention_nodes tm ON tm.mention_id = rm.target_mention_id
+                WHERE sm.node_id = ? AND rm.relation = ? AND tm.node_id = ?
+                """,
+                (
+                    edge["source_node_id"],
+                    edge["relation"],
+                    edge["target_node_id"],
+                ),
+            ).fetchall()
+            if mention_rows:
+                placeholders = ",".join("?" for _ in mention_rows)
+                graph_connection.execute(
+                    f"DELETE FROM relation_mentions WHERE mention_id IN ({placeholders})",
+                    tuple(row["mention_id"] for row in mention_rows),
+                )
+            graph_connection.execute(
+                "DELETE FROM edge_sources WHERE edge_id = ?", (edge_id,)
+            )
+            graph_connection.execute("DELETE FROM edges WHERE edge_id = ?", (edge_id,))
+            graph_connection.execute("DELETE FROM group_nodes")
+            graph_connection.execute("DELETE FROM groups")
+            graph_connection.commit()
+        except Exception:
+            graph_connection.rollback()
+            raise
+        finally:
+            graph_connection.close()
+
+        self._refresh_graph_meta(changed=True)
+        RAGEngine(self.data_dir, settings=self.settings).refresh_auxiliary_consistency()
+        try:
+            cache_deleted = self.clear_search_cache()["deleted"]
+        except Exception:
+            cache_deleted = 0
+        result = {
+            "deleted": True,
+            "edge": _relation_row(edge),
+            "deleted_evidence_count": evidence_count,
+            "deleted_mention_count": len(mention_rows),
+            "groups_invalidated": True,
+            "search_cache_deleted": cache_deleted,
+        }
+        self._log_event(
+            "delete_relation",
+            f"edge_id={edge_id}, evidence={evidence_count}",
+        )
+        return result
 
     def delete_node(self, node_id: str) -> dict[str, Any]:
         """删除指定节点，按 06 文档规则执行级联操作。"""
@@ -342,38 +782,74 @@ class KnowledgeBaseService:
     def _execute_node_deletion(self, node_id: str) -> dict[str, Any]:
         graph_connection = connect_graph(self.paths)
         try:
-            graph_connection.execute("BEGIN IMMEDIATE")
             node_row = graph_connection.execute(
                 "SELECT node_id, keyword FROM nodes WHERE node_id = ?", (node_id,)
             ).fetchone()
             if node_row is None:
                 raise DocumentNotFoundError(f"节点不存在：{node_id}")
-
-            source_rows = graph_connection.execute(
+            bindings = graph_connection.execute(
                 """
-                SELECT ns.source_id, s.relative_path
-                FROM node_sources ns
-                JOIN sources s ON s.source_id = ns.source_id
-                WHERE ns.node_id = ?
+                SELECT ns.source_id,
+                       (SELECT COUNT(*) FROM node_sources other
+                        WHERE other.source_id = ns.source_id
+                          AND other.node_id != ns.node_id) AS other_node_count
+                FROM node_sources ns WHERE ns.node_id = ?
+                ORDER BY ns.source_id
                 """,
                 (node_id,),
             ).fetchall()
+        finally:
+            graph_connection.close()
 
-            recycled_files: list[str] = []
-            unlinked_files: list[str] = []
-            for s_row in source_rows:
-                other_nodes = int(
-                    graph_connection.execute(
-                        "SELECT COUNT(*) FROM node_sources WHERE source_id = ? AND node_id != ?",
-                        (s_row["source_id"], node_id),
-                    ).fetchone()[0]
-                )
-                if other_nodes == 0:
-                    self._move_source_to_recycle(s_row["relative_path"])
-                    recycled_files.append(s_row["relative_path"])
-                else:
-                    unlinked_files.append(s_row["relative_path"])
+        source_ids = [str(binding["source_id"]) for binding in bindings]
+        source_by_id: dict[str, Any] = {}
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            source_connection = connect_sources(self.paths)
+            try:
+                source_by_id = {
+                    str(row["source_id"]): row
+                    for row in source_connection.execute(
+                        f"""
+                        SELECT source_id, relative_path, exists_status
+                        FROM sources WHERE source_id IN ({placeholders})
+                        """,
+                        tuple(source_ids),
+                    ).fetchall()
+                }
+            finally:
+                source_connection.close()
 
+        isolated_source_ids = [
+            str(binding["source_id"])
+            for binding in bindings
+            if int(binding["other_node_count"] or 0) == 0
+            and str(binding["source_id"]) in source_by_id
+            and source_by_id[str(binding["source_id"])]["exists_status"] == "active"
+        ]
+        unlinked_files = [
+            str(source_by_id[str(binding["source_id"])]["relative_path"])
+            for binding in bindings
+            if int(binding["other_node_count"] or 0) > 0
+            and str(binding["source_id"]) in source_by_id
+        ]
+
+        ingestor = Ingestor(
+            data_dir=self.data_dir,
+            external_dir=self.external_dir,
+            settings=self.settings,
+        )
+        recycled_files: list[str] = []
+        recycled_paths: list[str] = []
+        for source_id in isolated_source_ids:
+            deletion = ingestor.delete_document(source_id)
+            recycled_files.append(str(deletion["relative_path"]))
+            if deletion.get("recycled_path"):
+                recycled_paths.append(str(deletion["recycled_path"]))
+
+        graph_connection = connect_graph(self.paths)
+        try:
+            graph_connection.execute("BEGIN IMMEDIATE")
             edge_ids = {
                 row["edge_id"]
                 for row in graph_connection.execute(
@@ -384,27 +860,59 @@ class KnowledgeBaseService:
                     (node_id, node_id),
                 ).fetchall()
             }
-            (
-                graph_connection.execute(
-                    "DELETE FROM edge_sources WHERE edge_id IN ("
-                    + ",".join("?" for _ in edge_ids)
-                    + ")",
-                    tuple(sorted(edge_ids)),
+            mention_ids = [
+                str(row["mention_id"])
+                for row in graph_connection.execute(
+                    "SELECT mention_id FROM mention_nodes WHERE node_id = ?",
+                    (node_id,),
+                ).fetchall()
+            ]
+            deleted_relation_mentions = 0
+            if mention_ids:
+                placeholders = ",".join("?" for _ in mention_ids)
+                deleted_relation_mentions = int(
+                    graph_connection.execute(
+                        f"""
+                        SELECT COUNT(*) FROM relation_mentions
+                        WHERE source_mention_id IN ({placeholders})
+                           OR target_mention_id IN ({placeholders})
+                        """,
+                        tuple(mention_ids + mention_ids),
+                    ).fetchone()[0]
                 )
-                if edge_ids
-                else None
-            )
-            for edge_id in edge_ids:
                 graph_connection.execute(
-                    "DELETE FROM edges WHERE edge_id = ?", (edge_id,)
+                    f"""
+                    DELETE FROM relation_mentions
+                    WHERE source_mention_id IN ({placeholders})
+                       OR target_mention_id IN ({placeholders})
+                    """,
+                    tuple(mention_ids + mention_ids),
+                )
+                graph_connection.execute(
+                    f"DELETE FROM entity_mentions WHERE mention_id IN ({placeholders})",
+                    tuple(mention_ids),
+                )
+            if edge_ids:
+                placeholders = ",".join("?" for _ in edge_ids)
+                parameters = tuple(sorted(edge_ids))
+                graph_connection.execute(
+                    f"DELETE FROM edge_sources WHERE edge_id IN ({placeholders})",
+                    parameters,
+                )
+                graph_connection.execute(
+                    f"DELETE FROM edges WHERE edge_id IN ({placeholders})",
+                    parameters,
                 )
 
             graph_connection.execute(
                 "DELETE FROM node_sources WHERE node_id = ?", (node_id,)
             )
-            graph_connection.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
-            graph_connection.execute("DELETE FROM groups")
+            graph_connection.execute(
+                "DELETE FROM mention_nodes WHERE node_id = ?", (node_id,)
+            )
             graph_connection.execute("DELETE FROM group_nodes")
+            graph_connection.execute("DELETE FROM groups")
+            graph_connection.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
             graph_connection.commit()
         except Exception:
             graph_connection.rollback()
@@ -423,11 +931,16 @@ class KnowledgeBaseService:
             rag_connection.close()
 
         self._refresh_graph_meta(changed=True)
+        RAGEngine(self.data_dir, settings=self.settings).refresh_auxiliary_consistency()
         return {
             "deleted_node_id": node_id,
             "deleted_keyword": node_row["keyword"],
             "cascade_deleted_edges": len(edge_ids),
+            "deleted_mention_count": len(mention_ids),
+            "deleted_relation_mention_count": deleted_relation_mentions,
+            "deleted_source_ids": isolated_source_ids,
             "recycled_files": recycled_files,
+            "recycled_paths": recycled_paths,
             "unlinked_files": unlinked_files,
         }
 
@@ -891,7 +1404,8 @@ class KnowledgeBaseService:
                 f"不支持的文档格式：{suffix or '<无扩展名>'}"
             )
         try:
-            size = source.stat().st_size
+            source_stat = source.stat()
+            size = source_stat.st_size
         except OSError as exc:
             raise DocumentImportPathError(f"无法读取文件信息：{source.name}") from exc
         if size > MAX_IMPORT_BYTES:
@@ -904,6 +1418,11 @@ class KnowledgeBaseService:
             raise DocumentTooLargeError(
                 f"文件超过 {MAX_IMPORT_BYTES // (1024 * 1024)} MB 上限：{source.name}"
             )
+        origin_hash = _sha256_file(source)
+        origin_modified_at = datetime.fromtimestamp(
+            source_stat.st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
 
         ingestor = Ingestor(
             data_dir=self.data_dir,
@@ -964,10 +1483,32 @@ class KnowledgeBaseService:
                     f"文档注册失败：{source.name}: {type(exc).__name__}"
                 ) from exc
 
-            source_id = _source_id_for_relative_path(
+            source_record = _source_record_for_relative_path(
                 self.paths,
                 markdown_relative_path,
             )
+            source_id = str(source_record["source_id"])
+            content_hash = str(source_record["content_hash"])
+            source_connection = connect_sources(self.paths)
+            try:
+                source_connection.execute(
+                    """
+                    UPDATE sources
+                    SET origin_hash = ?, origin_size = ?, origin_modified_at = ?,
+                        updated_at = ?
+                    WHERE source_id = ?
+                    """,
+                    (
+                        origin_hash,
+                        size,
+                        origin_modified_at,
+                        _now_iso(),
+                        source_id,
+                    ),
+                )
+                source_connection.commit()
+            finally:
+                source_connection.close()
             ingest_status = "pending"
             ingest_result: dict[str, Any] | None = None
             ingest_error: str | None = None
@@ -994,6 +1535,9 @@ class KnowledgeBaseService:
             "conversion_status": "completed",
             "ingest_status": ingest_status,
             "size": size,
+            "origin_hash": origin_hash,
+            "content_hash": content_hash,
+            "origin_modified_at": origin_modified_at,
         }
         if ingest_result is not None:
             result["ingest"] = ingest_result
@@ -1033,9 +1577,32 @@ class KnowledgeBaseService:
         connection = connect_sources(self.paths)
         try:
             row = connection.execute(
-                "SELECT source_id FROM sources WHERE relative_path = ?",
+                "SELECT source_id, content_hash FROM sources WHERE relative_path = ?",
                 (safe_filename,),
             ).fetchone()
+            if row is not None:
+                encoded = content.encode("utf-8")
+                origin_hash = hashlib.sha256(encoded).hexdigest()
+                origin_modified_at = _now_iso()
+                connection.execute(
+                    """
+                    UPDATE sources
+                    SET origin_hash = ?, origin_size = ?, origin_modified_at = ?,
+                        updated_at = ?
+                    WHERE source_id = ?
+                    """,
+                    (
+                        origin_hash,
+                        len(encoded),
+                        origin_modified_at,
+                        origin_modified_at,
+                        row["source_id"],
+                    ),
+                )
+                connection.commit()
+            else:
+                origin_hash = None
+                origin_modified_at = None
         finally:
             connection.close()
         result = {
@@ -1043,6 +1610,9 @@ class KnowledgeBaseService:
             "filename": safe_filename,
             "path": dest_path.relative_to(self.external_dir).as_posix(),
             "size": len(content),
+            "origin_hash": origin_hash,
+            "content_hash": row["content_hash"] if row is not None else None,
+            "origin_modified_at": origin_modified_at,
         }
         self._log_event(
             "document_import_done",
@@ -1652,6 +2222,94 @@ class KnowledgeBaseService:
             result["search_cache_deleted"] = 0
         return result
 
+    def delete_documents(self, source_ids: Sequence[str]) -> dict[str, Any]:
+        """逐一精确删除活动文档，并以结构化结果报告部分失败。"""
+
+        self._require_initialized()
+        if isinstance(source_ids, (str, bytes)):
+            raise TypeError("source_ids 必须是字符串数组")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in source_ids:
+            source_id = str(value).strip()
+            if not source_id:
+                raise ValueError("source_ids 中不能包含空值")
+            if source_id not in seen:
+                seen.add(source_id)
+                normalized.append(source_id)
+        if not normalized:
+            raise ValueError("至少选择一篇文档")
+        if len(normalized) > 1000:
+            raise ValueError("单次最多删除 1000 篇文档")
+
+        ingestor = Ingestor(
+            data_dir=self.data_dir,
+            external_dir=self.external_dir,
+            settings=self.settings,
+        )
+        deleted: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        with ingestor._write_lock:
+            for source_id in normalized:
+                try:
+                    deleted.append(ingestor.delete_document(source_id))
+                except Exception as exc:
+                    failures.append(
+                        {
+                            "source_id": source_id,
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                    )
+        cache_deleted = 0
+        if deleted:
+            try:
+                cache_deleted = int(self.clear_search_cache()["deleted"])
+            except Exception:
+                cache_deleted = 0
+        self._log_event(
+            "delete_documents",
+            f"requested={len(normalized)}, deleted={len(deleted)}, failed={len(failures)}",
+            level="WARNING" if failures else "INFO",
+        )
+        return {
+            "requested": len(normalized),
+            "deleted": len(deleted),
+            "failed": len(failures),
+            "documents": deleted,
+            "failures": failures,
+            "search_cache_deleted": cache_deleted,
+        }
+
+    def delete_all_documents(self) -> dict[str, Any]:
+        """删除当前知识库内的全部活动文档，不跨越 Store 边界。"""
+
+        self._require_initialized()
+        connection = connect_sources(self.paths)
+        try:
+            source_ids = [
+                str(row["source_id"])
+                for row in connection.execute(
+                    """
+                    SELECT source_id FROM sources
+                    WHERE exists_status = 'active'
+                    ORDER BY relative_path, source_id
+                    """
+                ).fetchall()
+            ]
+        finally:
+            connection.close()
+        if not source_ids:
+            return {
+                "requested": 0,
+                "deleted": 0,
+                "failed": 0,
+                "documents": [],
+                "failures": [],
+                "search_cache_deleted": 0,
+            }
+        return self.delete_documents(source_ids)
+
     def get_full_graph(
         self,
         nodes_page: int | None = None,
@@ -1693,9 +2351,14 @@ class KnowledgeBaseService:
             node_rows = connection.execute(node_sql, node_parameters).fetchall()
             edge_rows = connection.execute(
                 """
-                SELECT edge_id, source_node_id, relation, target_node_id,
-                       weight, support_count, created_at
-                FROM edges ORDER BY edge_id
+                SELECT e.edge_id, e.source_node_id,
+                       sn.keyword AS source_keyword, e.relation,
+                       e.target_node_id, tn.keyword AS target_keyword,
+                       e.weight, e.support_count, e.created_at
+                FROM edges e
+                JOIN nodes sn ON sn.node_id = e.source_node_id
+                JOIN nodes tn ON tn.node_id = e.target_node_id
+                ORDER BY e.edge_id
                 """
             ).fetchall()
             group_rows = connection.execute(
@@ -1742,18 +2405,7 @@ class KnowledgeBaseService:
                 }
                 for row in node_rows
             ],
-            "edges": [
-                {
-                    "edge_id": row["edge_id"],
-                    "source_node_id": row["source_node_id"],
-                    "relation": row["relation"],
-                    "target_node_id": row["target_node_id"],
-                    "weight": float(row["weight"]),
-                    "support_count": int(row["support_count"]),
-                    "created_at": row["created_at"],
-                }
-                for row in edge_rows
-            ],
+            "edges": [_relation_row(row) for row in edge_rows],
             "groups": list(groups_by_id.values()),
             "nodes_pagination": {
                 "page": nodes_page,
@@ -1901,6 +2553,24 @@ def _parse_json_list(value: str | None) -> list[str]:
     return parsed
 
 
+def _relation_row(row: Any) -> dict[str, Any]:
+    source_keyword = str(row["source_keyword"])
+    relation = str(row["relation"])
+    target_keyword = str(row["target_keyword"])
+    return {
+        "edge_id": row["edge_id"],
+        "source_node_id": row["source_node_id"],
+        "source_keyword": source_keyword,
+        "relation": relation,
+        "target_node_id": row["target_node_id"],
+        "target_keyword": target_keyword,
+        "path": f"{source_keyword}->[{relation}]->{target_keyword}",
+        "weight": float(row["weight"] or 0.0),
+        "support_count": int(row["support_count"] or 0),
+        "created_at": row["created_at"],
+    }
+
+
 def _clear_directory_contents(root: Path) -> int:
     """删除目录中的全部内容且不跟随符号链接，返回永久删除的文件数。"""
 
@@ -1991,18 +2661,44 @@ def _restore_import_destination(path: Path, previous: bytes | None) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _source_id_for_relative_path(paths: Any, relative_path: str) -> str:
+def _source_record_for_relative_path(
+    paths: Any,
+    relative_path: str,
+) -> dict[str, Any]:
     connection = connect_sources(paths)
     try:
         row = connection.execute(
-            "SELECT source_id FROM sources WHERE relative_path = ? AND exists_status = 'active'",
+            """
+            SELECT source_id, content_hash FROM sources
+            WHERE relative_path = ? AND exists_status = 'active'
+            """,
             (relative_path,),
         ).fetchone()
     finally:
         connection.close()
     if row is None:
         raise DocumentImportError(f"导入后未注册来源：{relative_path}")
-    return str(row["source_id"])
+    return {
+        "source_id": str(row["source_id"]),
+        "content_hash": str(row["content_hash"]),
+    }
+
+
+def _source_id_for_relative_path(paths: Any, relative_path: str) -> str:
+    """兼容内部旧调用；新代码应读取完整来源记录。"""
+
+    return str(_source_record_for_relative_path(paths, relative_path)["source_id"])
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            while block := stream.read(1024 * 1024):
+                digest.update(block)
+    except OSError as exc:
+        raise DocumentImportPathError(f"无法读取文件内容：{path.name}") from exc
+    return digest.hexdigest()
 
 
 def _detected_format(suffix: str) -> str:
@@ -2153,6 +2849,18 @@ def _elapsed_ms(started_at: float) -> int:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _write_bytes_atomic(path: Path, content: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
