@@ -28,4 +28,10 @@ Thumbs.db
 
 # Data / runtime
 data/
+external/
+log/
+output/
+tmp/
+update/runtime/
+kemo-graph-storage/
 *.log
