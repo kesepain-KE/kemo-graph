@@ -18,9 +18,11 @@
 </p>
 
 <p align="center">
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.1.0-00a98f" alt="version 1.1.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-release%20notes-f59e0b" alt="changelog"></a>
 </p>
 
 ---
@@ -161,7 +163,7 @@ RAG 结果  → 提供原文片段、分数与来源文档
 | 来源追溯 | 从节点、关系或向量命中回到其对应资料，避免只有结论没有依据 |
 | 增量维护 | 文件变化后只更新受影响的数据，而不是反复重建整个知识库 |
 | 概念关系发现 | 从文档中识别实体、别名、摘要、标签与关系，逐步形成可浏览图谱 |
-| 语义检索 | 用本地 FAISS 召回候选文本，再经 Rerank 返回更相关的原文片段 |
+| 语义检索 | LLM 先受控拆分问题并衍生同义表达，一次批量向量化后从本地 FAISS 多路召回，再用原始问题 Rerank |
 | 混合问答 | 让结构化关系增强语义检索，而不丢失原文证据 |
 | 安全删除 | 删除文档或节点时检查共享来源，尽量避免误伤其他资料支撑的知识 |
 | 定期维护 | 根据资料变动生成节点群总结，并按生命周期清理回收站内容 |
@@ -201,7 +203,7 @@ kemo-graph
 | Embedding | `siliconflow-Qwen-Qwen3-VL-Embedding-8B`（4096 维） |
 | Rerank | `siliconflow-Qwen-Qwen3-VL-Reranker-8B` |
 
-模型名、网关地址、切片策略、相似度阈值与维护节奏都由 `config/config.json` 控制。密钥可以显式写入 `kemo.api_key`，也可以由 `kemo.api_key_env` 指定的环境变量提供；显式配置优先。Web API 只返回掩码和来源状态，不回显真实密钥。共享或提交配置前仍应清空显式密钥。
+模型名、网关地址、切片策略、查询规划、相似度阈值与维护节奏都由 `config/config.json` 控制。默认的 `semantic_hierarchical` 先由 LLM 选择保真语义边界，再确定性组合中、大粒度上下文；`query_planning.mode=auto` 会保留原始问题，并生成少量同义改写或子问题参与多路召回。密钥可以显式写入 `kemo.api_key`，也可以由 `kemo.api_key_env` 指定的环境变量提供；显式配置优先。Web API 只返回掩码和来源状态，不回显真实密钥。共享或提交配置前仍应清空显式密钥。
 
 ---
 
@@ -274,6 +276,7 @@ python start.py ingest "project-a1b2c3.md" --mode graph
 python start.py query-graph "知识图谱如何增强检索"
 python start.py query-rag "如何导入 PDF" --top-k 10
 python start.py query-hybrid "图谱和向量检索的关系"
+python start.py query-answer "请综合图谱和原文回答"
 python start.py query-global "知识库有哪些主要主题？" --top-k 5
 
 # 强制跳过缓存，或管理 CLI/API/Web 共用的搜索历史
@@ -295,9 +298,48 @@ python start.py rebuild-all
 # 查询服务端持久化任务记录
 python start.py jobs --limit 20
 python start.py job-status "<job_id>"
+
+# 从公开 GitHub 仓库检查并安装应用更新
+python update.py
+
+# 也可分别检查版本或通过主 CLI 安装
+python start.py version
+python start.py update-check
+python start.py update
+
+# 完整退出旧 Web 进程并启动新的 Python 进程
+python restart.py
 ```
 
 CLI 输出结构化 JSON，适合 PowerShell 脚本、定时任务或本地自动化接续处理。
+
+应用更新以 `main/version.json` 的 SemVer 为准。根目录 `update.py` 是供终端用户无参数运行的公开入口，更新实现位于可见的 `update/` 包，运行状态、配置备份和重启日志位于 `update/runtime/`。自动安装仅支持 Git clone，且程序文件必须没有未提交修改；`.env`、`config/config.json`、知识库数据、外部文档、日志和输出目录不会被覆盖。更新会备份并合并用户配置、安装依赖、重新构建 Web 前端。网页入口位于“系统配置 → 系统维护”，更新完成后可直接点击“重启服务”：旧 FastAPI 进程会优雅退出，独立守护器确认旧 PID 消失后再启动全新的 Python 解释器。该能力要求使用 `python start_web.py` 启动项目。
+
+### 让知识库分布在知识和记忆所在位置
+
+面向 kemo-agent 生态，可以直接在任意绝对知识位置建立独立 Store。固定目录名为可见的 `kemo-graph-storage`：
+
+```powershell
+python start.py store-init `
+  --root "D:\agent\memory\permanent" `
+  --scope memory.permanent `
+  --owner-id user-001
+
+python start.py --store-root "D:\agent\memory\permanent" `
+  import "D:\documents\memory.md" --no-ingest
+
+python start.py --store-root "D:\agent\memory\permanent" ingest
+python start.py --store-root "D:\agent\memory\permanent" query-hybrid "问题"
+```
+
+每个位置都有自己的 `sources.db`、Graph、RAG、FAISS 与搜索缓存。跨位置查询不会合并数据库，只在内存中融合带 Store 身份的结果：
+
+```powershell
+python start.py query-federated "问题" `
+  --root "D:\agent\knowledge\global" `
+  --root "D:\agent\memory\permanent" `
+  --mode hybrid
+```
 
 ### 让智能体通过 API 使用知识
 
@@ -316,15 +358,22 @@ uvicorn api:app --host 127.0.0.1 --port 8000
 /api/v1/import
 /api/v1/ingest
 /api/v1/jobs/ingest
+/api/v1/jobs/summarize
 /api/v1/jobs
 /api/v1/maintenance/organize-graph
 /api/v1/maintenance/rebuild-knowledge-base
 /api/v1/maintenance/rebuild-all
 /api/v1/documents
+/api/v1/documents/{source_id}/content
+/api/v1/documents/delete-batch
 /api/v1/graph
+/api/v1/stores/initialize
+/api/v1/stores/import-path
+/api/v1/stores/query/federated
+/api/v1/stores/maintenance/rebuild-all
 ```
 
-导入资料、触发整理、读取图谱、获取原文片段并执行混合检索。
+导入资料、精确编辑 Markdown、批量删除、触发整理、读取图谱、获取原文片段并执行混合检索。编辑保存只把 Graph/RAG 标记为待重建，旧索引会保留到用户手动批量重建成功。
 
 这正是 kemo-agent 与 kemo-graph 的协作边界：
 
@@ -373,7 +422,7 @@ Markdown 移入 external/recycle/
 
 这样，修正一个错误概念不会轻易破坏仍被其他知识使用的资料。
 
-当前单条关系线删除能力仍在内部工具层，尚未公开为 HTTP API、CLI 或 Web 操作。它是后续会继续补齐的边界，而不是被隐藏的行为。
+关系详情与删除已通过 HTTP API 和 CLI 公开。删除关系会同步移除全部来源证据、使节点群总结失效并清理搜索缓存；调用前应先读取详情并核对 `A->[关系]->B` 与来源列表。
 
 ---
 
@@ -393,6 +442,22 @@ data/RAG/rag.db             文本切片、实体/群组原始向量与切片-�
 data/RAG/vector_index/      三类均可由 rag.db 重建的 FAISS 索引
 log/YYYY-MM-DD.tsv          按 UTC 日期滚动的运行日志
 ```
+
+分布式 Store 则将同一套权威数据放在知识位置本身：
+
+```text
+<store_root>/kemo-graph-storage/
+├─ manifest.json
+├─ sources.db
+├─ search_cache.db
+├─ content/markdown/ 与 content/recycle/
+├─ Graph/graph.db
+└─ RAG/rag.db 与 RAG/vector_index/
+```
+
+导入记录分别保留原文件 `origin_hash` 与规范 Markdown `content_hash`。配置中的 `portable_stores.allowed_roots` 可限制外部 API 能访问的绝对根目录。
+
+执行 Store 全量重建时只切换数据库与索引投影，`manifest.json` 和 `content/` 始终留在原位置；旧投影备份也保存在同一 `store_root`，不会回落到项目默认目录。
 
 本地保存不代表模型调用天然私密。
 
@@ -423,6 +488,12 @@ cd kemo-graph
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+如需运行后端测试，再安装开发依赖：
+
+```powershell
+pip install -r requirements-dev.txt
 ```
 
 复制环境变量示例：
@@ -481,6 +552,18 @@ python start.py import "E:\documents\first-note.md" --no-ingest
 
 初次使用建议先导入一份小型 Markdown 或 TXT，先检查转换后的内容，再决定是否开始图谱和 RAG 整理。
 
+### 发布前验证
+
+```powershell
+python -m pytest tests/ -v
+cd web\frontend
+npm ci
+npm test
+npm run build
+```
+
+项目发布版本只以根目录 `version.json` 为准；前端 `package.json` 的版本仅用于内部构建，不作为应用发布版本。版本变化与迁移说明见 [CHANGELOG.md](CHANGELOG.md)。
+
 ---
 
 ## 部署与访问边界
@@ -528,9 +611,10 @@ kemo-graph 不试图成为一个替代所有文件管理、所有数据库或所
 - 高速结构化 GraphDraft、大文档有限并行与单文档事务回滚；
 - entity/relation mention 来源事实层与节点/关系 MAX 证据权重；
 - 保真型 LLM 语义切分，以及切片、实体、群组三类本地 FAISS 索引；
-- 图谱、向量、混合、全局四种检索模式，以及一跳/多跳人类可读关系链；
+- 图谱、向量、混合、LLM 回答、全局五种检索模式，以及一跳/多跳人类可读关系链；
 - Web、CLI、外部 HTTP API 三个入口；
-- 文档与节点删除、回收站、节点群总结与定时维护；
+- 文档、节点与关系删除、回收站、节点群总结与定时维护；
+- 绝对路径分布式 Store、独立数据库/FAISS 与多 Store 联合查询；
 - 图谱整理、变化文档知识库重建和安全的全项目影子重建；
 - 服务端持久化后台任务与跨页面运行记录；
 - 按日 TSV 运行日志与敏感信息脱敏；
@@ -538,7 +622,7 @@ kemo-graph 不试图成为一个替代所有文件管理、所有数据库或所
 
 仍在持续打磨的方向：
 
-- 单条关系线删除的公开 API、CLI 与 Web 交互；
+- 关系证据审查与人工修改的 Web 交互；
 - 更多真实文档版式与复杂表格的转换质量；
 - 大容量知识库与高并发检索场景下的存储、索引策略；
 - 外部 API 的内建鉴权、权限分层与安全部署体验；

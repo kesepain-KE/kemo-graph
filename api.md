@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.0.0`
+> **当前版本**：`1.1.0`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
 
 ---
@@ -43,7 +43,7 @@ http://127.0.0.1:8000/api/v1
 - 所有 JSON 请求模型拒绝未声明字段；不要传入额外参数。
 - 图谱或 RAG 正在构建时，依赖该数据的一些读取/修改请求会返回 `409 PROCESSING`，调用方应等待后重试。
 - 删除操作具有副作用，智能体执行前应先查询、确认目标 ID 与影响范围。
-- 单条关系删除当前**没有公开 HTTP API**；参见 [9. 已知能力边界](#9-已知能力边界)。
+- 节点和关系删除均有公开 HTTP API；删除前应先调用详情端点核对来源和影响范围。
 
 ---
 
@@ -85,6 +85,9 @@ http://127.0.0.1:8000/api/v1
 | 422 | `IMPORT_FAILED` | 导入过程失败 | 查看 message 与服务日志 |
 | 502 | `INGEST_FAILED` | 转换成功，但图谱/RAG 整理失败 | 文档已保留，可稍后调用 ingest 重试 |
 | 503 | `NOT_INITIALIZED` | 知识库尚未初始化 | 先导入或扫描至少一篇文档 |
+| 403 | `STORE_ACCESS_DENIED` | Store 路径不符合绝对路径或 allowlist 边界 | 修正路径或 portable_stores 配置 |
+| 404 | `STORE_NOT_INITIALIZED` | 目标位置没有有效 manifest | 先调用 stores/initialize |
+| 422 | `STORE_INVALID` | Store 清单、scope、owner 或目录状态非法 | 检查 kemo-graph-storage/manifest.json |
 | 500 | `INTERNAL` | 未预期内部错误 | 查看 `log/YYYY-MM-DD.tsv` |
 
 ---
@@ -394,7 +397,28 @@ Graph 与 RAG 结果不去重，因为一个是结构关系，另一个是文档
 
 ---
 
-### 4.4 全局查询
+### 4.4 混合检索问答
+
+```http
+POST /api/v1/query/answer
+Content-Type: application/json
+```
+
+请求字段与混合查询相同。系统先完成混合检索，再把图谱关系链、节点摘要、RAG 原文片段、实体与群组上下文交给 LLM；模型只能依据这些只读检索证据回答。
+
+响应 `data`：
+
+```text
+query
+answer       # 带来源说明的知识库回答
+retrieval    # 完整混合检索结果，供调用方审计答案依据
+```
+
+若没有检索证据，接口不调用模型，直接返回证据不足提示。
+
+---
+
+### 4.5 全局查询
 
 ```http
 POST /api/v1/query/global
@@ -427,7 +451,7 @@ key_entities    # 关键节点、权重、引用次数及所属群组
 
 ---
 
-### 4.5 搜索缓存与历史
+### 4.6 搜索缓存与历史
 
 ```http
 GET    /api/v1/search/cache?page=1&page_size=20
@@ -510,7 +534,25 @@ GET /api/v1/documents?status=active&page=1&page_size=20
 GET /api/v1/documents/{source_id}/content
 ```
 
-返回 `source_id`、`relative_path` 与 `content`。内容是知识库实际使用的 Markdown，而不是原始 PDF/DOCX 二进制文件。
+返回 `source_id`、`relative_path`、`content_hash`、Graph/RAG 状态与 `content`。内容是知识库实际使用的 Markdown，而不是原始 PDF/DOCX 二进制文件。
+
+### 5.2.1 精确编辑 Markdown
+
+```http
+PUT /api/v1/documents/{source_id}/content
+Content-Type: application/json
+```
+
+```json
+{
+  "content": "# 修改后的 Markdown\n",
+  "expected_content_hash": "读取内容时获得的 64 位 SHA-256"
+}
+```
+
+`expected_content_hash` 用于防止多个客户端互相覆盖。若文档在读取后已被其他操作更新，返回 HTTP 409 / `CONTENT_CONFLICT`。
+
+保存成功后只原子替换 Markdown、重算 `content_hash`，并把 `graph_status` 与 `rag_status` 设为 `pending`。旧 `graph_hash`、`rag_hash`、图谱和向量继续保留，直到调用 `/jobs/ingest` 或 `/ingest` 成功完成先准备后替换。保存本身不调用模型。
 
 ---
 
@@ -557,7 +599,10 @@ Invoke-RestMethod `
     "markdown_relative_path": "markdown/example-a1b2c3d4.md",
     "conversion_status": "completed",
     "ingest_status": "pending",
-    "size": 123456
+    "size": 123456,
+    "origin_hash": "原文件 SHA-256",
+    "content_hash": "规范 Markdown SHA-256",
+    "origin_modified_at": "UTC ISO 时间"
   },
   "error": null
 }
@@ -665,11 +710,34 @@ graph_deleted
 rag_deleted
 ```
 
+### 5.7 批量删除与当前库全部删除
+
+```http
+POST   /api/v1/documents/delete-batch
+DELETE /api/v1/documents?confirm=delete-all
+```
+
+批量请求体：
+
+```json
+{"source_ids": ["source-uuid-1", "source-uuid-2"]}
+```
+
+两者都只作用于当前 API 实例绑定的知识库，不会跨 Portable Store。返回 `requested / deleted / failed / documents / failures`；批量操作逐篇报告失败，已成功项不会因另一篇失败而伪装成未执行。调用方必须在执行前向用户显示影响数量并二次确认；清空端点还要求固定确认参数 `confirm=delete-all`。
+
 ---
 
-## 6. 图谱节点 API
+## 6. 图谱节点与关系 API
 
-### 6.1 删除节点
+### 6.1 获取节点详情
+
+```http
+GET /api/v1/nodes/{node_id}
+```
+
+返回节点摘要、别名、标签、节点权重、引用次数、全部来源绑定和双向关系。来源包含 `original_path`、`relative_path`、`origin_hash`、处理状态、证据文本与证据权重。
+
+### 6.2 删除节点
 
 ```http
 DELETE /api/v1/nodes/{node_id}
@@ -704,6 +772,26 @@ DELETE /api/v1/nodes/{node_id}
   "error": null
 }
 ```
+
+### 6.3 获取关系详情
+
+```http
+GET /api/v1/relations/{edge_id}
+```
+
+返回源/目标节点、关系、权重、支持数和全部文档证据。`path` 固定使用人类可读格式：
+
+```text
+A->[关系]->B
+```
+
+### 6.4 删除关系
+
+```http
+DELETE /api/v1/relations/{edge_id}
+```
+
+这是破坏性操作。系统删除关系及全部 `edge_sources` 证据，使旧节点群总结失效，同步清理群组辅助向量与搜索缓存。节点和源文档本身不会因单独删除关系而删除。
 
 ---
 
@@ -767,7 +855,15 @@ Content-Type: application/json
 
 与同步 `/ingest` 使用相同参数，但立即返回 job。网页导入完成后使用此端点，避免页面切换或请求连接中断影响长任务。
 
-### 7.7 知识图谱整理
+### 7.7 后台总结节点群
+
+```http
+POST /api/v1/jobs/summarize
+```
+
+立即返回 `summarize` job，在后台根据图谱连通分量生成节点群摘要。网页端可通过 `/jobs/{job_id}` 或顶部“运行记录”持续追踪，不受页面切换影响；该任务可能调用图谱 LLM。
+
+### 7.8 知识图谱整理
 
 ```http
 POST /api/v1/maintenance/organize-graph
@@ -778,7 +874,7 @@ Content-Type: application/json
 
 只整理 Graph 投影：合并已检查的重叠节点/关系、迁移来源事实、重算权重和 `chunk_nodes`。不重读 Markdown，不调用 Embedding。
 
-### 7.8 变化文档知识库重建
+### 7.9 变化文档知识库重建
 
 ```http
 POST /api/v1/maintenance/rebuild-knowledge-base
@@ -786,7 +882,7 @@ POST /api/v1/maintenance/rebuild-knowledge-base
 
 重试新增、变化、删除和失败文档；未变化文档按哈希跳过。
 
-### 7.9 全项目影子重建
+### 7.10 全项目影子重建
 
 ```http
 POST /api/v1/maintenance/rebuild-all
@@ -794,7 +890,7 @@ POST /api/v1/maintenance/rebuild-all
 
 在影子目录从全部活动 Markdown 重建 Graph、RAG、FAISS 和派生关联。校验通过才切换正式目录，并在 `data/` 同级保留旧知识库备份；失败不改变正式库。
 
-### 7.10 查询后台任务
+### 7.11 查询后台任务
 
 ```http
 GET /api/v1/jobs?limit=100
@@ -812,6 +908,41 @@ GET /api/v1/jobs/{job_id}
 | `events[]` | 有序阶段与错误事件 |
 
 任务状态持久化在 `sources.db`。服务重启后遗留的未完成任务会标记为 failed，不会永久卡住。
+
+### 7.12 检查与安装应用更新
+
+```http
+GET  /api/v1/update/status
+POST /api/v1/update/check
+POST /api/v1/update/apply
+```
+
+- `status` 只读取本地版本、上次检查状态和 Git 工作区预检，不访问网络。
+- `check` 从公开仓库 `kesepain-KE/kemo-graph` 的 `main/version.json` 检查最新 SemVer。
+- `apply` 将更新作为 `kind=update` 的持久化后台任务提交，只允许来自 `localhost`、`127.0.0.1` 或 `::1` 的请求。
+- 自动安装只支持可安全 fast-forward 的 Git 工作区；程序文件有未提交修改时返回 `409 UPDATE_BLOCKED`。
+- 用户配置和运行数据不参与源码覆盖。安装成功后响应任务结果中的 `restart_required` 为 `true`，调用方应提示用户重启 Web 服务。
+- 终端用户也可在项目根目录无参数运行 `python update.py`；更新实现位于 `update/updater.py`，运行状态和备份位于 `update/runtime/`。
+
+### 7.13 Web 进程底层重启
+
+```http
+GET  /api/v1/system/runtime
+POST /api/v1/system/restart
+```
+
+重启请求体必须显式确认：
+
+```json
+{"confirm": "restart"}
+```
+
+- 只允许本机调用，并且仅在使用 `python start_web.py` 启动时可用。
+- 服务先创建独立重启守护器，再向 Uvicorn 请求优雅退出；调度器与维护任务管理器会执行正常关闭流程。
+- 存在运行中或排队中的后台任务、每日维护正在执行时，服务会拒绝重启，避免中断数据库和索引写入。
+- 守护器等待旧 PID 完全消失和端口释放，再用原始参数启动新的 Python 解释器。
+- `runtime` 返回当前 PID，网页据此确认连接到的是新进程，而不是短暂仍存活的旧实例。
+- 也可以在项目根目录运行 `python restart.py`，该模块会读取 `update/runtime/web-runtime.json` 并调用同一重启流程。
 
 ---
 
@@ -858,27 +989,11 @@ GET /graph 或 POST /query/graph → 检查节点/边/来源影响 → DELETE /n
 
 ## 9. 已知能力边界
 
-### 9.1 单条关系线删除未对外暴露
-
-虽然内部图谱工具层存在单条关系删除能力，但当前 HTTP API **没有**：
-
-```text
-DELETE /api/v1/relations/{edge_id}
-```
-
-CLI 和 Web 前端也没有单条关系删除入口。
-
-目前如需消除关系，只能：
-
-- 删除产生该关系证据的源文档；或
-- 删除关系关联的节点（会删除该节点全部关系）；或
-- 后续新增正式的关系删除 API。
-
-### 9.2 不支持远程 URL 导入
+### 9.1 不支持远程 URL 导入
 
 `/import` 只接收上传的本地文件，不接收 URL。调用方若持有网络 URL，应先自行安全下载、校验后再上传。
 
-### 9.3 不支持恢复回收站文件
+### 9.2 不支持恢复回收站文件
 
 用户主动删除的文档或节点关联独占文档会移入 `external/recycle/`，但当前没有恢复 API。到期清理后永久删除。
 
@@ -908,3 +1023,159 @@ KEMO_GRAPH_CONFIG
 KEMO_GRAPH_WEB_HOST
 KEMO_GRAPH_WEB_PORT
 ```
+
+---
+
+## 11. 绝对路径分布式 Store API
+
+面向 kemo-agent 和组织级全局扩展，服务可在任意绝对知识位置建立独立数据库与索引。调用方传入知识位置 `store_root`，系统固定使用：
+
+```text
+<store_root>\kemo-graph-storage\
+```
+
+其中包含该位置独立的 `sources.db`、`search_cache.db`、`Graph/graph.db`、`RAG/rag.db`、FAISS 索引、规范 Markdown 与回收站。不同 Store 不共享数据库；联合查询只在内存中融合。
+
+### 11.1 初始化
+
+```http
+POST /api/v1/stores/initialize
+Content-Type: application/json
+```
+
+```json
+{
+  "store_root": "D:\\agent\\memory\\permanent",
+  "scope": "memory.permanent",
+  "owner_id": "user-001",
+  "display_name": "永久记忆"
+}
+```
+
+`scope` 取值：
+
+```text
+knowledge.global
+knowledge.shared
+knowledge.user
+memory.temporary
+memory.important
+memory.permanent
+```
+
+重复初始化是幂等的，并保持原 `store_id`。已有 Store 不允许静默变更 scope/owner。
+
+### 11.2 响应身份
+
+除 initialize/info 与 federated 外，单 Store 响应的 `data` 统一为：
+
+```json
+{
+  "store": {
+    "store_id": "uuid",
+    "scope": "memory.permanent",
+    "owner_id": "user-001",
+    "root_path": "D:\\agent\\memory\\permanent"
+  },
+  "result": {}
+}
+```
+
+调用方应使用 `store_id` 与 `scope` 归属结果，不能只依赖路径字符串。
+
+### 11.3 完整端点索引
+
+```text
+# 生命周期和导入
+POST /api/v1/stores/initialize
+POST /api/v1/stores/info
+POST /api/v1/stores/status
+POST /api/v1/stores/import-path
+POST /api/v1/stores/upload
+POST /api/v1/stores/ingest
+
+# 检索与回答
+POST /api/v1/stores/query/graph
+POST /api/v1/stores/query/rag
+POST /api/v1/stores/query/hybrid
+POST /api/v1/stores/query/answer
+POST /api/v1/stores/query/global
+POST /api/v1/stores/query/federated
+
+# 文档、节点、关系
+POST /api/v1/stores/documents/list
+POST /api/v1/stores/documents/content
+POST /api/v1/stores/documents/update
+POST /api/v1/stores/documents/delete
+POST /api/v1/stores/documents/delete-batch
+POST /api/v1/stores/documents/delete-all
+POST /api/v1/stores/nodes/get
+POST /api/v1/stores/nodes/delete
+POST /api/v1/stores/relations/get
+POST /api/v1/stores/relations/delete
+
+# 图谱和 GPU 分页
+POST /api/v1/stores/graph/full
+POST /api/v1/stores/graph/visualization/meta
+POST /api/v1/stores/graph/visualization/nodes
+POST /api/v1/stores/graph/visualization/edges
+POST /api/v1/stores/graph/neighborhood
+
+# 搜索缓存
+POST /api/v1/stores/cache/list
+POST /api/v1/stores/cache/show
+POST /api/v1/stores/cache/clear
+
+# 维护与任务历史
+POST /api/v1/stores/maintenance/organize-graph
+POST /api/v1/stores/maintenance/rebuild-knowledge-base
+POST /api/v1/stores/maintenance/rebuild-all
+POST /api/v1/stores/maintenance/summarize
+POST /api/v1/stores/maintenance/cleanup-recycle
+POST /api/v1/stores/jobs/list
+POST /api/v1/stores/jobs/get
+```
+
+绝对路径放在 JSON body，不放入 URL path/query。Store 维护端点当前同步执行，以免任务被错误提交到默认知识库的后台管理器。
+
+### 11.4 绝对路径导入
+
+```http
+POST /api/v1/stores/import-path
+```
+
+```json
+{
+  "store_root": "D:\\agent\\knowledge\\user",
+  "path": "D:\\documents\\source.pdf",
+  "ingest_after_import": false
+}
+```
+
+`path` 必须为绝对普通文件路径。返回同时包含原文件 `origin_hash` 与规范 Markdown `content_hash`，二者不得混用。
+
+### 11.5 联合查询
+
+```http
+POST /api/v1/stores/query/federated
+```
+
+```json
+{
+  "store_roots": [
+    "D:\\agent\\knowledge\\global",
+    "D:\\agent\\memory\\permanent"
+  ],
+  "query": "问题",
+  "mode": "hybrid",
+  "top_k": 20,
+  "graph_depth": 3,
+  "force": false
+}
+```
+
+支持 `graph/rag/hybrid/global/answer`。响应中的每条 `merged_results` 带 Store 身份和 `federated_score`。单 Store 失败记录在 `stores_failed`，不会取消其他 Store 的成功结果；调用方必须检查成功数与失败列表。
+
+更完整的目录、清单、迁移和隔离规则见：
+
+> `开发文档/编程方案/16-绝对路径分布式知识库与全量API.md`
