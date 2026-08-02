@@ -348,6 +348,9 @@
 .rag-result-card__meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 10.125px; }
 .rag-result-card__meta strong { color: var(--amber); }
 .rag-result-card__content { margin: 11px 0; color: var(--text-soft); font-size: 12.375px; line-height: 1.75; }
+.rag-result-card__match { margin: 0 0 11px; padding: 9px 11px; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--text-soft); background: var(--surface); font-size: 11.25px; }
+.rag-result-card__match summary { color: var(--cyan); cursor: pointer; font-size: 10.125px; font-weight: 720; user-select: none; }
+.rag-result-card__match[open] summary { margin-bottom: 8px; }
 .rag-result-card footer { padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); display: flex; align-items: center; gap: 7px; font-size: 10.125px; }
 .mini-file-badge { padding: 3px 4px; border-radius: 4px; color: #9a5c07; background: var(--amber-soft); font-size: 7.875px; font-weight: 800; }
 .global-result__answer { margin-top: 16px; padding: 17px; border: 1px solid rgba(114, 88, 199, 0.18); border-radius: 14px; color: var(--text-soft); background: var(--purple-soft); font-size: 13.5px; line-height: 1.85; }

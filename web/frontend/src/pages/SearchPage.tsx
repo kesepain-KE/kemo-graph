@@ -233,24 +233,43 @@ function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: Re
         <div><h3>RAG 片段</h3><p>{data.results.length} 条语义召回</p></div>
       </div>
       <div className="rag-result-list">
-        {data.results.map((result, index) => (
+        {data.results.map((result, index) => {
+          const contextContent = result.context?.content?.trim();
+          const matchedContent = result.content.trim();
+          const hasParentContext = Boolean(
+            contextContent && contextContent !== matchedContent,
+          );
+          return (
           <article className="rag-result-card" key={result.chunk_id}>
             <div className="rag-result-card__meta">
               <span>
                 #{String(index + 1).padStart(2, "0")}
                 {result.granularity ? ` · ${granularityLabels[result.granularity]}` : ""}
+                {hasParentContext && result.context
+                  ? ` · 展开为${granularityLabels[result.context.granularity]}上下文`
+                  : ""}
               </span>
               <strong>{Math.round(result.score * 100)}%</strong>
             </div>
             <div className="rag-result-card__content">
-              <SearchResultText content={result.content} displayMode={displayMode} />
+              <SearchResultText
+                content={contextContent || matchedContent}
+                displayMode={displayMode}
+              />
             </div>
+            {hasParentContext ? (
+              <details className="rag-result-card__match">
+                <summary>查看实际命中的精确片段</summary>
+                <SearchResultText content={matchedContent} displayMode={displayMode} />
+              </details>
+            ) : null}
             <footer>
               <FileBadge />
               <span>{result.source.relative_path ?? result.source.source_id}</span>
             </footer>
           </article>
-        ))}
+          );
+        })}
         {!data.results.length ? <div className="empty-result">没有超过阈值的文档片段</div> : null}
       </div>
     </section>
