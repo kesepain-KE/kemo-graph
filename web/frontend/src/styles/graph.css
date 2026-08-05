@@ -380,10 +380,13 @@
   fill: #78847f;
   paint-order: stroke;
   stroke: #fafbfa;
-  stroke-width: 5px;
+  stroke-width: 5.5px;
   stroke-linejoin: round;
-  font-size: 10.125px;
-  font-weight: 650;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 11.25px;
+  font-weight: 700;
+  text-rendering: geometricPrecision;
+  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
@@ -414,19 +417,17 @@
 
 .graph-node > text {
   fill: #26332f;
-  font-size: 12.375px;
-  font-weight: 720;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 1.5px;
+  stroke-linejoin: round;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 13.25px;
+  font-weight: 700;
   letter-spacing: -0.01em;
+  text-rendering: geometricPrecision;
+  vector-effect: non-scaling-stroke;
   pointer-events: none;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
-}
-
-.graph-node .graph-node__count {
-  fill: #788580;
-  font-size: 9px;
-  font-weight: 550;
-  letter-spacing: 0.04em;
-  text-shadow: none;
 }
 
 .graph-node--core .graph-node__body {
@@ -2009,8 +2010,8 @@
   stroke: #10131b;
 }
 
-.graph-canvas.is-obsidian .graph-node .graph-node__count {
-  fill: #aab4b0;
+.graph-canvas.is-obsidian .graph-node > text {
+  stroke: rgba(18, 22, 32, 0.94);
 }
 
 .graph-canvas.is-obsidian .graph-legend,

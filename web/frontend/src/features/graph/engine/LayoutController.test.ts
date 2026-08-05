@@ -65,10 +65,10 @@ afterEach(() => {
 });
 
 describe("LayoutController", () => {
-  it("selects WebGPU only for high mode or sufficiently large automatic graphs", () => {
+  it("prefers WebGPU for every non-empty graph outside compatibility mode", () => {
     expect(shouldPreferWebGpu("compatible", 5000)).toBe(false);
-    expect(shouldPreferWebGpu("auto", 255)).toBe(false);
-    expect(shouldPreferWebGpu("auto", 256)).toBe(true);
+    expect(shouldPreferWebGpu("auto", 0)).toBe(false);
+    expect(shouldPreferWebGpu("auto", 1)).toBe(true);
     expect(shouldPreferWebGpu("high", 2)).toBe(true);
   });
 

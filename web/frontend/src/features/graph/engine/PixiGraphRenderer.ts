@@ -44,6 +44,11 @@ const COLORS = {
 
 const NODE_POINTER_SAFETY_PX = 12;
 const EDGE_POINTER_THRESHOLD_PX = 10;
+const GRAPH_FONT_FAMILY = "Inter, 'Segoe UI', 'Microsoft YaHei', sans-serif";
+
+function graphTextResolution(): number {
+  return Math.min(3, Math.max(2, (globalThis.devicePixelRatio || 1) * 1.5));
+}
 
 export class PixiGraphRenderer implements GraphRenderer {
   readonly backend = "pixi-webgl";
@@ -106,7 +111,7 @@ export class PixiGraphRenderer implements GraphRenderer {
     const app = new Application();
     await app.init({
       preference: "webgl",
-      powerPreference: scene.performance.mode === "high" ? "high-performance" : undefined,
+      powerPreference: "high-performance",
       antialias: true,
       backgroundAlpha: 0,
       autoDensity: true,
@@ -452,11 +457,18 @@ export class PixiGraphRenderer implements GraphRenderer {
     if (!label) {
       label = new Text({
         text: edge.relation,
+        resolution: graphTextResolution(),
+        roundPixels: true,
         style: {
           fill: edgeColor,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 10,
-          fontWeight: "600",
+          fontFamily: GRAPH_FONT_FAMILY,
+          fontSize: 11.5,
+          fontWeight: "700",
+          letterSpacing: 0.1,
+          stroke: {
+            color: this.scene?.appearance.canvasPreset === "obsidian" ? 0x10131b : 0xfafbfa,
+            width: 4,
+          },
         },
       });
       label.anchor.set(0.5);
@@ -593,32 +605,24 @@ export class PixiGraphRenderer implements GraphRenderer {
     if (this.shouldShowNodeLabel(node, selected, highlighted)) {
       const label = new Text({
         text: graphLabel(node.keyword),
+        resolution: graphTextResolution(),
+        roundPixels: true,
         style: {
           fill: palette.text,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 12,
+          fontFamily: GRAPH_FONT_FAMILY,
+          fontSize: 13,
           fontWeight: "700",
           align: "center",
+          letterSpacing: -0.1,
+          stroke: {
+            color: this.scene.appearance.canvasPreset === "obsidian" ? 0x121620 : 0xffffff,
+            width: 1.5,
+          },
         },
       });
       label.anchor.set(0.5);
       label.alpha = this.scene.appearance.labelOpacity;
       container.addChild(label);
-      if (selected || this.scene.performance.labelDensity === "high") {
-        const count = new Text({
-          text: `ref · ${node.ref_count}`,
-          style: {
-            fill: this.scene.appearance.canvasPreset === "obsidian" ? 0xaab4b0 : COLORS.muted,
-            fontFamily: "Inter, sans-serif",
-            fontSize: 9,
-            fontWeight: "500",
-          },
-        });
-        count.anchor.set(0.5, 0);
-        count.alpha = this.scene.appearance.labelOpacity;
-        count.position.set(0, radius + 9);
-        container.addChild(count);
-      }
     }
     container.on("pointerdown", (event: FederatedPointerEvent) => {
       event.stopPropagation();

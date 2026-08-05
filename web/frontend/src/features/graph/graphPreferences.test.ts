@@ -27,6 +27,14 @@ describe("graph preferences", () => {
     expect(DEFAULT_GRAPH_PREFERENCES.view.depth).toBe(2);
   });
 
+  it("defaults to the GPU-first high-performance profile", () => {
+    expect(DEFAULT_GRAPH_PREFERENCES.performance).toEqual({
+      mode: "high",
+      labelDensity: "high",
+      maxFps: 120,
+    });
+  });
+
   it("uses stable real-group colors without keyword guessing", () => {
     expect(groupColor("group-1")).toBe(groupColor("group-1"));
     expect(resolveNodeVisualStyle(node, "concept", [], "light").stroke).toBe(

@@ -37,7 +37,9 @@ type ImportJob = {
 
 const PAGE_SIZE = 6;
 const ALLOWED_IMPORT_EXTENSIONS = new Set([
-  "pdf", "docx", "md", "markdown", "txt", "html", "htm", "rst", "csv",
+  "pdf", "docx", "pptx", "xlsx", "xlsm", "xls", "epub", "rtf",
+  "md", "markdown", "txt", "log", "html", "htm", "rst", "csv", "tsv",
+  "json", "jsonl", "ndjson", "yaml", "yml", "xml",
 ]);
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 const STATUS_FILTER_OPTIONS = [
@@ -358,7 +360,7 @@ export function DocumentsPage() {
         description="导入、预览并精确编辑 Markdown；内容变化后由你决定何时批量重建 Graph 与 RAG。"
         actions={
           <>
-            <input ref={inputRef} hidden multiple type="file" accept=".pdf,.docx,.md,.markdown,.txt,.html,.htm,.rst,.csv" onChange={(event) => void handleFiles(event.target.files)} />
+            <input ref={inputRef} hidden multiple type="file" accept=".pdf,.docx,.pptx,.xlsx,.xlsm,.xls,.epub,.rtf,.md,.markdown,.txt,.log,.html,.htm,.rst,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.xml" onChange={(event) => void handleFiles(event.target.files)} />
             <button className="button button--secondary" disabled={uploading || ingesting} onClick={() => inputRef.current?.click()}>
               {uploading ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}
               {uploading ? "正在导入" : "导入文档"}

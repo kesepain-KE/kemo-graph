@@ -377,8 +377,7 @@ export function shouldPreferWebGpu(
   mode: GraphPerformanceMode,
   nodeCount: number,
 ): boolean {
-  if (mode === "compatible" || nodeCount === 0) return false;
-  return mode === "high" || nodeCount >= 256;
+  return mode !== "compatible" && nodeCount > 0;
 }
 
 function prepareLayoutGraph(

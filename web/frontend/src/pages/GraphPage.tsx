@@ -365,7 +365,6 @@ function GraphCanvas({
                   style={{ fill: visualStyle?.fill, stroke: visualStyle?.stroke }}
                 />
                 {shouldShowSvgNodeLabel(node, kind, selected, highlighted, scene, zoom) ? (
-                  <>
                     <text
                       textAnchor="middle"
                       y="4"
@@ -373,18 +372,7 @@ function GraphCanvas({
                     >
                       {graphLabel(node.keyword)}
                     </text>
-                    {selected || scene.performance.labelDensity === "high" ? (
-                      <text
-                        className="graph-node__count"
-                        textAnchor="middle"
-                        y={radius + 20}
-                        style={{ opacity: scene.appearance.labelOpacity }}
-                      >
-                        ref · {node.ref_count}
-                      </text>
-                    ) : null}
-                  </>
-                ) : null}
+                  ) : null}
               </g>
             );
           })}

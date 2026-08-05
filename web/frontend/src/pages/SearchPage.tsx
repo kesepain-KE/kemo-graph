@@ -2,6 +2,8 @@ import {
   ArrowRight,
   Bot,
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
   Code2,
   FileText,
   GitFork,
@@ -71,6 +73,7 @@ const granularityLabels = {
   medium: "中粒度",
   large: "大粒度",
 } as const;
+const GRAPH_RESULT_PAGE_SIZE = 6;
 
 function SearchResultText({
   content,
@@ -190,15 +193,25 @@ function GraphResults({
   displayMode: ResultDisplayMode;
 }) {
   const nodes = [...data.hit_nodes, ...data.expanded_nodes];
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(nodes.length / GRAPH_RESULT_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * GRAPH_RESULT_PAGE_SIZE;
+  const visibleNodes = nodes.slice(pageStart, pageStart + GRAPH_RESULT_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [data.query]);
+
   return (
-    <section className="result-column">
+    <section className="result-column result-column--graph">
       <div className="result-column__heading">
         <span className="result-icon result-icon--graph"><Network size={17} /></span>
         <div><h3>图谱结果</h3><p>{nodes.length} 个节点 · {data.edges.length} 条关系</p></div>
       </div>
       <RelationshipResults data={data} nodes={nodes} onNode={onNode} />
-      <div className="node-result-grid">
-        {nodes.map((node) => (
+      <div className="node-result-grid" aria-live="polite">
+        {visibleNodes.map((node) => (
           <button className="node-result-card" key={`${node.node_id}-${node.depth ?? 0}`} onClick={() => onNode(node)}>
             <span className="node-result-card__dot" />
             <span>
@@ -213,6 +226,30 @@ function GraphResults({
         ))}
         {!nodes.length ? <div className="empty-result">没有命中图谱节点</div> : null}
       </div>
+      {nodes.length > GRAPH_RESULT_PAGE_SIZE ? (
+        <footer className="graph-result-pagination" aria-label="图谱检索结果分页">
+          <button
+            type="button"
+            aria-label="上一页图谱结果"
+            disabled={currentPage <= 1}
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span>
+            第 {currentPage} / {pageCount} 页
+            <small>每页最多 {GRAPH_RESULT_PAGE_SIZE} 个节点</small>
+          </span>
+          <button
+            type="button"
+            aria-label="下一页图谱结果"
+            disabled={currentPage >= pageCount}
+            onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </footer>
+      ) : null}
       {data.groups.length ? (
         <div className="group-summary">
           <span>群组摘要</span>
@@ -227,7 +264,7 @@ function GraphResults({
 
 function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: ResultDisplayMode }) {
   return (
-    <section className="result-column">
+    <section className="result-column result-column--rag">
       <div className="result-column__heading">
         <span className="result-icon result-icon--rag"><BookOpen size={17} /></span>
         <div><h3>RAG 片段</h3><p>{data.results.length} 条语义召回</p></div>

@@ -454,8 +454,8 @@ export function GraphControlPanel({
             value={preferences.performance.mode}
             onChange={(mode) => setPerformance({ mode: mode as GraphPreferences["performance"]["mode"] })}
             options={[
-              { value: "auto", label: "自动" },
               { value: "high", label: "高性能" },
+              { value: "auto", label: "GPU 优先（自动）" },
               { value: "compatible", label: "兼容模式（SVG）" },
             ]}
           />
@@ -480,7 +480,9 @@ export function GraphControlPanel({
           {layoutStatus?.fallbackReason ? (
             <p className="graph-backend-warning">WebGPU 已回退：{layoutStatus.fallbackReason}</p>
           ) : null}
-          <p className="graph-control-hint">浏览器只能请求高性能 GPU，不能强制指定独立显卡。</p>
+          <p className="graph-control-hint">
+            优先使用 WebGPU 布局与 PixiJS WebGL 渲染；GPU 不可用时回退 Worker，SVG 仅作为最后兼容层。浏览器不能强制指定独立显卡。
+          </p>
         </ControlSection>
           </div>
         ) : null}

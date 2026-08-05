@@ -92,9 +92,9 @@ export const DEFAULT_GRAPH_PREFERENCES: GraphPreferences = {
   },
   force: { ...DEFAULT_FORCE_SETTINGS },
   performance: {
-    mode: "auto",
-    labelDensity: "balanced",
-    maxFps: 60,
+    mode: "high",
+    labelDensity: "high",
+    maxFps: 120,
   },
 };
 
@@ -262,13 +262,18 @@ function sanitizePreferences(value: unknown): GraphPreferences {
       stableEnergy: numeric(force.stableEnergy, 0.001, 0.2, DEFAULT_FORCE_SETTINGS.stableEnergy),
     },
     performance: {
-      mode: performance.mode === "high" || performance.mode === "compatible"
-        ? performance.mode
-        : "auto",
-      labelDensity: performance.labelDensity === "low" || performance.labelDensity === "high"
-        ? performance.labelDensity
-        : "balanced",
-      maxFps: integer(performance.maxFps, 20, 120, 60),
+      mode: ["auto", "high", "compatible"].includes(String(performance.mode))
+        ? performance.mode as GraphPerformanceSettings["mode"]
+        : DEFAULT_GRAPH_PREFERENCES.performance.mode,
+      labelDensity: ["low", "balanced", "high"].includes(String(performance.labelDensity))
+        ? performance.labelDensity as GraphPerformanceSettings["labelDensity"]
+        : DEFAULT_GRAPH_PREFERENCES.performance.labelDensity,
+      maxFps: integer(
+        performance.maxFps,
+        20,
+        120,
+        DEFAULT_GRAPH_PREFERENCES.performance.maxFps,
+      ),
     },
   };
 }
