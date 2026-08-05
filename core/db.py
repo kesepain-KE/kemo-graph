@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS sources (
     origin_hash TEXT,
     origin_size INTEGER,
     origin_modified_at TEXT,
+    source_uri TEXT,
+    source_type TEXT,
+    source_revision TEXT,
+    source_updated_at TEXT,
+    source_metadata_json TEXT NOT NULL DEFAULT '{}',
+    external_content_hash TEXT,
+    last_synced_at TEXT,
     created_at TEXT,
     updated_at TEXT
 );
@@ -34,7 +41,6 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_path_hash ON sources(path_hash);
 CREATE INDEX IF NOT EXISTS idx_sources_graph_status ON sources(graph_status);
 CREATE INDEX IF NOT EXISTS idx_sources_rag_status ON sources(rag_status);
-
 CREATE TABLE IF NOT EXISTS maintenance_jobs (
     job_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -337,6 +343,7 @@ def initialize_databases(
     _initialize_sqlite(paths.rag_db, RAG_SCHEMA)
     initialize_search_cache(paths)
     _ensure_source_origin_columns(paths.sources_db)
+    _ensure_source_external_columns(paths.sources_db)
     _ensure_rag_vector_space_column(paths.rag_db)
     _ensure_rag_chunk_hierarchy_columns(paths.rag_db)
     _ensure_rag_entity_community_tables(paths.rag_db)
@@ -371,6 +378,47 @@ def _ensure_source_origin_columns(path: Path) -> None:
                 connection.execute(
                     f"ALTER TABLE sources ADD COLUMN {name} {declaration}"
                 )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def _ensure_source_external_columns(path: Path) -> None:
+    """幂等迁移旧 sources.db，补齐外部表记录的稳定身份与版本元数据。"""
+
+    connection = _connect(path)
+    try:
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(sources)").fetchall()
+        }
+        additions = {
+            "source_uri": "TEXT",
+            "source_type": "TEXT",
+            "source_revision": "TEXT",
+            "source_updated_at": "TEXT",
+            "source_metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+            "external_content_hash": "TEXT",
+            "last_synced_at": "TEXT",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE sources ADD COLUMN {name} {declaration}"
+                )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_source_uri
+            ON sources(source_uri) WHERE source_uri IS NOT NULL
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sources_source_type "
+            "ON sources(source_type)"
+        )
         connection.commit()
     except Exception:
         connection.rollback()

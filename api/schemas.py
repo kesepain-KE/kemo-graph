@@ -188,6 +188,7 @@ StoreScope = Literal[
     "memory.temporary",
     "memory.important",
     "memory.permanent",
+    "memory.user",
 ]
 
 
@@ -235,6 +236,50 @@ class StoreUploadRequest(StoreRootRequest):
         if not normalized or any(part in normalized for part in ("/", "\\", "..")):
             raise ValueError("filename 必须是不含路径的文件名")
         return normalized
+
+
+class ExternalSourceRecord(StrictRequest):
+    """kemo-agent 等上游权威存储推送的一条稳定来源。"""
+
+    source_uri: str = Field(min_length=1, max_length=2048)
+    source_type: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=255)
+    content: str = ""
+    content_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+    revision: str = Field(min_length=1, max_length=255)
+    updated_at: str = Field(min_length=1, max_length=64)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    deleted: bool = False
+    ingest_mode: Literal["graph", "rag", "both"] = "both"
+
+
+class StoreSourceSyncRequest(StoreRootRequest):
+    records: list[ExternalSourceRecord] = Field(min_length=1, max_length=1000)
+    ingest_after_sync: bool = False
+
+
+class StoreSourceStatusRequest(StoreRootRequest):
+    source_type: str | None = Field(default=None, min_length=1, max_length=128)
+    include_deleted: bool = False
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=100, ge=1, le=1000)
+
+
+class StoreSourceDeleteRequest(StoreRootRequest):
+    source_uris: list[str] = Field(min_length=1, max_length=1000)
+
+    @field_validator("source_uris")
+    @classmethod
+    def validate_source_uris(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value]
+        if any(not item for item in normalized):
+            raise ValueError("source_uris 中不能包含空值")
+        return list(dict.fromkeys(normalized))
 
 
 class StoreIngestRequest(StoreRootRequest):

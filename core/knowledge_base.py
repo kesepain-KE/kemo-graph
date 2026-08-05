@@ -16,6 +16,7 @@ from uuid import uuid4
 from provider.engine import chat
 from provider.tools.document_tools import (
     DocumentConversionError,
+    SUPPORTED_DOCUMENT_SUFFIXES,
     import_document as convert_document,
 )
 
@@ -82,9 +83,7 @@ class DocumentContentConflictError(DocumentImportError):
     """文档在编辑期间已变化，拒绝覆盖较新的内容。"""
 
 
-SUPPORTED_IMPORT_SUFFIXES = frozenset(
-    {".pdf", ".docx", ".md", ".markdown", ".txt", ".html", ".htm", ".rst", ".csv"}
-)
+SUPPORTED_IMPORT_SUFFIXES = SUPPORTED_DOCUMENT_SUFFIXES
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
 CONFIG_API_KEY_MASK = "************"
 
@@ -259,6 +258,9 @@ class KnowledgeBaseService:
                 SELECT source_id, relative_path, original_path,
                        content_hash, graph_hash, rag_hash,
                        origin_hash, origin_size, origin_modified_at,
+                       source_uri, source_type, source_revision,
+                       source_updated_at, source_metadata_json,
+                       external_content_hash, last_synced_at,
                        graph_status, rag_status, exists_status,
                        created_at, updated_at
                 FROM sources
@@ -285,6 +287,15 @@ class KnowledgeBaseService:
                     "origin_hash": row["origin_hash"],
                     "origin_size": row["origin_size"],
                     "origin_modified_at": row["origin_modified_at"],
+                    "source_uri": row["source_uri"],
+                    "source_type": row["source_type"],
+                    "source_revision": row["source_revision"],
+                    "source_updated_at": row["source_updated_at"],
+                    "source_metadata": _load_source_metadata(
+                        row["source_metadata_json"]
+                    ),
+                    "external_content_hash": row["external_content_hash"],
+                    "last_synced_at": row["last_synced_at"],
                     "graph_status": row["graph_status"],
                     "rag_status": row["rag_status"],
                     "exists_status": row["exists_status"],
@@ -305,7 +316,10 @@ class KnowledgeBaseService:
                 """
                 SELECT source_id, original_path, relative_path, content_hash,
                        graph_hash, rag_hash, origin_hash, origin_size,
-                       origin_modified_at, graph_status, rag_status, exists_status
+                       origin_modified_at, source_uri, source_type,
+                       source_revision, source_updated_at, source_metadata_json,
+                       external_content_hash, last_synced_at,
+                       graph_status, rag_status, exists_status
                 FROM sources WHERE source_id = ?
                 """,
                 (source_id,),
@@ -338,6 +352,13 @@ class KnowledgeBaseService:
             "origin_hash": row["origin_hash"],
             "origin_size": row["origin_size"],
             "origin_modified_at": row["origin_modified_at"],
+            "source_uri": row["source_uri"],
+            "source_type": row["source_type"],
+            "source_revision": row["source_revision"],
+            "source_updated_at": row["source_updated_at"],
+            "source_metadata": _load_source_metadata(row["source_metadata_json"]),
+            "external_content_hash": row["external_content_hash"],
+            "last_synced_at": row["last_synced_at"],
             "graph_status": row["graph_status"],
             "rag_status": row["rag_status"],
             "exists_status": row["exists_status"],
@@ -1631,6 +1652,49 @@ class KnowledgeBaseService:
             settings=self.settings,
         ).ingest(paths=paths, mode=mode)
 
+    def sync_sources(
+        self,
+        records: Sequence[dict[str, Any]],
+        *,
+        ingest_after_sync: bool = False,
+    ) -> dict[str, Any]:
+        """同步上游表记录；kemo-graph 只维护派生 Markdown、Graph 与 RAG。"""
+
+        from .source_sync import sync_external_sources
+
+        return sync_external_sources(
+            self,
+            records,
+            ingest_after_sync=ingest_after_sync,
+        )
+
+    def list_synced_sources(
+        self,
+        *,
+        source_type: str | None = None,
+        include_deleted: bool = False,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        """分页读取由外部权威数据源同步而来的记录。"""
+
+        from .source_sync import list_external_sources
+
+        return list_external_sources(
+            self,
+            source_type=source_type,
+            include_deleted=include_deleted,
+            page=page,
+            page_size=page_size,
+        )
+
+    def delete_synced_sources(self, source_uris: Sequence[str]) -> dict[str, Any]:
+        """按稳定 URI 删除外部派生数据，不把派生 Markdown 放入回收站。"""
+
+        from .source_sync import delete_external_sources
+
+        return delete_external_sources(self, source_uris)
+
     def organize_graph(
         self,
         *,
@@ -2846,6 +2910,16 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _load_source_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _clip_context_text(value: Any, limit: int) -> str:

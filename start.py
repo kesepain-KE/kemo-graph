@@ -70,7 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser("import", help="转换并导入本地文档")
     import_parser.add_argument(
-        "path", help="PDF、DOCX、Markdown、TXT、HTML、RST 或 CSV 路径"
+        "path",
+        help="受支持文档的绝对路径（PDF、Office、EPUB、RTF、网页、文本、表格或结构化数据）",
     )
     import_parser.add_argument(
         "--no-ingest",
@@ -242,6 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
             "memory.temporary",
             "memory.important",
             "memory.permanent",
+            "memory.user",
         ),
     )
     store_init_parser.add_argument("--owner-id")
@@ -271,6 +273,25 @@ def build_parser() -> argparse.ArgumentParser:
     federated_parser.add_argument("--top-k", type=int)
     federated_parser.add_argument("--graph-depth", type=int, default=3)
     federated_parser.add_argument("--force", action="store_true")
+
+    source_sync_parser = subparsers.add_parser(
+        "source-sync", help="从 JSON 批量同步外部权威来源"
+    )
+    source_sync_parser.add_argument("json_file", help="来源数组或含 records 的 JSON 文件")
+    source_sync_parser.add_argument(
+        "--ingest", action="store_true", help="同步后立即构建 Graph/RAG"
+    )
+    source_status_parser = subparsers.add_parser(
+        "source-status", help="分页查看外部来源同步状态"
+    )
+    source_status_parser.add_argument("--source-type")
+    source_status_parser.add_argument("--include-deleted", action="store_true")
+    source_status_parser.add_argument("--page", type=int, default=1)
+    source_status_parser.add_argument("--page-size", type=int, default=100)
+    source_delete_parser = subparsers.add_parser(
+        "source-delete", help="按稳定 source_uri 删除外部派生数据"
+    )
+    source_delete_parser.add_argument("source_uris", nargs="+")
     return parser
 
 
@@ -321,6 +342,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 graph_depth=args.graph_depth,
             )
         else:
+            if (
+                args.command in {"source-sync", "source-status", "source-delete"}
+                and not args.store_root
+            ):
+                raise PortableStoreError(
+                    f"{args.command} 必须通过全局 --store-root 指定绝对知识位置"
+                )
             if args.store_root and (args.data_dir or args.external_dir):
                 raise PortableStoreError(
                     "--store-root 不能与 --data-dir 或 --external-dir 同时使用"
@@ -365,6 +393,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _dispatch(
     args: argparse.Namespace, service: KnowledgeBaseService
 ) -> dict[str, Any]:
+    if args.command == "source-sync":
+        payload = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
+        records = payload.get("records") if isinstance(payload, dict) else payload
+        if not isinstance(records, list):
+            raise ValueError("source-sync JSON 必须是数组或包含 records 数组的对象")
+        return service.sync_sources(records, ingest_after_sync=args.ingest)
+    if args.command == "source-status":
+        return service.list_synced_sources(
+            source_type=args.source_type,
+            include_deleted=args.include_deleted,
+            page=args.page,
+            page_size=args.page_size,
+        )
+    if args.command == "source-delete":
+        return service.delete_synced_sources(args.source_uris)
     if args.command == "ingest":
         return service.ingest(paths=args.paths or None, mode=args.mode)
     if args.command == "import":

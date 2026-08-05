@@ -24,6 +24,7 @@ StoreScope = Literal[
     "memory.temporary",
     "memory.important",
     "memory.permanent",
+    "memory.user",
 ]
 STORE_SCOPES = {
     "knowledge.global",
@@ -32,6 +33,7 @@ STORE_SCOPES = {
     "memory.temporary",
     "memory.important",
     "memory.permanent",
+    "memory.user",
 }
 
 
@@ -504,7 +506,7 @@ def _validated_scope(value: Any) -> str:
     if not isinstance(value, str) or value not in STORE_SCOPES:
         raise PortableStoreError(
             "scope 必须为 knowledge.global/shared/user 或 "
-            "memory.temporary/important/permanent"
+            "memory.temporary/important/permanent/user"
         )
     return value
 
