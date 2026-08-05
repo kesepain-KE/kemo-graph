@@ -88,10 +88,13 @@ class DocumentImportTests(unittest.TestCase):
             markdown_dir = root / "external" / "markdown"
             self.assertEqual({item["ingest_status"] for item in results}, {"pending"})
             self.assertTrue(all(item["source_id"] for item in results))
-            self.assertIn("```text", (markdown_dir / results[0]["markdown_relative_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                (markdown_dir / results[0]["markdown_relative_path"]).read_text(encoding="utf-8"),
+                "line one\nline two\n",
+            )
             self.assertEqual(
                 (markdown_dir / results[1]["markdown_relative_path"]).read_text(encoding="utf-8"),
-                files["guide.markdown"],
+                files["guide.markdown"] + "\n",
             )
             self.assertIn("| name | value |", (markdown_dir / results[2]["markdown_relative_path"]).read_text(encoding="utf-8"))
             self.assertIn(

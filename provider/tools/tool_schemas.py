@@ -179,6 +179,11 @@ CONVERT_HTML_SCHEMA = _converter_schema("convert_html", "HTML")
 CONVERT_TXT_SCHEMA = _converter_schema("convert_txt", "TXT")
 CONVERT_RST_SCHEMA = _converter_schema("convert_rst", "reStructuredText")
 CONVERT_CSV_SCHEMA = _converter_schema("convert_csv", "CSV")
+CONVERT_SPREADSHEET_SCHEMA = _converter_schema("convert_spreadsheet", "XLSX/XLSM/XLS")
+CONVERT_PPTX_SCHEMA = _converter_schema("convert_pptx", "PPTX")
+CONVERT_EPUB_SCHEMA = _converter_schema("convert_epub", "EPUB")
+CONVERT_RTF_SCHEMA = _converter_schema("convert_rtf", "RTF")
+CONVERT_DATA_SCHEMA = _converter_schema("convert_data", "JSON/YAML/XML")
 
 IMPORT_DOCUMENT_SCHEMA = _function_schema(
     "import_document",
@@ -226,6 +231,11 @@ DOCUMENT_TOOL_SCHEMAS = [
     CONVERT_TXT_SCHEMA,
     CONVERT_RST_SCHEMA,
     CONVERT_CSV_SCHEMA,
+    CONVERT_SPREADSHEET_SCHEMA,
+    CONVERT_PPTX_SCHEMA,
+    CONVERT_EPUB_SCHEMA,
+    CONVERT_RTF_SCHEMA,
+    CONVERT_DATA_SCHEMA,
     IMPORT_DOCUMENT_SCHEMA,
 ]
 

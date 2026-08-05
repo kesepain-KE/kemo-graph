@@ -72,7 +72,7 @@ def get_delete_tools(conn: sqlite3.Connection) -> list[ToolRegistration]:
 
 
 def get_document_tools() -> list[ToolRegistration]:
-    """返回七个本地文档转换/导入工具注册项。"""
+    """返回全部本地文档转换/导入工具注册项。"""
 
     functions: dict[str, ToolFunction] = {
         "convert_pdf": document_tools.convert_pdf,
@@ -81,6 +81,11 @@ def get_document_tools() -> list[ToolRegistration]:
         "convert_txt": document_tools.convert_txt,
         "convert_rst": document_tools.convert_rst,
         "convert_csv": document_tools.convert_csv,
+        "convert_spreadsheet": document_tools.convert_spreadsheet,
+        "convert_pptx": document_tools.convert_pptx,
+        "convert_epub": document_tools.convert_epub,
+        "convert_rtf": document_tools.convert_rtf,
+        "convert_data": document_tools.convert_data,
         "import_document": document_tools.import_document,
     }
     return _register(DOCUMENT_TOOL_SCHEMAS, functions)
