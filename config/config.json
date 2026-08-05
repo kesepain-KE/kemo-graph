@@ -9,6 +9,9 @@
   "recycle_life_days": 30,
   "rag_similarity_threshold": 0.6,
   "default_top_k": 10,
+  "search_cache_enabled": true,
+  "search_cache_max_entries": 10000,
+  "search_cache_max_bytes": 268435456,
   "chunking_mode": "semantic_hierarchical",
   "chunking_llm_max_input_chars": 8000,
   "chunk_small_size": 512,
@@ -34,7 +37,7 @@
     "request_timeout": 900
   },
   "models": {
-    "llm": "deepseek-deepseek-v4-flash",
+    "llm": "opencode-deepseek-v4-flash",
     "embedding": "siliconflow-Qwen-Qwen3-VL-Embedding-8B",
     "embedding_dimensions": 4096,
     "rerank": "siliconflow-Qwen-Qwen3-VL-Reranker-8B"
