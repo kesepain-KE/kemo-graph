@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.1.1-00a98f" alt="version 1.1.1"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.2.0-00a98f" alt="version 1.2.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -48,7 +48,7 @@ It is not another agent that chats. It is the knowledge layer that lets agents u
 |---|---|
 | Project knowledge accumulation | Connect design documents, notes and decision records into a queryable concept network |
 | Agent knowledge collaboration | Let kemo-agent fetch graph relations and source evidence through the API on demand |
-| Multi-format ingestion | Unified import of PDF, DOCX, Markdown, TXT, HTML, RST, CSV, converted to Markdown |
+| Multi-format ingestion | Convert PDF, Word, PowerPoint, Excel, EPUB, RTF, web, text, tabular and structured-data files into Markdown |
 | Source tracing | Every graph or retrieval hit can go back to its original document — no conclusion without evidence |
 | Multiple retrieval modes | Graph, vector, hybrid, Q&A and global-topic search for different kinds of questions |
 | Incremental maintenance | Only affected data is updated when files change, instead of rebuilding the whole knowledge base |
@@ -110,7 +110,7 @@ Once running, the browser lets you: upload materials, inspect converted Markdown
 
 ```powershell
 # Import a file (without spending model quota yet)
-python start.py import "E:\documents\project.pdf" --no-ingest
+python start.py import $env:KEMO_GRAPH_IMPORT_FILE --no-ingest
 
 # Scan and ingest all pending documents
 python start.py ingest
@@ -118,6 +118,9 @@ python start.py ingest
 # Query
 python start.py query-hybrid "how does a knowledge graph improve retrieval"
 python start.py query-answer "answer based on both graph and source text"
+
+# Sync authoritative kemo-agent table records into their independent Store
+python start.py --store-root $env:KEMO_GRAPH_STORE_ROOT source-sync records.json
 
 # Status and maintenance
 python start.py status
@@ -165,6 +168,8 @@ An agent that truly accompanies a long-lived project should not only have a long
 ## Current status
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
+
+The current release is **1.2.0**. It adds a stable synchronization protocol plus Store API/CLI commands for authoritative external table records, broadens conversion support for Office, EPUB, RTF and structured-data files, and improves GPU-first graph rendering, search-result pagination and graceful service shutdown. See [CHANGELOG.md](CHANGELOG.md) for the complete release summary.
 
 Still being polished: conversion quality for complex document layouts, storage and index strategy for large knowledge bases and high concurrency, built-in authentication and permission tiers for the external API, and richer manual graph correction and provenance review interfaces.
 

@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.1.1-00a98f" alt="version 1.1.1"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.2.0-00a98f" alt="version 1.2.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -48,7 +48,7 @@
 |---|---|
 | 项目知识沉淀 | 把设计文档、笔记、决策记录逐步连接为可查询的概念网络 |
 | 智能体知识协作 | 让 kemo-agent 在需要时通过 API 取得图谱关系与原文证据 |
-| 多格式资料整理 | PDF、DOCX、Markdown、TXT、HTML、RST、CSV 统一导入并转为 Markdown |
+| 多格式资料整理 | PDF、Word、PowerPoint、Excel、EPUB、RTF、网页、文本、表格与结构化数据统一转为 Markdown |
 | 来源追溯 | 从图谱或检索命中回到对应原文，避免只有结论没有依据 |
 | 多路检索 | 图谱、向量、混合、问答与全局主题五种方式，适合不同问题 |
 | 增量维护 | 文件变化后只更新受影响的数据，而不是反复重建整个知识库 |
@@ -110,7 +110,7 @@ python start_web.py
 
 ```powershell
 # 导入文件（先不消耗模型额度）
-python start.py import "E:\documents\project.pdf" --no-ingest
+python start.py import $env:KEMO_GRAPH_IMPORT_FILE --no-ingest
 
 # 扫描并整理所有待处理文档
 python start.py ingest
@@ -118,6 +118,9 @@ python start.py ingest
 # 查询
 python start.py query-hybrid "知识图谱如何增强检索"
 python start.py query-answer "请综合图谱和原文回答"
+
+# 将 kemo-agent 等上游表记录同步到其独立 Store
+python start.py --store-root $env:KEMO_GRAPH_STORE_ROOT source-sync records.json
 
 # 状态与维护
 python start.py status
@@ -165,6 +168,8 @@ kemo-graph 不试图成为替代所有文件管理、所有数据库或所有搜
 ## 当前状态
 
 核心闭环已经可以实际运行：统一导入、增量更新、图谱与向量检索、混合问答、安全删除、定时维护，以及本地 Web、CLI、HTTP API 三个入口和面向 kemo-agent 等智能体的外部知识服务接口。
+
+当前版本为 **1.2.0**。本版本新增外部权威表记录的稳定同步协议与 Store API/CLI，扩展 Office、EPUB、RTF 和结构化数据转换，并进一步优化 GPU 优先的图谱渲染、检索结果分页及服务退出体验。完整变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 仍在持续打磨：复杂文档版式的转换质量、大知识库与高并发下的存储与索引策略、外部 API 的内建鉴权与权限分层、更丰富的图谱人工校正与来源审查界面。
 

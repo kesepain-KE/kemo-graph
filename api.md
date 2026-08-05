@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.1.1`
+> **当前版本**：`1.2.0`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
 
 ---
@@ -14,7 +14,7 @@
 外部 API 可以不启动 Web 前端，直接启动独立 FastAPI 应用：
 
 ```powershell
-cd E:\code\kemo-graph
+cd <kemo-graph-install-dir>
 uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -573,10 +573,15 @@ Content-Type: multipart/form-data
 支持扩展名：
 
 ```text
-.pdf, .docx, .md, .markdown, .txt, .html, .htm, .rst, .csv
+.pdf, .docx, .pptx, .xlsx, .xlsm, .xls, .epub, .rtf,
+.md, .markdown, .txt, .log, .html, .htm, .rst, .csv, .tsv,
+.json, .jsonl, .ndjson, .yaml, .yml, .xml
 ```
 
 最大文件：**50 MB**。
+
+文本类文件会自动识别 UTF-8、UTF-16、GB18030、Big5 等常见编码；CSV 会同时检测编码与分隔符。
+PDF 仅提取已有文本层，不执行 OCR。扫描版 PDF 会返回 `CONVERSION_FAILED`，应由主智能体先完成 OCR 再导入。
 
 PowerShell 示例：
 
@@ -584,7 +589,7 @@ PowerShell 示例：
 Invoke-RestMethod `
   -Method Post `
   -Uri "http://127.0.0.1:8000/api/v1/import?ingest=false" `
-  -Form @{ file = Get-Item "E:\documents\example.pdf" }
+  -Form @{ file = Get-Item $env:KEMO_GRAPH_IMPORT_FILE }
 ```
 
 成功响应：
@@ -637,7 +642,7 @@ Content-Type: application/json
 
 该端点只适合智能体已有 Markdown 正文时使用：写入并注册为待整理文档，不会在此请求中调用模型。文件名不能含 `/`、`\\` 或 `..`。
 
-对于 PDF、DOCX 等二进制文件，必须使用 `/import`。
+对于 PDF、Office、EPUB、RTF 等二进制文件，必须使用 `/import`。
 
 ---
 
@@ -1004,7 +1009,7 @@ GET /graph 或 POST /query/graph → 检查节点/边/来源影响 → DELETE /n
 运行日志默认按 UTC 日期写入：
 
 ```text
-E:\code\kemo-graph\log\YYYY-MM-DD.tsv
+<configured-log-dir>/YYYY-MM-DD.tsv
 ```
 
 日志会记录导入、图谱构建、RAG、FAISS、删除、维护和 API 错误的摘要；不会记录 API Key、Bearer Token、完整文档正文或完整模型提示词。
@@ -1034,6 +1039,12 @@ KEMO_GRAPH_WEB_PORT
 <store_root>\kemo-graph-storage\
 ```
 
+本文不绑定源码版安装目录、Windows 盘符或部署版容器路径。所有
+`<configured-...-root>`、`<absolute-source-file-from-host-config>` 都是部署配置
+占位符，不能作为字面值发送。全局拓展必须从自身配置读取路径，在运行时解析为当前
+操作系统的绝对路径，再放入 JSON 请求体；不得根据 kemo-graph 的安装目录猜测数据
+位置。
+
 其中包含该位置独立的 `sources.db`、`search_cache.db`、`Graph/graph.db`、`RAG/rag.db`、FAISS 索引、规范 Markdown 与回收站。不同 Store 不共享数据库；联合查询只在内存中融合。
 
 ### 11.1 初始化
@@ -1045,10 +1056,10 @@ Content-Type: application/json
 
 ```json
 {
-  "store_root": "D:\\agent\\memory\\permanent",
-  "scope": "memory.permanent",
-  "owner_id": "user-001",
-  "display_name": "永久记忆"
+  "store_root": "<configured-user-memory-root>",
+  "scope": "memory.user",
+  "owner_id": "alice",
+  "display_name": "Alice 的统一记忆索引"
 }
 ```
 
@@ -1061,7 +1072,12 @@ knowledge.user
 memory.temporary
 memory.important
 memory.permanent
+memory.user
 ```
+
+`memory.user` 面向 kemo-agent 当前的每用户记忆表存储：同一用户的四档记忆共享
+一个 Store，不能再按 tier 拆成多个数据库。旧三档 memory scope 仅为已有调用方
+保留兼容。
 
 重复初始化是幂等的，并保持原 `store_id`。已有 Store 不允许静默变更 scope/owner。
 
@@ -1073,9 +1089,9 @@ memory.permanent
 {
   "store": {
     "store_id": "uuid",
-    "scope": "memory.permanent",
-    "owner_id": "user-001",
-    "root_path": "D:\\agent\\memory\\permanent"
+    "scope": "memory.user",
+    "owner_id": "alice",
+    "root_path": "<configured-user-memory-root>"
   },
   "result": {}
 }
@@ -1093,6 +1109,9 @@ POST /api/v1/stores/status
 POST /api/v1/stores/import-path
 POST /api/v1/stores/upload
 POST /api/v1/stores/ingest
+POST /api/v1/stores/sources/sync
+POST /api/v1/stores/sources/status
+POST /api/v1/stores/sources/delete
 
 # 检索与回答
 POST /api/v1/stores/query/graph
@@ -1138,7 +1157,77 @@ POST /api/v1/stores/jobs/get
 
 绝对路径放在 JSON body，不放入 URL path/query。Store 维护端点当前同步执行，以免任务被错误提交到默认知识库的后台管理器。
 
-### 11.4 绝对路径导入
+### 11.4 外部表记录同步
+
+kemo-agent 的记忆以 SQLite 表为权威来源。kemo-graph 不直接写该数据库，而由
+全局扩展把记录转换为稳定来源包络并推送：
+
+```http
+POST /api/v1/stores/sources/sync
+Content-Type: application/json
+```
+
+```json
+{
+  "store_root": "<configured-user-memory-root>",
+  "ingest_after_sync": false,
+  "records": [
+    {
+      "source_uri": "kemo-agent://users/alice/memory/preferences.md",
+      "source_type": "memory.fragment",
+      "display_name": "preferences.md",
+      "content": "# 用户偏好\n\n回答保持简洁。",
+      "revision": "3",
+      "updated_at": "2026-08-05T12:00:00+00:00",
+      "metadata": {"tier": "permanent", "weight": 2},
+      "deleted": false,
+      "ingest_mode": "both"
+    }
+  ]
+}
+```
+
+同步规则：
+
+- `source_uri` 是跨重启稳定身份；记忆 tier 晋升不得改变 URI；
+- `revision` 相同但规范正文不同记为 `conflict`，不会覆盖现有数据；
+- `updated_at` 早于现有记录记为 `stale`；
+- 正文相同但 revision/metadata 改变时只更新元数据，不重建 Graph/RAG；
+- 正文变化后 Graph/RAG 变为 pending；`ingest_after_sync=true` 可立即整理；
+- `deleted=true` 是 tombstone：立即级联清理 Graph/RAG 和派生 Markdown，不进入回收站；
+- `content_hash` 是上游正文哈希，`sources.content_hash` 是规范 Markdown 哈希，两者分别保存；
+- 批次上限 1000 条，单条正文 50 MiB，metadata 64 KiB。
+
+查看状态：
+
+```http
+POST /api/v1/stores/sources/status
+```
+
+```json
+{
+  "store_root": "<configured-user-memory-root>",
+  "source_type": "memory.fragment",
+  "include_deleted": false,
+  "page": 1,
+  "page_size": 100
+}
+```
+
+显式删除多个稳定来源：
+
+```http
+POST /api/v1/stores/sources/delete
+```
+
+```json
+{
+  "store_root": "<configured-user-memory-root>",
+  "source_uris": ["kemo-agent://users/alice/memory/preferences.md"]
+}
+```
+
+### 11.5 绝对路径导入
 
 ```http
 POST /api/v1/stores/import-path
@@ -1146,15 +1235,15 @@ POST /api/v1/stores/import-path
 
 ```json
 {
-  "store_root": "D:\\agent\\knowledge\\user",
-  "path": "D:\\documents\\source.pdf",
+  "store_root": "<configured-user-knowledge-root>",
+  "path": "<absolute-source-file-from-host-config>",
   "ingest_after_import": false
 }
 ```
 
 `path` 必须为绝对普通文件路径。返回同时包含原文件 `origin_hash` 与规范 Markdown `content_hash`，二者不得混用。
 
-### 11.5 联合查询
+### 11.6 联合查询
 
 ```http
 POST /api/v1/stores/query/federated
@@ -1163,8 +1252,8 @@ POST /api/v1/stores/query/federated
 ```json
 {
   "store_roots": [
-    "D:\\agent\\knowledge\\global",
-    "D:\\agent\\memory\\permanent"
+    "<configured-global-knowledge-root>",
+    "<configured-user-memory-root>"
   ],
   "query": "问题",
   "mode": "hybrid",
@@ -1175,6 +1264,578 @@ POST /api/v1/stores/query/federated
 ```
 
 支持 `graph/rag/hybrid/global/answer`。响应中的每条 `merged_results` 带 Store 身份和 `federated_score`。单 Store 失败记录在 `stores_failed`，不会取消其他 Store 的成功结果；调用方必须检查成功数与失败列表。
+
+### 11.7 给 kemo-agent 全局拓展的推荐数据域映射
+
+全局拓展应把一个 `store_root` 理解为一个**数据域位置**，而不是一条记录或一个
+记忆 tier。每个数据域只创建一个可见的 `kemo-graph-storage`：
+
+| 上游数据域 | 推荐 `store_root` | scope | 写入方式 |
+|---|---|---|---|
+| 全局知识文件 | `<agent_root>/global_knowledge` | `knowledge.global` | `stores/import-path` |
+| 跨用户共享知识文件 | `<agent_root>/shared_knowledge` | `knowledge.shared` | `stores/import-path` |
+| 用户知识文件 | `<agent_root>/users/<user>/knowledge` | `knowledge.user` | `stores/import-path` |
+| 用户记忆表 | `<agent_root>/users/<user>/improve` | `memory.user` | `stores/sources/sync` |
+
+边界规则：
+
+- 知识库仍以文件为权威来源；全局拓展枚举允许格式的文件并逐个调用
+  `import-path`，不要把文件正文伪装成记忆表记录；
+- `memory.sqlite3` 是 kemo-agent 的权威业务库；kemo-graph 不直接写入，也不要求
+  获得 SQLite 写权限；
+- 同一用户的 `seven_days / one_month / half_year / permanent` 记忆 tier
+  全部进入同一个 `memory.user` Store，tier 放在 `metadata.tier`；
+- 不要为单条记忆、单个会话或单个文件创建独立 Store；这会产生过多 SQLite、
+  FAISS 和搜索缓存文件，也会让联合检索成本线性放大。
+
+### 11.8 全局拓展启动与刷新顺序
+
+推荐的启动握手：
+
+```text
+1. POST /stores/initialize  幂等确保每个已配置数据域存在
+2. POST /stores/info        保存并核对 store_id、scope、owner_id、root_path
+3. POST /stores/status      读取文档、Graph、RAG、FAISS 健康状态
+4. 推送本轮变化文件/记录
+5. 对发生正文变化的 Store 执行 /stores/ingest
+6. 再次调用 /stores/status；必要时 POST /stores/documents/list 并在 body 传 status=pending
+7. 对用户查询调用单 Store hybrid，或调用 federated 跨域融合
+```
+
+`stores/initialize` 可以安全重复调用；scope 或 owner 与现有 manifest 不一致时不会
+静默改写，而是返回 `STORE_INVALID`。全局拓展应持久保存响应中的 `store_id`，启动
+时同时核对物理路径与稳定 ID，防止路径配置误指向另一套知识库。
+
+初始化成功响应示例（部分字段）：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "manifest": {
+      "schema_version": 1,
+      "store_id": "66c96ea6-d0b3-4e50-accc-d9bc1bc51519",
+      "display_name": "Alice 的统一记忆索引",
+      "scope": "memory.user",
+      "owner_id": "alice",
+      "root_path": "<configured-user-memory-root>",
+      "storage_directory": "kemo-graph-storage"
+    },
+    "storage_root": "<configured-user-memory-root>/kemo-graph-storage",
+    "initialized_now": true,
+    "status": {}
+  },
+  "error": null
+}
+```
+
+### 11.9 SourceEnvelope 严格字段契约
+
+`records` 每项字段如下。请求模型拒绝任何未知字段。
+
+| 字段 | 必填 | 限制 | 语义 |
+|---|---:|---|---|
+| `source_uri` | 是 | 1–2048 字符；小写 URI scheme；批次内唯一 | 跨重启、改名策略和 tier 晋升保持稳定的权威身份 |
+| `source_type` | 是 | 1–128；`^[a-z][a-z0-9_.-]*$` | 如 `memory.fragment` |
+| `display_name` | 是 | 1–255；只能是文件名，不能含路径或 `..` | 用户可读逻辑名称；不作为身份 |
+| `content` | 非删除时是 | UTF-8 规范正文；最大 50 MiB | 用于生成派生 Markdown、Graph 与 RAG |
+| `content_hash` | 否 | 64 位 SHA-256 十六进制 | 上游正文哈希；调用方负责计算正确性 |
+| `revision` | 是 | 1–255 字符 | 上游不透明版本；可以是整数转字符串、UUID 或业务版本 |
+| `updated_at` | 是 | 带时区 ISO 8601；最大 64 字符 | 因果顺序；服务端统一比较 UTC 时间 |
+| `metadata` | 否 | JSON 对象；序列化后最大 64 KiB | tier、weight、filename_key 等非正文属性 |
+| `deleted` | 否 | 默认 `false` | `true` 表示上游 tombstone；此时 `content` 可省略 |
+| `ingest_mode` | 否 | `graph / rag / both`，默认 `both` | 本条正文后续需要构建的投影 |
+
+正文会统一换行为 LF，并保证末尾换行。`content_hash` 是上游提供的身份校验信息；
+kemo-graph 另行计算规范 Markdown 的 `sources.content_hash`。两个哈希不能互换。
+
+推荐稳定 URI：
+
+```text
+# 记忆：使用不会因 filename/tier 改变的数据库记录 ID
+kemo-agent://users/alice/memory/fragments/1842
+```
+
+不要把正文哈希放进 `source_uri`；否则正文每次变化都会被识别为新来源，旧 Graph、
+RAG 与向量将无法按同一身份增量替换。
+
+#### 11.9.1 memory_fragments 映射建议
+
+| kemo-agent 字段 | SourceEnvelope |
+|---|---|
+| `id` | `source_uri` 末段稳定 ID |
+| `filename` | `display_name` |
+| `content` | `content` |
+| `content_hash` | `content_hash` |
+| `revision` | `revision`（转字符串） |
+| `content_updated_at` | `updated_at` |
+| `tier / weight / filename_key` | `metadata` |
+
+tier 晋升只产生 metadata/revision 更新，不改变 URI；正文没有变化时服务端会返回
+`metadata_updated`，不会重新构建 Graph/RAG。
+
+### 11.10 同步结果、幂等和删除状态机
+
+成功同步返回 HTTP 200。即使某条记录为 `stale` 或 `conflict`，HTTP 仍为 200，
+调用方必须检查 `data.result` 中的计数与 `details`：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "store": {
+      "store_id": "66c96ea6-d0b3-4e50-accc-d9bc1bc51519",
+      "scope": "memory.user",
+      "owner_id": "alice",
+      "root_path": "<configured-user-memory-root>"
+    },
+    "result": {
+      "received": 3,
+      "created": 1,
+      "updated": 0,
+      "metadata_updated": 1,
+      "unchanged": 0,
+      "deleted": 0,
+      "stale": 1,
+      "conflicts": 0,
+      "failed": 0,
+      "details": [
+        {
+          "source_uri": "kemo-agent://users/alice/memory/fragments/1842",
+          "source_id": "kemo-graph-source-uuid",
+          "status": "created"
+        }
+      ],
+      "ingest": null,
+      "search_cache_deleted": 4
+    }
+  },
+  "error": null
+}
+```
+
+| 状态 | 条件 | 调用方动作 |
+|---|---|---|
+| `created` | URI 首次出现 | 等待/触发 ingest |
+| `updated` | 正文变化，或删除后恢复 | 等待/触发 ingest |
+| `metadata_updated` | 正文相同，仅版本或 metadata 变化 | 无需 ingest |
+| `unchanged` | 完全幂等重放，或删除不存在的 URI | 无操作 |
+| `deleted` | 活动来源收到 tombstone | 从本地同步游标确认删除已消费 |
+| `stale` | `updated_at` 早于现有记录 | 不要重试旧事件；刷新上游游标 |
+| `conflict` | 相同 revision 对应不同规范正文 | 停止自动覆盖并记录告警，检查上游版本生成逻辑 |
+
+批次会在写入前统一校验：最多 1000 条，批次内 URI 不得重复。格式校验失败会让
+整个请求返回 422，而不会只跳过某一条。
+
+删除有两种入口：
+
+1. **上游同步删除（推荐）**：在 `sources/sync` 中发送 `deleted=true`，同时携带
+   上游 revision 与 updated_at，保留完整因果顺序；
+2. **运维强制删除**：调用 `sources/delete` 只传 `source_uris`，由服务端生成删除
+   revision 与时间，适用于人工清理，不适合作为上游 change feed 的常规路径。
+
+tombstone 会立即删除派生 Markdown，并级联清理 Graph、RAG、FAISS 和搜索缓存；
+派生 Markdown 不进入回收站，因为上游 SQLite 才是可恢复的权威来源。以后使用
+同一 URI 和更新版本恢复时，会复用原来的 kemo-graph `source_id`。
+
+### 11.11 整理策略与超时
+
+`ingest_after_sync` 的选择：
+
+- `false`（推荐给事件接收线程）：只同步并标记 pending，响应较快；全局拓展的
+  后台 worker 再合并变化并调用 `/stores/ingest`；
+- `true`：在同一个 HTTP 请求内按每条 `ingest_mode` 直接构建，可能持续数分钟，
+  调用方必须配置长超时，且不应占用用户请求线程。
+
+`stores/ingest` 请求：
+
+```json
+{
+  "store_root": "<configured-user-memory-root>",
+  "paths": null,
+  "mode": "both"
+}
+```
+
+`paths=null` 处理当前 Store 的全部 pending 项；指定路径时必须使用 kemo-graph
+返回的 `relative_path`，不能传 `source_uri` 或上游绝对路径。调用方可通过
+`sources/status` 取得路径，并按业务所需的 `ingest_mode` 分组整理。
+
+整理响应示例：
+
+```json
+{
+  "processed": 3,
+  "graph_updated": 2,
+  "rag_updated": 3,
+  "skipped": 0,
+  "failed": 1,
+  "details": [
+    {
+      "path": "env-reference-eacda38418.md",
+      "graph": "failed",
+      "rag": "updated",
+      "graph_error": "Provider request failed"
+    }
+  ]
+}
+```
+
+HTTP 200 不代表每篇整理都成功，必须检查 `failed` 与 `details`。失败项可以通过
+指定其 `relative_path` 再次调用 ingest；已经 ready 的另一投影不会重复构建。
+
+建议客户端超时：
+
+| 操作 | 建议总超时 |
+|---|---:|
+| info/status/source-status | 15 秒 |
+| graph/rag/hybrid 查询 | 120 秒 |
+| answer/global（包含 LLM） | 300 秒 |
+| import-path | 120 秒 |
+| ingest/organize/rebuild/summarize | 30 分钟或交给后台 worker |
+
+同一个 Store 的写操作应由全局拓展串行化。不要启动多个 kemo-graph Web 进程同时
+写同一套 SQLite/FAISS；构建期间查询可能返回 `409 PROCESSING`。
+
+### 11.12 检索模式选择
+
+| 需求 | 端点 | 是否生成自然语言回答 | 建议 |
+|---|---|---:|---|
+| 精确概念、关系和路径 | `query/graph` | 否 | 返回节点、边、`A->[关系]->B` 路径 |
+| 原文证据与语义相似内容 | `query/rag` | 否 | 返回 chunk、父级上下文、分数和来源 |
+| 智能体自行组织最终回答 | `query/hybrid` | 否 | **全局拓展默认选择**；同时返回 Graph 与 RAG |
+| 让 kemo-graph 直接回答 | `query/answer` | 是 | 会额外调用 LLM；适合独立知识问答入口 |
+| 节点群级全局问题 | `query/global` | 是 | 必须先执行 summarize 生成节点群总结 |
+| 跨知识/记忆/历史数据域 | `query/federated` | 取决于 mode | 对各 Store 独立查询后在内存中融合 |
+
+推荐的单 Store 混合检索请求：
+
+```json
+{
+  "store_root": "<configured-user-memory-root>",
+  "query": "用户偏好的回答风格是什么？",
+  "graph_depth": 2,
+  "rag_top_k": 8,
+  "graph_confidence": null,
+  "rag_threshold": null,
+  "direction": "both",
+  "force": false
+}
+```
+
+- `graph_depth`：1–10；普通问答建议 1–2，系统关系分析再使用 3 以上；
+- `rag_top_k`：1–100；`null` 使用服务端配置；
+- confidence/threshold 为 `null` 时使用服务端配置；
+- `direction`：`forward / backward / both`；
+- `force=true` 只绕过搜索结果缓存，不会绕过 processing 状态或数据一致性检查。
+
+混合响应的 `data.result` 主要字段：
+
+```text
+graph.hit_nodes       直接命中的节点
+graph.expanded_nodes  BFS 扩展节点
+graph.edges           机器可读关系边
+graph.relations       A->[关系]->B
+graph.paths           A->[关系]->B->[关系]->C
+graph.groups          相关节点群
+rag.results           召回 chunk、父级 context、score、source
+entities              实体向量召回
+communities           群组总结向量召回
+```
+
+全局拓展通常应把这些证据交给 kemo-agent 的主回答模型，而不是再调用
+`query/answer`，避免两次 LLM 总结和上下文损失。
+
+### 11.13 跨 Store 联合检索响应
+
+`query/federated` 最多接受 100 个绝对 Store 路径。每个 Store 独立失败隔离：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "query": "用户最近关心什么？",
+    "mode": "hybrid",
+    "stores_requested": 3,
+    "stores_succeeded": 2,
+    "stores_failed": [
+      {
+        "store_root": "<configured-user-history-root>",
+        "error_type": "PortableStoreNotInitializedError",
+        "message": "知识位置尚未初始化"
+      }
+    ],
+    "stores": [
+      {
+        "store": {
+          "store_id": "uuid",
+          "scope": "memory.user",
+          "owner_id": "alice",
+          "store_root": "<configured-user-memory-root>"
+        },
+        "result": {}
+      }
+    ],
+    "merged_results": []
+  },
+  "error": null
+}
+```
+
+必须同时检查 `stores_succeeded` 和 `stores_failed`；HTTP 200 只代表联合查询调度
+成功，不代表每个 Store 都可用。`merged_results` 主要融合可排序的 RAG/实体/群组
+结果；完整的单 Store Graph 结构仍位于 `stores[i].result`。
+
+### 11.14 状态、分页与变更游标
+
+Store 健康检查：
+
+```http
+POST /api/v1/stores/status
+```
+
+`data.result`：
+
+```json
+{
+  "initialized": true,
+  "sources": {
+    "total": 3,
+    "active": 3,
+    "pending_graph": 0,
+    "pending_rag": 0
+  },
+  "graph": {
+    "total_nodes": 98,
+    "total_edges": 135,
+    "total_groups": 0
+  },
+  "rag": {
+    "total_chunks": 21,
+    "total_vectors": 21,
+    "faiss_healthy": true
+  }
+}
+```
+
+`status` 不列出每条失败原因。发现 pending、构建失败或数量异常时，调用：
+
+```text
+POST /stores/documents/list  查看 graph_status/rag_status/content_hash
+POST /stores/sources/status  查看 URI/revision/metadata/relative_path
+POST /stores/jobs/list       查看维护任务记录
+POST /stores/jobs/get        查看单任务事件
+```
+
+`sources/status` 返回的每项包括：`source_id/source_uri/source_type/revision/`
+`source_updated_at/metadata/external_content_hash/last_synced_at/relative_path/`
+`content_hash/graph_status/rag_status/exists_status/created_at/updated_at`。
+
+kemo-graph 当前不提供 kemo-agent 上游表的 change feed；全局拓展应在自己的业务层
+维护游标，例如 `(content_updated_at, id)` 或业务 revision，并只把变化项推送给
+`sources/sync`。接口本身允许安全重放，不能用“可能重复”作为跳过幂等设计的理由。
+
+### 11.15 错误处理与重试矩阵
+
+| HTTP | code | 是否重试 | 全局拓展处理 |
+|---:|---|---:|---|
+| 403 | `STORE_ACCESS_DENIED` | 否 | 检查绝对路径、`..`、allowed_roots 和进程权限 |
+| 404 | `STORE_NOT_INITIALIZED` | 条件式 | 对已授权数据域执行一次 initialize，再重试原请求 |
+| 404 | `NOT_FOUND` | 否 | 刷新 source/node/edge ID；不要无限重试旧 ID |
+| 409 | `PROCESSING` | 是 | 1、2、4、8 秒退避并设置总等待上限 |
+| 409 | `GRAPH_CHANGED` | 是 | 刷新 visualization revision 后重取分页 |
+| 409 | `CONTENT_CONFLICT` | 否 | 重新读取最新 content_hash，人工/业务层解决并发编辑 |
+| 413 | `FILE_TOO_LARGE` | 否 | 在上游拆分或拒绝文件 |
+| 415 | `UNSUPPORTED_FORMAT` | 否 | 上游转换为受支持格式 |
+| 422 | `INVALID_PARAM` | 否 | 修正字段、哈希、时间、URI 或分页参数 |
+| 422 | `STORE_INVALID` | 否 | 检查 manifest、scope、owner 和目录完整性 |
+| 422 | `CONVERSION_FAILED` | 条件式 | 修复文档/编码后重试；扫描 PDF 需先 OCR |
+| 502 | `INGEST_FAILED` | 是 | Provider 临时失败可有限重试；保留失败详情 |
+| 500 | `INTERNAL` | 有限 | 记录 request 上下文，指数退避最多 2–3 次 |
+
+只有网络错误、超时、`PROCESSING`、临时 Provider/500 错误适合自动重试。422、403、
+内容冲突和同步 `conflict` 必须先修正数据或配置。
+
+### 11.16 可直接用于全局拓展的 Python 客户端示例
+
+以下示例只使用 Python 标准库，展示初始化、同步、整理和混合查询。生产实现应把
+HTTP 调用放入 kemo-agent 的全局拓展服务层，并增加日志、取消信号和持久化游标。
+
+```python
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+BASE_URL = os.environ.get(
+    "KEMO_GRAPH_BASE_URL",
+    "http://127.0.0.1:8000/api/v1",
+).rstrip("/")
+STORE_ROOT = os.environ["KEMO_GRAPH_STORE_ROOT"]
+
+
+class KemoGraphAPIError(RuntimeError):
+    def __init__(self, status: int, code: str, message: str) -> None:
+        super().__init__(f"HTTP {status} {code}: {message}")
+        self.status = status
+        self.code = code
+
+
+def post(path: str, payload: dict[str, Any], *, timeout: float = 120) -> Any:
+    request = Request(
+        BASE_URL + path,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = json.loads(exc.read().decode("utf-8"))
+        error = body.get("error") or {}
+        raise KemoGraphAPIError(
+            exc.code,
+            str(error.get("code") or "HTTP_ERROR"),
+            str(error.get("message") or exc.reason),
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"kemo-graph 不可达：{exc.reason}") from exc
+    if not body.get("ok"):
+        error = body.get("error") or {}
+        raise KemoGraphAPIError(
+            200,
+            str(error.get("code") or "UNKNOWN"),
+            str(error.get("message") or "未知错误"),
+        )
+    return body["data"]
+
+
+# 1. 幂等初始化
+store = post(
+    "/stores/initialize",
+    {
+        "store_root": STORE_ROOT,
+        "scope": "memory.user",
+        "owner_id": "alice",
+        "display_name": "Alice 的统一记忆索引",
+    },
+)
+print("store_id:", store["manifest"]["store_id"])
+
+# 2. 推送一条变化记录；实际连接器应由 memory_store 业务层提供这些字段
+sync = post(
+    "/stores/sources/sync",
+    {
+        "store_root": STORE_ROOT,
+        "ingest_after_sync": False,
+        "records": [
+            {
+                "source_uri": "kemo-agent://users/alice/memory/fragments/1842",
+                "source_type": "memory.fragment",
+                "display_name": "preferences.md",
+                "content": "# 用户偏好\n\n回答保持简洁。\n",
+                "revision": "3",
+                "updated_at": "2026-08-05T12:00:00+00:00",
+                "metadata": {
+                    "tier": "permanent",
+                    "weight": 2,
+                    "filename_key": "preferences.md",
+                },
+                "deleted": False,
+                "ingest_mode": "both",
+            }
+        ],
+    },
+)
+summary = sync["result"]
+if summary["conflicts"] or summary["failed"]:
+    raise RuntimeError(f"来源同步未完成：{summary['details']}")
+
+# 3. 在后台 worker 中整理 pending 内容；模型调用可能耗时较长
+if summary["created"] or summary["updated"]:
+    ingest = post(
+        "/stores/ingest",
+        {"store_root": STORE_ROOT, "paths": None, "mode": "both"},
+        timeout=1800,
+    )
+    if ingest["result"]["failed"]:
+        raise RuntimeError(f"知识整理存在失败项：{ingest['result']['details']}")
+
+# 4. 让主智能体取得 Graph + RAG 证据，自行组织最终回答
+retrieval = post(
+    "/stores/query/hybrid",
+    {
+        "store_root": STORE_ROOT,
+        "query": "用户偏好的回答风格是什么？",
+        "graph_depth": 2,
+        "rag_top_k": 8,
+        "graph_confidence": None,
+        "rag_threshold": None,
+        "direction": "both",
+        "force": False,
+    },
+)
+evidence = retrieval["result"]
+print(json.dumps(evidence, ensure_ascii=False, indent=2))
+```
+
+### 11.17 PowerShell 联调示例
+
+```powershell
+$base = if ($env:KEMO_GRAPH_BASE_URL) {
+  $env:KEMO_GRAPH_BASE_URL.TrimEnd("/")
+} else {
+  "http://127.0.0.1:8000/api/v1"
+}
+$store = $env:KEMO_GRAPH_STORE_ROOT
+if (-not $store) {
+  throw "请先由部署配置设置 KEMO_GRAPH_STORE_ROOT"
+}
+
+$status = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$base/stores/status" `
+  -ContentType "application/json" `
+  -Body (@{ store_root = $store } | ConvertTo-Json)
+
+$query = @{
+  store_root = $store
+  query = "定时任务为什么必须经过 time_plan？"
+  graph_depth = 2
+  rag_top_k = 8
+  graph_confidence = $null
+  rag_threshold = $null
+  direction = "both"
+  force = $false
+} | ConvertTo-Json
+
+$result = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$base/stores/query/hybrid" `
+  -ContentType "application/json" `
+  -Body $query
+
+$result.data.result | ConvertTo-Json -Depth 20
+```
+
+### 11.18 部署与安全底线
+
+- API 当前没有应用层认证；默认仅监听 `127.0.0.1`；
+- 全局拓展不应把来自用户输入的任意字符串直接作为 `store_root`，必须从受控的
+  用户/数据域配置映射生成；
+- 建议设置 `portable_stores.allowed_roots`，限制只能访问 kemo-agent 数据根目录；
+- `store_root` 必须是绝对路径，不能含 `..`，也不能直接指向
+  `kemo-graph-storage`；
+- 不要把 API 暴露到公网。跨主机部署必须在外层提供 TLS、认证、授权和审计；
+- 正文会通过 Kemo 网关执行图谱抽取、Embedding、Rerank 或回答，敏感数据策略应
+  同时覆盖 kemo-agent、kemo-graph 和网关链路；
+- 可通过 `http://127.0.0.1:8000/docs` 查看交互式 OpenAPI，或读取
+  `/openapi.json` 生成客户端；实现连接器时仍以本文的生命周期和幂等规则为准。
 
 更完整的目录、清单、迁移和隔离规则见：
 
