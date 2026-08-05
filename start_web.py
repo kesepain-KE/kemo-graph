@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import mimetypes
 import os
@@ -36,6 +37,7 @@ from restart import (
 
 
 LOGGER = logging.getLogger(__name__)
+UVICORN_LOGGER = logging.getLogger("uvicorn.error")
 FRONTEND_DIST = Path(__file__).resolve().parent / "web" / "frontend" / "dist"
 
 
@@ -240,7 +242,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         port=args.port,
     )
     try:
-        server.run()
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            UVICORN_LOGGER.info("已收到 Ctrl+C，kemo-graph Web 服务已安全停止。")
+        except asyncio.CancelledError:
+            # 部分 Python/uvicorn 组合会在正常信号关闭后直接抛出
+            # CancelledError；仅当服务器已进入退出状态时将其视为正常关闭。
+            if not server.should_exit:
+                raise
+            UVICORN_LOGGER.info("kemo-graph Web 服务已安全停止。")
         return 0
     finally:
         remove_runtime_state(os.getpid())
