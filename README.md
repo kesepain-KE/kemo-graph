@@ -106,6 +106,14 @@ python start_web.py
 
 启动后即可在浏览器中：上传资料、查看转换后的 Markdown 与整理状态、浏览知识图谱、选择不同方式检索、管理文档与回收站、追踪后台任务进度。
 
+<p align="center">
+  <img src="kemo-graph-web.png" alt="kemo-graph 网页端知识检索界面" width="100%">
+</p>
+
+<p align="center">
+  <sub>本地优先的知识检索工作台：统一使用图谱、向量、混合检索与 LLM 回答。</sub>
+</p>
+
 ### 命令行
 
 ```powershell

@@ -106,6 +106,14 @@ Open `http://127.0.0.1:8000`.
 
 Once running, the browser lets you: upload materials, inspect converted Markdown and processing status, browse the knowledge graph, search in different modes, manage documents and the recycle bin, and follow background task progress.
 
+<p align="center">
+  <img src="kemo-graph-web.png" alt="kemo-graph web knowledge retrieval interface" width="100%">
+</p>
+
+<p align="center">
+  <sub>A local-first knowledge retrieval workspace combining graph, vector, hybrid retrieval and LLM answers.</sub>
+</p>
+
 ### Command line
 
 ```powershell
