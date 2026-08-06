@@ -577,6 +577,7 @@ def test_store_api_is_explicit_and_covers_lifecycle(tmp_path: Path) -> None:
         required = {
             "/api/v1/stores/initialize",
             "/api/v1/stores/import-path",
+            "/api/v1/stores/import",
             "/api/v1/stores/ingest",
             "/api/v1/stores/sources/sync",
             "/api/v1/stores/sources/status",
@@ -602,6 +603,68 @@ def test_store_api_is_explicit_and_covers_lifecycle(tmp_path: Path) -> None:
             "/api/v1/stores/maintenance/rebuild-all",
         }
         assert required <= paths
+
+
+def test_store_api_accepts_multipart_document_upload(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    config_path = _config_file(tmp_path, settings)
+    app = create_app(
+        config_path=config_path,
+        data_dir=tmp_path / "default-data",
+        external_dir=tmp_path / "default-markdown",
+    )
+    store_root = tmp_path / "multipart-store"
+
+    with TestClient(app) as client:
+        initialized = client.post(
+            "/api/v1/stores/initialize",
+            json={
+                "store_root": str(store_root),
+                "scope": "knowledge.global",
+                "display_name": "multipart portable store",
+            },
+        )
+        assert initialized.status_code == 200
+
+        imported = client.post(
+            "/api/v1/stores/import?ingest=false",
+            data={"store_root": str(store_root)},
+            files={"file": ("notes.txt", b"portable upload", "text/plain")},
+        )
+        assert imported.status_code == 200
+        payload = imported.json()["data"]
+        assert payload["store"]["scope"] == "knowledge.global"
+        assert payload["result"]["ingest_status"] == "pending"
+        assert payload["result"]["original_filename"] == "notes.txt"
+
+        unsupported = client.post(
+            "/api/v1/stores/import?ingest=false",
+            data={"store_root": str(store_root)},
+            files={"file": ("payload.exe", b"MZ", "application/octet-stream")},
+        )
+        assert unsupported.status_code == 415
+        assert unsupported.json()["error"]["code"] == "UNSUPPORTED_FORMAT"
+
+        with patch("api.routes.MAX_IMPORT_BYTES", 4):
+            too_large = client.post(
+                "/api/v1/stores/import?ingest=false",
+                data={"store_root": str(store_root)},
+                files={"file": ("notes.txt", b"12345", "text/plain")},
+            )
+        assert too_large.status_code == 413
+        assert too_large.json()["error"]["code"] == "FILE_TOO_LARGE"
+
+        missing_store = client.post(
+            "/api/v1/stores/import?ingest=false",
+            files={"file": ("notes.txt", b"text", "text/plain")},
+        )
+        assert missing_store.status_code == 422
+        assert missing_store.json()["error"]["code"] == "INVALID_PARAM"
+
+    operation = app.openapi()["paths"]["/api/v1/stores/import"]["post"]
+    parameter_names = {item["name"] for item in operation.get("parameters", [])}
+    assert "store_root" not in parameter_names
+    assert operation["requestBody"]["content"].get("multipart/form-data") is not None
 
 
 def test_cli_store_root_never_falls_back_to_default_data(tmp_path: Path) -> None:

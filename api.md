@@ -1107,6 +1107,7 @@ POST /api/v1/stores/initialize
 POST /api/v1/stores/info
 POST /api/v1/stores/status
 POST /api/v1/stores/import-path
+POST /api/v1/stores/import
 POST /api/v1/stores/upload
 POST /api/v1/stores/ingest
 POST /api/v1/stores/sources/sync
@@ -1243,7 +1244,28 @@ POST /api/v1/stores/import-path
 
 `path` 必须为绝对普通文件路径。返回同时包含原文件 `origin_hash` 与规范 Markdown `content_hash`，二者不得混用。
 
-### 11.6 联合查询
+### 11.6 multipart 文件上传导入
+
+调用方与 kemo-graph 不在同一文件系统，或不希望授予服务端源文件读取权限时，使用：
+
+```http
+POST /api/v1/stores/import?ingest=false
+Content-Type: multipart/form-data
+```
+
+表单字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|:---:|---|
+| `store_root` | text | 是 | 已初始化 portable Store 的绝对路径；放在 multipart 表单中，不进入 URL 日志 |
+| `file` | binary | 是 | 单个待转换文档，最大 50 MB |
+| `ingest` | query bool | 否，默认 `false` | 转换导入后是否立即构建 Graph 与 RAG |
+
+该端点与 `/import` 共用文件名、扩展名、大小、转换和 ingest 失败校验。响应的 `data`
+同时包含稳定 `store` 身份和 `result` 导入结果。portable 上传默认只转换并登记为待整理，
+需要立即整理时必须显式传入 `ingest=true`。
+
+### 11.7 联合查询
 
 ```http
 POST /api/v1/stores/query/federated
@@ -1265,7 +1287,7 @@ POST /api/v1/stores/query/federated
 
 支持 `graph/rag/hybrid/global/answer`。响应中的每条 `merged_results` 带 Store 身份和 `federated_score`。单 Store 失败记录在 `stores_failed`，不会取消其他 Store 的成功结果；调用方必须检查成功数与失败列表。
 
-### 11.7 给 kemo-agent 全局拓展的推荐数据域映射
+### 11.8 给 kemo-agent 全局拓展的推荐数据域映射
 
 全局拓展应把一个 `store_root` 理解为一个**数据域位置**，而不是一条记录或一个
 记忆 tier。每个数据域只创建一个可见的 `kemo-graph-storage`：
@@ -1288,7 +1310,7 @@ POST /api/v1/stores/query/federated
 - 不要为单条记忆、单个会话或单个文件创建独立 Store；这会产生过多 SQLite、
   FAISS 和搜索缓存文件，也会让联合检索成本线性放大。
 
-### 11.8 全局拓展启动与刷新顺序
+### 11.9 全局拓展启动与刷新顺序
 
 推荐的启动握手：
 
@@ -1329,7 +1351,7 @@ POST /api/v1/stores/query/federated
 }
 ```
 
-### 11.9 SourceEnvelope 严格字段契约
+### 11.10 SourceEnvelope 严格字段契约
 
 `records` 每项字段如下。请求模型拒绝任何未知字段。
 
@@ -1374,7 +1396,7 @@ RAG 与向量将无法按同一身份增量替换。
 tier 晋升只产生 metadata/revision 更新，不改变 URI；正文没有变化时服务端会返回
 `metadata_updated`，不会重新构建 Graph/RAG。
 
-### 11.10 同步结果、幂等和删除状态机
+### 11.11 同步结果、幂等和删除状态机
 
 成功同步返回 HTTP 200。即使某条记录为 `stale` 或 `conflict`，HTTP 仍为 200，
 调用方必须检查 `data.result` 中的计数与 `details`：
@@ -1438,7 +1460,7 @@ tombstone 会立即删除派生 Markdown，并级联清理 Graph、RAG、FAISS �
 派生 Markdown 不进入回收站，因为上游 SQLite 才是可恢复的权威来源。以后使用
 同一 URI 和更新版本恢复时，会复用原来的 kemo-graph `source_id`。
 
-### 11.11 整理策略与超时
+### 11.12 整理策略与超时
 
 `ingest_after_sync` 的选择：
 
@@ -1497,7 +1519,7 @@ HTTP 200 不代表每篇整理都成功，必须检查 `failed` 与 `details`。
 同一个 Store 的写操作应由全局拓展串行化。不要启动多个 kemo-graph Web 进程同时
 写同一套 SQLite/FAISS；构建期间查询可能返回 `409 PROCESSING`。
 
-### 11.12 检索模式选择
+### 11.13 检索模式选择
 
 | 需求 | 端点 | 是否生成自然语言回答 | 建议 |
 |---|---|---:|---|
@@ -1546,7 +1568,7 @@ communities           群组总结向量召回
 全局拓展通常应把这些证据交给 kemo-agent 的主回答模型，而不是再调用
 `query/answer`，避免两次 LLM 总结和上下文损失。
 
-### 11.13 跨 Store 联合检索响应
+### 11.14 跨 Store 联合检索响应
 
 `query/federated` 最多接受 100 个绝对 Store 路径。每个 Store 独立失败隔离：
 
@@ -1586,7 +1608,7 @@ communities           群组总结向量召回
 成功，不代表每个 Store 都可用。`merged_results` 主要融合可排序的 RAG/实体/群组
 结果；完整的单 Store Graph 结构仍位于 `stores[i].result`。
 
-### 11.14 状态、分页与变更游标
+### 11.15 状态、分页与变更游标
 
 Store 健康检查：
 
@@ -1635,7 +1657,7 @@ kemo-graph 当前不提供 kemo-agent 上游表的 change feed；全局拓展应
 维护游标，例如 `(content_updated_at, id)` 或业务 revision，并只把变化项推送给
 `sources/sync`。接口本身允许安全重放，不能用“可能重复”作为跳过幂等设计的理由。
 
-### 11.15 错误处理与重试矩阵
+### 11.16 错误处理与重试矩阵
 
 | HTTP | code | 是否重试 | 全局拓展处理 |
 |---:|---|---:|---|
@@ -1656,7 +1678,7 @@ kemo-graph 当前不提供 kemo-agent 上游表的 change feed；全局拓展应
 只有网络错误、超时、`PROCESSING`、临时 Provider/500 错误适合自动重试。422、403、
 内容冲突和同步 `conflict` 必须先修正数据或配置。
 
-### 11.16 可直接用于全局拓展的 Python 客户端示例
+### 11.17 可直接用于全局拓展的 Python 客户端示例
 
 以下示例只使用 Python 标准库，展示初始化、同步、整理和混合查询。生产实现应把
 HTTP 调用放入 kemo-agent 的全局拓展服务层，并增加日志、取消信号和持久化游标。
@@ -1784,7 +1806,7 @@ evidence = retrieval["result"]
 print(json.dumps(evidence, ensure_ascii=False, indent=2))
 ```
 
-### 11.17 PowerShell 联调示例
+### 11.18 PowerShell 联调示例
 
 ```powershell
 $base = if ($env:KEMO_GRAPH_BASE_URL) {
@@ -1823,7 +1845,7 @@ $result = Invoke-RestMethod `
 $result.data.result | ConvertTo-Json -Depth 20
 ```
 
-### 11.18 部署与安全底线
+### 11.19 部署与安全底线
 
 - API 当前没有应用层认证；默认仅监听 `127.0.0.1`；
 - 全局拓展不应把来自用户输入的任意字符串直接作为 `store_root`，必须从受控的

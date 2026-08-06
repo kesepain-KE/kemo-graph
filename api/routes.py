@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal
 
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 
 from core.knowledge_base import (
     MAX_IMPORT_BYTES,
@@ -103,6 +103,42 @@ def _store_operation(
         "store": asdict(manifest),
         "result": operation(service),
     }
+
+
+async def _stage_uploaded_document(
+    file: UploadFile,
+    temporary_dir: Path,
+) -> tuple[str, Path]:
+    """Validate and stream one multipart document into a short-lived staging file."""
+
+    filename = _validated_upload_filename(file.filename)
+    suffix = Path(filename).suffix.casefold()
+    if suffix not in SUPPORTED_IMPORT_SUFFIXES:
+        raise UnsupportedDocumentFormatError(
+            f"不支持的文档格式：{suffix or '<无扩展名>'}"
+        )
+
+    staged = temporary_dir / filename
+    total = 0
+    try:
+        with staged.open("wb") as handle:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_IMPORT_BYTES:
+                    raise DocumentTooLargeError(
+                        f"文件超过 {MAX_IMPORT_BYTES // (1024 * 1024)} MB 上限：{filename}"
+                    )
+                handle.write(chunk)
+    finally:
+        await file.close()
+    return filename, staged
+
+
+def _raise_import_failure(result: dict[str, Any]) -> None:
+    if result.get("ingest_status") == "failed":
+        raise DocumentIngestError(
+            str(result.get("ingest_error") or "文档已转换，但知识库整理失败")
+        )
 
 
 @router.get("/status", response_model=APIResponse)
@@ -299,36 +335,14 @@ async def post_import(
         Query(alias="ingest", description="转换后是否立即整理图谱与 RAG"),
     ] = True,
 ) -> dict:
-    filename = _validated_upload_filename(file.filename)
-    suffix = Path(filename).suffix.casefold()
-    if suffix not in SUPPORTED_IMPORT_SUFFIXES:
-        raise UnsupportedDocumentFormatError(
-            f"不支持的文档格式：{suffix or '<无扩展名>'}"
-        )
-
-    content = bytearray()
-    try:
-        while chunk := await file.read(1024 * 1024):
-            content.extend(chunk)
-            if len(content) > MAX_IMPORT_BYTES:
-                raise DocumentTooLargeError(
-                    f"文件超过 {MAX_IMPORT_BYTES // (1024 * 1024)} MB 上限：{filename}"
-                )
-    finally:
-        await file.close()
-
     with tempfile.TemporaryDirectory(prefix="kemo-graph-import-") as temporary_dir:
-        staged = Path(temporary_dir) / filename
-        staged.write_bytes(content)
+        filename, staged = await _stage_uploaded_document(file, Path(temporary_dir))
         result = service.import_document(
             staged,
             ingest_after_import=ingest_after_import,
             _original_identity=f"upload://{filename}",
         )
-    if result.get("ingest_status") == "failed":
-        raise DocumentIngestError(
-            str(result.get("ingest_error") or "文档已转换，但知识库整理失败")
-        )
+        _raise_import_failure(result)
     return success_response(result)
 
 
@@ -611,6 +625,36 @@ def post_store_import_path(
             ),
         )
     )
+
+
+@router.post("/stores/import", response_model=APIResponse)
+async def post_store_import(
+    context: Context,
+    file: Annotated[UploadFile, File(description="要转换并导入的本地文档")],
+    store_root: Annotated[
+        str,
+        Form(description="portable Store 绝对路径；使用表单字段避免进入 URL 日志"),
+    ],
+    ingest_after_import: Annotated[
+        bool,
+        Query(alias="ingest", description="转换后是否立即整理图谱与 RAG"),
+    ] = False,
+) -> dict:
+    with tempfile.TemporaryDirectory(prefix="kemo-graph-store-import-") as temporary_dir:
+        filename, staged = await _stage_uploaded_document(file, Path(temporary_dir))
+        data = _store_operation(
+            store_root,
+            context,
+            lambda service: service.import_document(
+                staged,
+                ingest_after_import=ingest_after_import,
+                _original_identity=f"upload://{filename}",
+            ),
+        )
+        result = data.get("result")
+        if isinstance(result, dict):
+            _raise_import_failure(result)
+    return success_response(data)
 
 
 @router.post("/stores/upload", response_model=APIResponse)
