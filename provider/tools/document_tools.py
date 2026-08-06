@@ -122,7 +122,7 @@ def convert_rst(path: Path | str) -> str:
         from docutils.core import publish_parts
         from markdownify import markdownify
 
-        html = publish_parts(source=rst, writer_name="html5")["html_body"]
+        html = publish_parts(source=rst, writer="html5")["html_body"]
         markdown = markdownify(html, heading_style="ATX")
     except ImportError as exc:
         raise DocumentConversionError(
