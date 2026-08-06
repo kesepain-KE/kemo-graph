@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.2.0`
+> **当前版本**：`1.2.1`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
 
 ---
@@ -924,6 +924,8 @@ POST /api/v1/update/apply
 
 - `status` 只读取本地版本、上次检查状态和 Git 工作区预检，不访问网络。
 - `check` 从公开仓库 `kesepain-KE/kemo-graph` 的 `main/version.json` 检查最新 SemVer。
+- 根目录 `update.py` 在本地与远端版本相同时也会询问是否强制重新执行更新；
+  用户确认后仍必须通过 Git 快进、工作区保护、依赖安装和前端构建检查。
 - `apply` 将更新作为 `kind=update` 的持久化后台任务提交，只允许来自 `localhost`、`127.0.0.1` 或 `::1` 的请求。
 - 自动安装只支持可安全 fast-forward 的 Git 工作区；程序文件有未提交修改时返回 `409 UPDATE_BLOCKED`。
 - 用户配置和运行数据不参与源码覆盖。安装成功后响应任务结果中的 `restart_required` 为 `true`，调用方应提示用户重启 Web 服务。

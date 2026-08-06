@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.2.0-00a98f" alt="version 1.2.0"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.2.1-00a98f" alt="version 1.2.1"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -139,6 +139,9 @@ python start.py rebuild-all
 # Check and apply updates
 python start.py update-check
 python start.py update
+
+# Root updater: asks whether to force a refresh when versions are identical
+python update.py
 ```
 
 ### HTTP API
@@ -177,7 +180,7 @@ An agent that truly accompanies a long-lived project should not only have a long
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
 
-The current release is **1.2.0**. It adds a stable synchronization protocol plus Store API/CLI commands for authoritative external table records, broadens conversion support for Office, EPUB, RTF and structured-data files, and improves GPU-first graph rendering, search-result pagination and graceful service shutdown. See [CHANGELOG.md](CHANGELOG.md) for the complete release summary.
+The current release is **1.2.1**. It adds multipart file-upload import endpoints for both Store and the built-in knowledge base (paired with the kemo-agent `import_file` command for cross-filesystem delivery), and fixes a docutils deprecation warning. The previous release (1.2.0) added a stable synchronization protocol plus Store API/CLI commands for authoritative external table records, broadened conversion support for Office, EPUB, RTF and structured-data files, and improved GPU-first graph rendering, search-result pagination and graceful service shutdown. See [CHANGELOG.md](CHANGELOG.md) for the complete release summary.
 
 Still being polished: conversion quality for complex document layouts, storage and index strategy for large knowledge bases and high concurrency, built-in authentication and permission tiers for the external API, and richer manual graph correction and provenance review interfaces.
 

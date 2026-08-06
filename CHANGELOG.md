@@ -4,7 +4,24 @@
 
 This project follows [Semantic Versioning](https://semver.org/). `version.json` is the single machine-readable source of the application version.
 
-## 1.2.0 — 2026-08-05
+## 1.2.1 — 2026-08-06
+
+### 新增 / Added
+
+- 新增 `POST /api/v1/stores/import` multipart 文件上传导入端点（配合 kemo-agent `import_file` 命令跨文件系统投递）：`UploadFile` + `Form(store_root)`，先做格式白名单与 50MB 大小校验，再流式暂存到短生命周期临时目录后走既有导入链路；`store_root` 用表单字段传递，避免路径进入 URL 日志。
+- 内置库侧同步配套 `POST /api/v1/import` 的 multipart 上传能力，kemo-agent `import_file` 按库类型自动选择端点。
+- 契约测试新增 multipart 上传用例（`?ingest=false`、返回双哈希），API 文档补充「multipart 文件上传导入」小节。
+
+### 修复 / Fixed
+
+- RST 转换改用 `publish_parts(writer="html5")` 替代已弃用的 `writer_name` 参数，消除 docutils 2.0 兼容警告（`docutils>=0.20` 均兼容）。
+
+### 兼容性 / Compatibility
+
+- 现有 HTTP 端点、CLI 命令和默认项目知识库继续兼容；`/stores/import` 为新增端点。
+- 前端 `package.json` 的版本仅代表私有构建包，不作为应用发布版本。
+
+## 1.2.0 — 2026-08-05## 1.2.0 — 2026-08-05
 
 ### 新增 / Added
 
