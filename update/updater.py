@@ -200,6 +200,10 @@ class ApplicationUpdater:
                     and not preflight["blocking_reasons"]
                     and not state.get("error")
                     and state.get("phase") not in {"checking", "updating", "failed"},
+                    "can_force_apply": bool(state.get("force_update_available"))
+                    and not preflight["blocking_reasons"]
+                    and not state.get("error")
+                    and state.get("phase") not in {"checking", "updating", "failed"},
                     "blocking_reasons": preflight["blocking_reasons"],
                     "repository_url": self.repository_url,
                     "version_url": self.version_url,
@@ -221,11 +225,13 @@ class ApplicationUpdater:
                     "current_version": current_text,
                     "latest_version": latest_text,
                     "update_available": latest > current,
+                    "force_update_available": latest == current,
                     "installation_mode": preflight["installation_mode"],
                     "checked_at": _now_iso(),
                     "worktree_clean": not preflight["dirty_files"],
                     "dirty_files": preflight["dirty_files"],
                     "can_apply": latest > current and not preflight["blocking_reasons"],
+                    "can_force_apply": latest == current and not preflight["blocking_reasons"],
                     "blocking_reasons": preflight["blocking_reasons"],
                     "phase": "idle",
                     "restart_required": bool(
@@ -249,13 +255,24 @@ class ApplicationUpdater:
                 self._record_error(error)
                 raise error from exc
 
-    def apply(self, *, progress: ProgressCallback | None = None) -> dict[str, Any]:
+    def apply(
+        self,
+        *,
+        progress: ProgressCallback | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
         callback = progress or (lambda _value, _detail: None)
         with self._lock:
             checked = self.check()
-            if not checked["update_available"]:
-                return {**checked, "updated": False, "message": "当前已是最新版本"}
-            if not checked["can_apply"]:
+            forced_same_version = bool(force and checked.get("force_update_available"))
+            if not checked["update_available"] and not forced_same_version:
+                message = (
+                    "当前已是最新版本"
+                    if checked.get("force_update_available")
+                    else "本地版本高于远端版本，未执行降级"
+                )
+                return {**checked, "updated": False, "forced": False, "message": message}
+            if not (checked["can_apply"] or (forced_same_version and checked["can_force_apply"])):
                 reasons = "；".join(checked["blocking_reasons"]) or "当前安装不可更新"
                 raise UpdateBlockedError(reasons)
 
@@ -326,13 +343,16 @@ class ApplicationUpdater:
                     "current_version": current_version,
                     "latest_version": current_version,
                     "update_available": False,
+                    "force_update_available": False,
                     "can_apply": False,
+                    "can_force_apply": False,
                     "worktree_clean": True,
                     "dirty_files": [],
                     "blocking_reasons": [],
                     "phase": "completed",
                     "restart_required": True,
                     "updated": True,
+                    "forced": forced_same_version,
                     "previous_commit": old_head,
                     "current_commit": self._git_output(["git", "rev-parse", "HEAD"]).strip(),
                     "finished_at": _now_iso(),
@@ -431,11 +451,13 @@ class ApplicationUpdater:
             "current_version": read_local_version(self.project_root),
             "latest_version": None,
             "update_available": False,
+            "force_update_available": False,
             "installation_mode": "git" if (self.project_root / ".git").exists() else "source",
             "checked_at": None,
             "worktree_clean": False,
             "dirty_files": [],
             "can_apply": False,
+            "can_force_apply": False,
             "blocking_reasons": [],
             "phase": "idle",
             "restart_required": False,

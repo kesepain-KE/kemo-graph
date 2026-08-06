@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -14,6 +15,15 @@ from update import (
     UpdateSourceError,
     migrate_legacy_runtime,
 )
+
+
+def _load_update_entry():
+    path = Path(__file__).resolve().parents[1] / "update.py"
+    spec = importlib.util.spec_from_file_location("kemo_graph_update_entry", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _project(tmp_path: Path, version: str = "1.0.0") -> Path:
@@ -63,6 +73,80 @@ def test_check_finds_new_version_and_persists_state(tmp_path: Path) -> None:
     )[
         "latest_version"
     ] == "1.1.0"
+
+
+def test_same_version_check_offers_force_update(tmp_path: Path) -> None:
+    root = _project(tmp_path, version="1.2.0")
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(
+        root,
+        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        command_runner=_runner(),
+    )
+
+    status = updater.check()
+
+    assert status["update_available"] is False
+    assert status["force_update_available"] is True
+    assert status["can_apply"] is False
+    assert status["can_force_apply"] is True
+
+
+def test_same_version_force_apply_rebuilds_without_version_bump(tmp_path: Path) -> None:
+    root = _project(tmp_path, version="1.2.0")
+    (root / ".git").mkdir()
+
+    def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ["git", "show"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"version": "1.2.0"}),
+                stderr="",
+            )
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    updater = ApplicationUpdater(
+        root,
+        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        command_runner=run,
+    )
+
+    result = updater.apply(force=True)
+
+    assert result["updated"] is True
+    assert result["forced"] is True
+    assert result["current_version"] == "1.2.0"
+
+
+def test_root_update_entry_prompts_for_same_version_force(monkeypatch, capsys) -> None:
+    entry = _load_update_entry()
+    calls: list[bool] = []
+
+    class FakeUpdater:
+        def check(self):
+            return {
+                "current_version": "1.2.0",
+                "latest_version": "1.2.0",
+                "update_available": False,
+                "force_update_available": True,
+                "can_force_apply": True,
+            }
+
+        def apply(self, *, force=False):
+            calls.append(force)
+            return {"updated": True, "forced": force}
+
+    monkeypatch.setattr(entry, "ApplicationUpdater", FakeUpdater)
+    monkeypatch.setattr("builtins.input", lambda: "y")
+
+    assert entry.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["data"] == {"updated": True, "forced": True}
+    assert calls == [True]
 
 
 def test_legacy_runtime_is_migrated_without_overwriting(tmp_path: Path) -> None:
@@ -146,7 +230,7 @@ def test_cli_version_outputs_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert start.main(["version"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["data"]["version"] == "1.2.0"
+    assert payload["data"]["version"] == "1.2.1"
 
 
 def test_update_apply_loopback_guard() -> None:
