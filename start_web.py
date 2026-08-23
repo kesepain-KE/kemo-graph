@@ -4,41 +4,115 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import mimetypes
 import os
+import socket
 import sys
 import threading
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from collections.abc import Sequence
 from pathlib import Path
 from typing import AsyncIterator
 
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+try:
+    import uvicorn
+    from dotenv import load_dotenv
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from api.deps import create_context, create_service
+    from api.errors import install_exception_handlers, success_response
+    from api.routes import _is_loopback_host, router
+    from api.schemas import RestartRequest
+    from core.scheduler import MaintenanceScheduler
+    from core.jobs import MaintenanceJobManager
+    from update import ApplicationUpdater, read_local_version
+    from restart import (
+        RestartPermissionError,
+        RestartUnavailableError,
+        remove_runtime_state,
+        schedule_restart,
+        write_runtime_state,
+    )
+except ModuleNotFoundError as exc:
+    if __name__ == "__main__":
+        missing = exc.name or "未知模块"
+        print(f"kemo-graph Web 启动失败：缺少 Python 依赖 {missing!r}。", file=sys.stderr)
+        print(
+            f"请运行：{sys.executable} -m pip install -r "
+            f'"{Path(__file__).resolve().parent / "requirements.txt"}"',
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    raise
 
-from api.deps import create_context, create_service
-from api.errors import install_exception_handlers, success_response
-from api.routes import _is_loopback_host, router
-from api.schemas import RestartRequest
-from core.scheduler import MaintenanceScheduler
-from core.jobs import MaintenanceJobManager
-from update import ApplicationUpdater, read_local_version
-from restart import (
-    RestartPermissionError,
-    RestartUnavailableError,
-    remove_runtime_state,
-    schedule_restart,
-    write_runtime_state,
-)
+PROJECT_ROOT = Path(__file__).resolve().parent
+# 使用脚本所在项目的环境文件；显式 shell 环境变量仍保持更高优先级。
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=False)
 
 
 LOGGER = logging.getLogger(__name__)
 UVICORN_LOGGER = logging.getLogger("uvicorn.error")
-FRONTEND_DIST = Path(__file__).resolve().parent / "web" / "frontend" / "dist"
+FRONTEND_DIST = PROJECT_ROOT / "web" / "frontend" / "dist"
+RUNTIME_HEALTH_PATH = "/api/v1/system/runtime"
+
+
+def _port_number(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("端口必须是整数") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("端口必须在 1 到 65535 之间")
+    return port
+
+
+def _probe_host(host: str) -> str:
+    if host == "0.0.0.0":
+        return "127.0.0.1"
+    if host == "::":
+        return "::1"
+    return host
+
+
+def _listener_is_active(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((_probe_host(host), port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _is_kemo_graph_service(host: str, port: int) -> bool:
+    probe_host = _probe_host(host)
+    display_host = f"[{probe_host}]" if ":" in probe_host else probe_host
+    request = urllib.request.Request(
+        f"http://{display_host}:{port}{RUNTIME_HEALTH_PATH}",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.5) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return False
+    data = payload.get("data")
+    return isinstance(data, dict) and isinstance(data.get("version"), str)
+
+
+def _service_url(host: str, port: int) -> str:
+    display_host = _probe_host(host)
+    if ":" in display_host:
+        display_host = f"[{display_host}]"
+    return f"http://{display_host}:{port}"
 
 
 def _mount_frontend(
@@ -208,8 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=os.getenv("KEMO_GRAPH_WEB_HOST", "127.0.0.1"))
     parser.add_argument(
         "--port",
-        type=int,
-        default=int(os.getenv("KEMO_GRAPH_WEB_PORT", "8000")),
+        type=_port_number,
+        default=os.getenv("KEMO_GRAPH_WEB_PORT", "8000"),
     )
     parser.add_argument("--data-dir")
     parser.add_argument("--external-dir")
@@ -220,6 +294,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(raw_arguments)
+    service_url = _service_url(args.host, args.port)
+    if _listener_is_active(args.host, args.port):
+        if _is_kemo_graph_service(args.host, args.port):
+            print(f"kemo-graph Web 已在运行：{service_url}", flush=True)
+            return 0
+        print(
+            f"kemo-graph Web 启动失败：{args.host}:{args.port} 已被其他程序占用。",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
     application = create_app(
         config_path=args.config,
         data_dir=args.data_dir,
@@ -241,6 +327,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=args.host,
         port=args.port,
     )
+    print(f"kemo-graph Web 正在启动：{service_url}", flush=True)
     try:
         try:
             server.run()
@@ -257,5 +344,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         remove_runtime_state(os.getpid())
 
 
+def _run_cli() -> int:
+    try:
+        return main()
+    except Exception as exc:
+        print(
+            f"kemo-graph Web 启动失败：{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            "请检查配置、文件权限和依赖；依赖可使用 "
+            f'`{sys.executable} -m pip check` 验证。',
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_run_cli())
