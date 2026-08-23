@@ -49,7 +49,18 @@ class _MatchedNode:
 EntityExtractor = Callable[[list[str]], list[Entity]]
 
 _CONTAINS_MATCH_SCORE = 0.85
+# A query can legitimately name a concept only in a node summary (for example,
+# a node may use a product name as its keyword while the summary contains the
+# user-facing Chinese term).  Summary/tag matches are intentionally weaker than
+# keyword/alias matches so that they improve recall without turning every common
+# word into a graph anchor.
+_SUMMARY_CONTAINS_MATCH_SCORE = 0.78
 _MIN_PARTIAL_MATCH_LENGTH = 2
+# Summary/tag fallback is intentionally bounded.  A short common term may
+# occur in many descriptive summaries; returning every such node as a graph
+# anchor makes BFS and the UI unreadable.  Strong keyword/alias/contains hits
+# always take precedence and suppress this fallback for the same entity.
+_MAX_SUMMARY_FALLBACK_NODES = 20
 
 
 class GraphEngine:
@@ -198,9 +209,60 @@ class GraphEngine:
         for entity in entities:
             if not 0.0 <= entity.confidence <= 1.0:
                 raise GraphQueryError("Entity.confidence 必须在 0 到 1 之间")
+            scored_nodes: list[tuple[_Node, float]] = []
+            has_strong_match = False
             for node in nodes:
                 lexical_score = _node_match_score(entity, node)
-                match_score = lexical_score * entity.confidence
+                scored_nodes.append((node, lexical_score))
+                has_strong_match = has_strong_match or (
+                    lexical_score >= _CONTAINS_MATCH_SCORE
+                )
+
+            if has_strong_match:
+                # If the query already names a canonical keyword/alias (or a
+                # containing keyword), descriptive summaries should not turn
+                # every node mentioning that common word into an anchor.
+                scored_nodes = [
+                    (node, score)
+                    for node, score in scored_nodes
+                    if score >= _CONTAINS_MATCH_SCORE
+                ]
+            else:
+                summary_fallback = [
+                    (node, score)
+                    for node, score in scored_nodes
+                    if score == _SUMMARY_CONTAINS_MATCH_SCORE
+                ]
+                if len(summary_fallback) > _MAX_SUMMARY_FALLBACK_NODES:
+                    summary_fallback.sort(
+                        key=lambda item: (
+                            -item[0].ref_count,
+                            -item[0].weight,
+                            item[0].keyword,
+                            item[0].node_id,
+                        )
+                    )
+                    allowed = {
+                        node.node_id
+                        for node, _ in summary_fallback[:_MAX_SUMMARY_FALLBACK_NODES]
+                    }
+                    scored_nodes = [
+                        (node, score)
+                        for node, score in scored_nodes
+                        if score != _SUMMARY_CONTAINS_MATCH_SCORE
+                        or node.node_id in allowed
+                    ]
+
+            for node, lexical_score in scored_nodes:
+                # Exact/alias/contains evidence comes from the database itself;
+                # do not let an LLM's conservative confidence discard a strong
+                # keyword/alias/contains hit.  Confidence still gates summary
+                # and fuzzy-only matches.
+                match_score = (
+                    lexical_score
+                    if lexical_score >= _CONTAINS_MATCH_SCORE
+                    else lexical_score * entity.confidence
+                )
                 if match_score < threshold:
                     continue
                 previous = best_by_node.get(node.node_id)
@@ -413,6 +475,21 @@ def _node_match_score(entity: Entity, node: _Node) -> float:
         for node_term in node_terms
     ):
         return _CONTAINS_MATCH_SCORE
+    # Keep summary/tag matching below keyword/alias matching.  This is a
+    # recall-oriented fallback for nodes whose canonical name is not the term
+    # users naturally search for; it is still protected by the minimum partial
+    # match length check above.
+    descriptive_terms = {
+        _match_key(value)
+        for value in [node.summary, *node.tags]
+        if isinstance(value, str) and value.strip()
+    }
+    if any(
+        _is_meaningful_contains_match(entity_term, descriptive_term)
+        for entity_term in entity_terms
+        for descriptive_term in descriptive_terms
+    ):
+        return _SUMMARY_CONTAINS_MATCH_SCORE
     return max(
         (
             SequenceMatcher(None, entity_term, node_term).ratio()
@@ -425,8 +502,25 @@ def _node_match_score(entity: Entity, node: _Node) -> float:
 
 
 def _entities_from_query_plan(plan: QueryPlan) -> list[Entity]:
-    if plan.entities:
-        return [
+    """Convert a query plan into graph anchors without dropping rewrites.
+
+    The planner may return a useful synonym/subquery while omitting it from
+    ``entities`` (or may extract only one entity from a multi-intent query).
+    Previously the presence of *any* entity caused all query variants to be
+    discarded, making Graph recall substantially worse than RAG recall.  Keep
+    the structured entities first, then append unseen high-confidence variants
+    as lower-weight concept anchors.  Broad/related variants remain RAG-only
+    to avoid noisy graph expansion.
+    """
+
+    entities: list[Entity] = []
+    seen: set[str] = set()
+    for item in plan.entities:
+        key = _match_key(item.normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        entities.append(
             Entity(
                 text=item.text,
                 type=item.type,
@@ -434,18 +528,30 @@ def _entities_from_query_plan(plan: QueryPlan) -> list[Entity]:
                 aliases=list(item.aliases),
                 confidence=item.confidence,
             )
-            for item in plan.entities
-        ]
-    return [
-        Entity(
-            text=variant.text,
-            type="concept",
-            normalized=variant.text,
-            aliases=[],
-            confidence=variant.weight,
         )
-        for variant in plan.variants
-    ]
+        seen.update(_match_key(alias) for alias in item.aliases)
+    for variant in plan.variants:
+        # Graph anchors should stay precise.  Low-weight related/broader
+        # variants are useful for RAG recall, but treating them as graph
+        # entities can fan out through common concepts and create noisy BFS
+        # neighborhoods.  Synonyms/paraphrases/subqueries (weight >= 0.8) are
+        # sufficiently close to the user's stated intent to use as anchors.
+        if variant.weight < 0.8:
+            continue
+        key = _match_key(variant.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        entities.append(
+            Entity(
+                text=variant.text,
+                type="concept",
+                normalized=variant.text,
+                aliases=[],
+                confidence=variant.weight,
+            )
+        )
+    return entities
 
 
 def _is_meaningful_contains_match(left: str, right: str) -> bool:

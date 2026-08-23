@@ -10,7 +10,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..chunker import chunking_signature
-from ..db import connect_rag, connect_sources, read_rag_meta
+from ..db import (
+    connect_rag,
+    connect_sources,
+    read_graph_meta,
+    read_rag_meta,
+)
 from . import IngestError
 from ._utils import _elapsed_ms, _hash_relative_path, _now_iso
 
@@ -39,6 +44,7 @@ def scan_sources(self) -> ScanResult:
     """扫描全部 Markdown，并更新 sources 的身份、哈希和状态。"""
 
     started_at = time.perf_counter()
+    graph_config_changed = self._graph_extraction_config_changed()
     rag_config_changed = self._rag_chunking_config_changed()
     markdown_files = sorted(
         (
@@ -117,7 +123,9 @@ def scan_sources(self) -> ScanResult:
             if restored or changed:
                 graph_status = (
                     "pending"
-                    if restored or content_hash != existing["graph_hash"]
+                    if restored
+                    or content_hash != existing["graph_hash"]
+                    or graph_config_changed
                     else "ready"
                 )
                 rag_status = (
@@ -147,14 +155,19 @@ def scan_sources(self) -> ScanResult:
                 )
                 changed_ids.append(source_id)
             else:
-                if rag_config_changed and existing["exists_status"] == "active":
+                if (
+                    (graph_config_changed or rag_config_changed)
+                    and existing["exists_status"] == "active"
+                ):
                     connection.execute(
                         """
-                            UPDATE sources
-                            SET rag_status = 'pending', updated_at = ?
-                            WHERE source_id = ?
-                            """,
-                        (now, source_id),
+                        UPDATE sources
+                        SET graph_status = CASE WHEN ? THEN 'pending' ELSE graph_status END,
+                            rag_status = CASE WHEN ? THEN 'pending' ELSE rag_status END,
+                            updated_at = ?
+                        WHERE source_id = ?
+                        """,
+                        (int(graph_config_changed), int(rag_config_changed), now, source_id),
                     )
                     changed_ids.append(source_id)
                     continue
@@ -226,6 +239,38 @@ def _rag_chunking_config_changed(self) -> bool:
     finally:
         connection.close()
     return bool(vector_count and meta.get("chunking_signature") != current_signature)
+
+
+def _graph_extraction_config_changed(self) -> bool:
+    """检测图谱抽取档位/Prompt profile 是否改变。"""
+
+    meta = read_graph_meta(self.paths)
+    current_signature = self.settings.graph_extraction_signature()
+    connection = connect_sources(self.paths)
+    try:
+        built_count = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM sources
+                WHERE exists_status = 'active'
+                  AND graph_status = 'ready'
+                  AND graph_hash IS NOT NULL
+                """
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+    stored_signature = meta.get("extraction_signature")
+    if not stored_signature:
+        # 旧版本没有指纹。将已有 Graph 标记为待重建，让新的稀疏 Prompt
+        # 真正作用到历史文档。指纹要等图谱成功写入后由
+        # ``Ingestor._refresh_graph_meta`` 更新；扫描本身可能因路径冲突、
+        # 文档上限或数据库错误失败，不能在这里提前宣称旧图谱已经重建。
+        if built_count:
+            return True
+        return False
+    return bool(built_count and stored_signature != current_signature)
 
 
 def _source_record_from_row(row: sqlite3.Row) -> _SourceRecord:

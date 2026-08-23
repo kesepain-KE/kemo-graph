@@ -101,6 +101,11 @@ class Ingestor:
 
         return implementation._rag_chunking_config_changed(self)
 
+    def _graph_extraction_config_changed(self) -> bool:
+        from . import _scan as implementation
+
+        return implementation._graph_extraction_config_changed(self)
+
     def ingest(
         self,
         paths: Sequence[Path | str] | None = None,
@@ -485,6 +490,7 @@ class Ingestor:
                 "total_nodes": int(counts["total_nodes"]),
                 "total_edges": int(counts["total_edges"]),
                 "total_groups": int(counts["total_groups"]),
+                "extraction_signature": self.settings.graph_extraction_signature(),
             }
         )
         if changed:

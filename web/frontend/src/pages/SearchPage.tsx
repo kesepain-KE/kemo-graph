@@ -23,6 +23,10 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
+import {
+  useSearchSession,
+  type SearchResultDisplayMode,
+} from "../context/SearchSessionContext";
 import type {
   AnswerQueryData,
   GraphNode,
@@ -35,15 +39,6 @@ import type {
   SearchCacheItem,
   SearchMode,
 } from "../types/api";
-
-type SearchResult =
-  | AnswerQueryData
-  | GraphQueryData
-  | RagQueryData
-  | HybridQueryData
-  | GlobalQueryData;
-
-type ResultDisplayMode = "markdown" | "source";
 
 const SearchMarkdownContent = lazy(() =>
   import("../components/SearchMarkdownContent").then((module) => ({
@@ -81,7 +76,7 @@ function SearchResultText({
   compact = false,
 }: {
   content: string;
-  displayMode: ResultDisplayMode;
+  displayMode: SearchResultDisplayMode;
   compact?: boolean;
 }) {
   if (displayMode === "source") {
@@ -190,7 +185,7 @@ function GraphResults({
 }: {
   data: GraphQueryData;
   onNode: (node: GraphNode) => void;
-  displayMode: ResultDisplayMode;
+  displayMode: SearchResultDisplayMode;
 }) {
   const nodes = [...data.hit_nodes, ...data.expanded_nodes];
   const [page, setPage] = useState(1);
@@ -262,7 +257,7 @@ function GraphResults({
   );
 }
 
-function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: ResultDisplayMode }) {
+function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: SearchResultDisplayMode }) {
   return (
     <section className="result-column result-column--rag">
       <div className="result-column__heading">
@@ -317,7 +312,7 @@ function FileBadge() {
   return <span className="mini-file-badge">MD</span>;
 }
 
-function GlobalResults({ data, displayMode }: { data: GlobalQueryData; displayMode: ResultDisplayMode }) {
+function GlobalResults({ data, displayMode }: { data: GlobalQueryData; displayMode: SearchResultDisplayMode }) {
   return (
     <section className="result-column global-result">
       <div className="result-column__heading">
@@ -348,7 +343,7 @@ function AnswerResults({
 }: {
   data: AnswerQueryData;
   onNode: (node: GraphNode) => void;
-  displayMode: ResultDisplayMode;
+  displayMode: SearchResultDisplayMode;
 }) {
   return (
     <div className="answer-results">
@@ -394,11 +389,19 @@ function formatHistoryTime(value: string | null): string {
 
 export function SearchPage() {
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("answer");
-  const [result, setResult] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    query,
+    mode,
+    result,
+    loading,
+    error,
+    setQuery,
+    selectMode,
+    resultDisplayMode,
+    setResultDisplayMode,
+    runSearch: startSearch,
+    restoreResult,
+  } = useSearchSession();
   const [historyItems, setHistoryItems] = useState<SearchCacheItem[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -406,8 +409,6 @@ export function SearchPage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyNotice, setHistoryNotice] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [resultDisplayMode, setResultDisplayMode] = useState<ResultDisplayMode>("markdown");
-
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     setHistoryError(null);
@@ -440,36 +441,11 @@ export function SearchPage() {
   const runSearch = async (event?: FormEvent, force = false) => {
     event?.preventDefault();
     if (!query.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
     setHistoryNotice(null);
-    try {
-      const data =
-        mode === "answer"
-          ? await api.queryAnswer(query.trim(), {
-              graph_depth: 3,
-              rag_top_k: 10,
-              force,
-            })
-          : mode === "graph"
-          ? await api.queryGraph(query.trim(), { depth: 3, direction: "both", force })
-          : mode === "rag"
-            ? await api.queryRag(query.trim(), { top_k: 10, force })
-            : mode === "global"
-              ? await api.queryGlobal(query.trim(), { top_k: 5, force })
-              : await api.queryHybrid(query.trim(), {
-                  graph_depth: 3,
-                  rag_top_k: 10,
-                  force,
-                });
-      setResult(data);
+    const data = await startSearch(query, mode, force);
+    if (data) {
       setHistoryNotice(force ? "已强制刷新结果并更新服务端缓存。" : null);
       await loadHistory();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "检索失败");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -479,10 +455,7 @@ export function SearchPage() {
     setHistoryNotice(null);
     try {
       const detail = await api.getSearchCacheDetail(item.cache_key);
-      setQuery(detail.query);
-      setMode(detail.query_mode);
-      setResult(detail.result);
-      setError(null);
+      restoreResult(detail.query, detail.query_mode, detail.result);
       setHistoryOpen(false);
       setHistoryNotice(
         detail.is_stale
@@ -570,8 +543,7 @@ export function SearchPage() {
               className={mode === value ? "is-active" : ""}
               key={value}
               onClick={() => {
-                setMode(value);
-                setResult(null);
+                selectMode(value);
               }}
             >
               <Icon size={16} />{label}

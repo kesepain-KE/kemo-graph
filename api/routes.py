@@ -74,6 +74,7 @@ from .schemas import (
     StoreSourceSyncRequest,
     StoreUploadRequest,
     StoreVisualizationPageRequest,
+    UpdateApplyRequest,
     UploadRequest,
 )
 
@@ -476,16 +477,31 @@ def post_update_check(updater: Updater) -> dict:
 
 
 @router.post("/update/apply", response_model=APIResponse)
-def post_update_apply(request: Request, updater: Updater, jobs: Jobs) -> dict:
+def post_update_apply(
+    request: Request,
+    updater: Updater,
+    jobs: Jobs,
+    payload: UpdateApplyRequest | None = None,
+    force: Annotated[bool, Query(description="允许同版本强制重新安装")] = False,
+) -> dict:
     host = request.client.host if request.client is not None else ""
     if not _is_loopback_host(host):
         raise UpdatePermissionError("应用更新只允许从本机访问")
+    force_requested = bool(force or (payload and payload.force))
     status = updater.status()
-    if not status.get("update_available"):
+    same_version_force = bool(force_requested and status.get("force_update_available"))
+    if not status.get("update_available") and not same_version_force:
         raise UpdateBlockedError("请先检查更新；当前没有可安装的新版本")
-    if not status.get("can_apply"):
+    can_apply = bool(status.get("can_apply")) or bool(
+        same_version_force and status.get("can_force_apply")
+    )
+    if not can_apply:
         reasons = "；".join(status.get("blocking_reasons") or [])
         raise UpdateBlockedError(reasons or "当前安装状态不允许更新")
+    if force_requested:
+        return success_response(jobs.submit("update", force=True))
+    # Preserve the original no-options call shape for existing API adapters
+    # and test doubles; MaintenanceJobManager defaults force to False.
     return success_response(jobs.submit("update"))
 
 

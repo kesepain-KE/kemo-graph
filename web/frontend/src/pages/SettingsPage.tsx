@@ -90,6 +90,10 @@ const groups: ConfigGroup[] = [
         fields: [
           { path: "entity_extraction.method", label: "实体抽取方式", description: "LLM 模式使用模型理解语义；规则模式适合轻量处理。", kind: "select", options: [{ label: "LLM 智能抽取", value: "llm" }, { label: "规则抽取", value: "rule" }] },
           { path: "entity_extraction.max_entities", label: "单次最大实体数", description: "每次查询或抽取最多保留的实体数量。", kind: "number", min: 1, max: 100, step: 1, suffix: "个" },
+          { path: "graph_build_mode", label: "图谱构建模式", description: "自动模式优先使用结构化输出；工具模式适合需要逐步检索和写入的网关。", kind: "select", options: [{ label: "自动（推荐）", value: "auto" }, { label: "结构化输出", value: "structured" }, { label: "工具调用", value: "tools" }] },
+          { path: "graph_extract_granularity", label: "图谱抽取颗粒度", description: "默认采用粗粒度，只保留稳定主题和关键关系；细粒度会显著增加节点与关系数量。", kind: "select", options: [{ label: "粗粒度（推荐，较少节点）", value: "large" }, { label: "标准", value: "medium" }, { label: "细粒度（更多节点）", value: "small" }] },
+          { path: "graph_extract_chunk_size", label: "图谱基准分段大小", description: "颗粒度档位以此字符数为基准；调整后需要重新整理文档才能生效。", kind: "number", min: 2000, max: 100000, step: 500, suffix: "字符" },
+          { path: "graph_extract_concurrency", label: "并行抽取数量", description: "结构化模式同时处理的文档分段数量；工具模式保持串行事务写入。", kind: "number", min: 1, max: 8, step: 1, suffix: "段" },
           { path: "graph_tool_max_iterations", label: "工具调用最大轮次", description: "图谱构建智能体在单篇文档中的最大工具循环次数。", kind: "number", min: 1, max: 200, step: 1, suffix: "轮" },
         ],
       },
@@ -308,6 +312,15 @@ export function SettingsPage() {
   const panelRef = useRef<HTMLElement>(null);
 
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
+  const forceUpdateAvailable = Boolean(
+    updateStatus?.force_update_available &&
+      !updateStatus.update_available &&
+      updateStatus.can_force_apply,
+  );
+  const canApplyUpdate = Boolean(
+    updateStatus &&
+      ((updateStatus.update_available && updateStatus.can_apply) || forceUpdateAvailable),
+  );
   const dirty = useMemo(
     () => Boolean(config && savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig)),
     [config, savedConfig],
@@ -470,7 +483,9 @@ export function SettingsPage() {
       setNotice(
         status.update_available
           ? `发现新版本 ${status.latest_version}，请确认安装条件后执行更新。`
-          : `当前 ${status.current_version} 已是最新版本。`,
+          : status.force_update_available
+            ? `当前 ${status.current_version} 与 GitHub 版本相同，可选择强制重新安装当前提交。`
+            : `当前 ${status.current_version} 已是最新版本。`,
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "检查更新失败");
@@ -479,16 +494,17 @@ export function SettingsPage() {
     }
   };
 
-  const applyApplicationUpdate = async () => {
+  const applyApplicationUpdate = async (force = false) => {
     if (!updateStatus?.latest_version) return;
-    if (!window.confirm(
-      `确认从 GitHub 更新至 ${updateStatus.latest_version}？更新完成后需要重启 kemo-graph。`,
-    )) return;
+    const confirmation = force
+      ? `当前版本 ${updateStatus.current_version} 与 GitHub 版本相同。确认强制重新安装当前提交？这会重新安装依赖并重建前端，完成后需要重启 kemo-graph。`
+      : `确认从 GitHub 更新至 ${updateStatus.latest_version}？更新完成后需要重启 kemo-graph。`;
+    if (!window.confirm(confirmation)) return;
     setApplyingUpdate(true);
     setNotice(null);
     setError(null);
     try {
-      const job = await api.applyUpdate();
+      const job = await api.applyUpdate(force);
       await refreshServerTasks();
       setNotice(`更新任务已进入后台队列（${job.job_id.slice(0, 8)}）。完成后请重启服务。`);
       await loadUpdateStatus();
@@ -674,14 +690,17 @@ export function SettingsPage() {
                           applyingUpdate
                           || checkingUpdate
                           || restartingService
-                          || !updateStatus?.update_available
-                          || !updateStatus.can_apply
+                          || !canApplyUpdate
                         }
-                        onClick={() => void applyApplicationUpdate()}
+                        onClick={() => void applyApplicationUpdate(forceUpdateAvailable)}
                         type="button"
                       >
                         <DownloadCloud size={15} />
-                        {applyingUpdate ? "提交中" : "下载并更新"}
+                        {applyingUpdate
+                          ? "提交中"
+                          : forceUpdateAvailable
+                            ? "强制重新安装"
+                            : "下载并更新"}
                       </button>
                       <button
                         className="button button--secondary"

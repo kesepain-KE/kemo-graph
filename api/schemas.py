@@ -181,6 +181,12 @@ class RestartRequest(StrictRequest):
     confirm: Literal["restart"]
 
 
+class UpdateApplyRequest(StrictRequest):
+    """应用更新请求；``force`` 允许同版本重新安装当前远端提交。"""
+
+    force: bool = False
+
+
 StoreScope = Literal[
     "knowledge.global",
     "knowledge.shared",

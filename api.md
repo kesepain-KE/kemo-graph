@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.2.1`
+> **当前版本**：`1.3.0`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
 
 ---
@@ -316,8 +316,18 @@ Content-Type: application/json
 处理流程：
 
 ```text
-查询文本切块 → Embedding → FAISS 候选召回 → Rerank → 阈值过滤
+原始问题
+  → 查询规划（可选 LLM 改写、同义表达、相关概念与子问题）
+  → 一次批量生成全部查询向量，并过滤语义漂移扩展
+  → FAISS 多路召回 + 加权 RRF 融合
+  → 有界精确词面候选补充（中文短词、标识符等）
+  → 分层切片家族折叠并补充父级上下文
+  → Rerank → 阈值过滤；仅在默认阈值、扩展查询且无结果时使用受限低分兜底
 ```
+
+查询规划失败时会退化为原始问题，不会让检索整体失败。Graph、RAG 与 Hybrid
+共享同一个已规划查询；Hybrid 的 chunk、实体摘要与节点群向量检索也复用同一批
+查询向量，不会为每一路重复请求 Embedding。
 
 响应 `data.results` 中每项包含：
 
@@ -573,7 +583,7 @@ Content-Type: multipart/form-data
 支持扩展名：
 
 ```text
-.pdf, .docx, .pptx, .xlsx, .xlsm, .xls, .epub, .rtf,
+.pdf, .docx, .pptx, .xlsx, .xlsm, .xls, .epub, .rtf, .eml,
 .md, .markdown, .txt, .log, .html, .htm, .rst, .csv, .tsv,
 .json, .jsonl, .ndjson, .yaml, .yml, .xml
 ```
@@ -582,6 +592,26 @@ Content-Type: multipart/form-data
 
 文本类文件会自动识别 UTF-8、UTF-16、GB18030、Big5 等常见编码；CSV 会同时检测编码与分隔符。
 PDF 仅提取已有文本层，不执行 OCR。扫描版 PDF 会返回 `CONVERSION_FAILED`，应由主智能体先完成 OCR 再导入。
+
+导入接口只接受本地普通文件。URL、网页抓取、视频、音频、远程链接和 OCR 不在 kemo-graph 转换层内处理；这些内容应由上游智能体先归一化为 Markdown 或本地文档。
+
+同一转换逻辑也可在项目根目录直接使用：
+
+```powershell
+python -m markitdown C:\path\to\document.pdf -o C:\path\to\document.md
+python convert.py C:\path\to\document.docx -o C:\path\to\document.md
+```
+
+Python 调用方式：
+
+```python
+from markitdown import MarkItDown
+
+result = MarkItDown().convert("document.pdf")
+markdown = result.text_content
+```
+
+CLI、Python API、网页导入和 `provider.tools.document_tools` 共用同一个 Converter 注册表，不会维护多套格式转换逻辑。
 
 PowerShell 示例：
 
@@ -825,6 +855,15 @@ Content-Type: application/json
 
 密钥优先级：非空 `kemo.api_key` > `kemo.api_key_env` 指定的环境变量。把掩码原样提交会保留现有显式密钥；把字段清空并保存会删除显式密钥并回退到环境变量。`kemo.api_key_source` 和 `kemo.protocol_version` 是 Web 只读字段。
 
+图谱抽取颗粒度由以下两个字段共同控制：
+
+- `graph_extract_granularity`：`small`、`medium` 或 `large`。分别对应细、标准、粗三档；当前默认是 `large`，优先控制节点和关系密度。细粒度会产生更多 Markdown 语义分段，粗粒度请求更少且每段有更严格的实体/关系预算。为兼容旧部署模板，也接受 `fine`、`balanced`、`coarse`，服务端会规范化为上述三档。
+- `graph_extract_chunk_size`：颗粒度档位使用的基准字符上限，范围为 `2000~100000`。实际分段上限为基准值乘以档位倍率（`small=0.5`、`medium=1`、`large=2`），并限制在同一范围内。
+
+每段默认预算为：`large` 最多 12 个实体/16 条关系，`medium` 最多 20 个实体/28 条关系，`small` 最多 36 个实体/54 条关系。预算是硬上限而不是填充目标；细节应并入节点 `summary`，不能为了凑数创建碎片节点或共现关系。
+
+修改后，下一次来源扫描会根据图谱抽取配置指纹把已完成文档的 `graph_status` 标为 `pending`；随后可运行网页批量重建或 `python start.py rebuild-knowledge-base`。RAG 配置未变化时不会因此重做向量索引。配置保存动作本身不会直接删除已提交的 Graph/RAG 数据。
+
 ### 7.3 手动生成节点群总结
 
 ```http
@@ -927,7 +966,14 @@ POST /api/v1/update/apply
 - 根目录 `update.py` 在本地与远端版本相同时也会询问是否强制重新执行更新；
   用户确认后仍必须通过 Git 快进、工作区保护、依赖安装和前端构建检查。
 - `apply` 将更新作为 `kind=update` 的持久化后台任务提交，只允许来自 `localhost`、`127.0.0.1` 或 `::1` 的请求。
+  旧客户端可以发送空请求体；需要同版本重装时发送 `{"force": true}`，或使用
+  `?force=true`。服务端仅在 `force_update_available=true` 且 `can_force_apply=true`
+  时接受强制请求；新版本存在时仍走普通升级路径。
+- Web 的“强制重新安装”、`python start.py update --force` 与上述 API 使用同一后台任务和
+  更新实现，不会绕过工作区保护。
 - 自动安装只支持可安全 fast-forward 的 Git 工作区；程序文件有未提交修改时返回 `409 UPDATE_BLOCKED`。
+- Git 合并后依赖安装或前端构建失败时，若没有并发的程序文件修改，会自动回滚到更新前提交并恢复用户配置；
+  检测到并发代码修改时会停止自动回滚并报告人工处理要求。
 - 用户配置和运行数据不参与源码覆盖。安装成功后响应任务结果中的 `restart_required` 为 `true`，调用方应提示用户重启 Web 服务。
 - 终端用户也可在项目根目录无参数运行 `python update.py`；更新实现位于 `update/updater.py`，运行状态和备份位于 `update/runtime/`。
 

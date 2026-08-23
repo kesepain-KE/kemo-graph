@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.2.1-00a98f" alt="version 1.2.1"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.3.0-00a98f" alt="version 1.3.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -48,9 +48,10 @@ It is not another agent that chats. It is the knowledge layer that lets agents u
 |---|---|
 | Project knowledge accumulation | Connect design documents, notes and decision records into a queryable concept network |
 | Agent knowledge collaboration | Let kemo-agent fetch graph relations and source evidence through the API on demand |
-| Multi-format ingestion | Convert PDF, Word, PowerPoint, Excel, EPUB, RTF, web, text, tabular and structured-data files into Markdown |
+| Multi-format ingestion | Convert local PDF, Word, PowerPoint, Excel, email, text, tabular and structured-data files into Markdown |
 | Source tracing | Every graph or retrieval hit can go back to its original document — no conclusion without evidence |
 | Multiple retrieval modes | Graph, vector, hybrid, Q&A and global-topic search for different kinds of questions |
+| Tunable extraction and robust recall | Fine/standard/coarse graph extraction profiles, query expansion, multi-query FAISS fusion and exact-term fallback for both semantic and short-keyword hits |
 | Incremental maintenance | Only affected data is updated when files change, instead of rebuilding the whole knowledge base |
 | Safe deletion | Shared sources are checked before deletion to avoid harming knowledge supported by other documents |
 | Standalone deployment | Local Web, CLI and HTTP API, or as a knowledge backend for the wider Kemo ecosystem |
@@ -85,6 +86,10 @@ At minimum, configure your gateway key in `.env`:
 KEMO_API_KEY=your-kemo-gateway-key
 ```
 
+Graph extraction defaults to `large` (coarse) and can be adjusted in the Web “System settings” panel or `config/config.json` to `small` (fine), `medium` (standard), or `large` (coarse). Use `graph_extract_chunk_size` to tune the baseline section size. Coarse mode also applies per-section entity/relation budgets and puts details into summaries instead of creating graph fragments. Retrieval keeps the original query, adds bounded synonym/concept expansions, fuses multi-query candidates, and uses an exact-term fallback for short keywords and identifiers.
+
+After changing the graph profile, the next scan marks completed documents as Graph-pending automatically. Run `python start.py rebuild-knowledge-base` to rebuild the graph without rebuilding unchanged RAG vectors.
+
 Confirm the gateway address and models in `config/config.json`, then build the web frontend and start:
 
 ```powershell
@@ -117,6 +122,10 @@ Once running, the browser lets you: upload materials, inspect converted Markdown
 ### Command line
 
 ```powershell
+# Convert to Markdown only; no knowledge-base initialization or model call
+python -m markitdown $env:KEMO_GRAPH_IMPORT_FILE -o output.md
+python convert.py $env:KEMO_GRAPH_IMPORT_FILE -o output.md
+
 # Import a file (without spending model quota yet)
 python start.py import $env:KEMO_GRAPH_IMPORT_FILE --no-ingest
 
@@ -143,6 +152,8 @@ python start.py update
 # Root updater: asks whether to force a refresh when versions are identical
 python update.py
 ```
+
+The normalization layer handles local ordinary files only. Web crawling, video, audio, OCR and remote links should be handled by the upstream agent before it passes Markdown or a local file to kemo-graph; the converter never accesses the network.
 
 ### HTTP API
 
@@ -180,7 +191,7 @@ An agent that truly accompanies a long-lived project should not only have a long
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
 
-The current release is **1.2.1**. It adds multipart file-upload import endpoints for both Store and the built-in knowledge base (paired with the kemo-agent `import_file` command for cross-filesystem delivery), and fixes a docutils deprecation warning. The previous release (1.2.0) added a stable synchronization protocol plus Store API/CLI commands for authoritative external table records, broadened conversion support for Office, EPUB, RTF and structured-data files, and improved GPU-first graph rendering, search-result pagination and graceful service shutdown. See [CHANGELOG.md](CHANGELOG.md) for the complete release summary.
+The current release is **1.3.0**. It makes coarse graph extraction the default, adds per-profile entity/relation budgets and sparse relation filtering, improves retrieval with query expansion, exact-term fallback and a new cache format, and splits the knowledge-base entry points into document, graph, retrieval and maintenance services behind a compatible facade. The Web, CLI and HTTP API update paths now also support same-version forced reinstall with failure rollback protection. See [CHANGELOG.md](CHANGELOG.md) for the complete release summary.
 
 Still being polished: conversion quality for complex document layouts, storage and index strategy for large knowledge bases and high concurrency, built-in authentication and permission tiers for the external API, and richer manual graph correction and provenance review interfaces.
 

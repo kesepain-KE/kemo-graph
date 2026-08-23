@@ -22,6 +22,9 @@ from core.ingestor import Ingestor
 def _settings() -> AppConfig:
     return AppConfig(
         graph_build_mode="tools",
+        # Preserve the historical shared-edge weight contract in these
+        # cascade tests; coarse-mode weak-edge filtering has dedicated tests.
+        graph_extract_granularity="medium",
         chunk_size=128,
         chunk_overlap=16,
         models={

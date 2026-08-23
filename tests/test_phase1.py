@@ -252,6 +252,7 @@ class DatabaseTests(unittest.TestCase):
                     "total_groups",
                     "last_summary_at",
                     "changed_since_summary",
+                    "extraction_signature",
                 },
             )
             self.assertEqual(read_rag_meta(paths)["vector_dimensions"], 4096)

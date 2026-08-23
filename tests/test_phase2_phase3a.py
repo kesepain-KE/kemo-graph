@@ -146,7 +146,7 @@ class ProviderFunctionTests(unittest.TestCase):
         self.assertEqual(payload["attempt"], 1)
         self.assertIs(payload["stream"], False)
         self.assertEqual(payload["system_prompt"], "rules")
-        self.assertEqual(payload["generation"], {"parallel_tool_calls": True})
+        self.assertEqual(payload["generation"], {"parallel_tool_calls": False})
         self.assertEqual(payload["output"], {"modalities": ["text"]})
         self.assertEqual(payload["tools"], [])
         self.assertEqual(payload["provider_options"], {})
@@ -235,6 +235,14 @@ class ProviderFunctionTests(unittest.TestCase):
 
         self.assertEqual(result, "finished")
         self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            request.call_args_list[0].kwargs["payload"]["generation"],
+            {"parallel_tool_calls": False},
+        )
+        self.assertEqual(
+            request.call_args_list[1].kwargs["payload"]["generation"],
+            {"parallel_tool_calls": False},
+        )
         second_payload = request.call_args_list[1].kwargs["payload"]
         replayed = second_payload["input"]
         self.assertEqual(len(replayed), 5)
@@ -281,6 +289,63 @@ class ProviderFunctionTests(unittest.TestCase):
 
         self.assertIn("最大迭代次数 1", str(context.exception))
         self.assertEqual(request.call_count, 1)
+
+    def test_chat_with_tools_retries_transient_gateway_failure(self) -> None:
+        responses = [
+            ProviderResponseError(
+                "kemo API 返回 HTTP 502",
+                provider="kemo",
+                status_code=502,
+            ),
+            {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "recovered"}],
+                    }
+                ],
+            },
+        ]
+        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
+            with (
+                patch("provider.engine.request_json", side_effect=responses) as request,
+                patch("provider.engine.sleep"),
+            ):
+                result = chat_with_tools(
+                    "rules",
+                    "document",
+                    [],
+                    lambda name, arguments: [],
+                    settings=_settings(),
+                )
+
+        self.assertEqual(result, "recovered")
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[0].kwargs["payload"]["attempt"], 1)
+        self.assertEqual(request.call_args_list[1].kwargs["payload"]["attempt"], 2)
+
+    def test_failed_response_retry_metadata_is_preserved(self) -> None:
+        response = {
+            "status": "failed",
+            "error": {
+                "code": "PROVIDER_UNAVAILABLE",
+                "message": "Internal server error",
+                "retryable": True,
+                "provider_status": 500,
+            },
+        }
+        with self.assertRaises(ProviderResponseError) as context:
+            from provider.engine import _extract_tool_calls
+
+            _extract_tool_calls(response, "kemo")
+
+        error = context.exception
+        self.assertTrue(error.retryable)
+        self.assertEqual(error.provider_code, "PROVIDER_UNAVAILABLE")
+        self.assertEqual(error.provider_status, 500)
+        self.assertEqual(error.status_code, 500)
 
     def test_chat_with_tools_rebases_repeated_gateway_item_ids(self) -> None:
         def action_response(request_id: str, call_id: str) -> dict:

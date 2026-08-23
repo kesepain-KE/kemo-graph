@@ -28,6 +28,10 @@ from provider.engine import chat_structured
 def _settings(root: Path, **updates: object) -> AppConfig:
     values: dict[str, object] = {
         "graph_build_mode": "structured",
+        # This file verifies evidence aggregation; keep it on the standard
+        # profile so the coarse-profile sparse relation policy is tested
+        # separately from the historical weight contract.
+        "graph_extract_granularity": "medium",
         "graph_extract_chunk_size": 2000,
         "graph_extract_concurrency": 3,
         "log_dir": str(root / "log"),

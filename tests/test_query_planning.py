@@ -234,6 +234,75 @@ class MultiQueryRetrievalTests(unittest.TestCase):
             self.assertEqual(result["results"][0]["chunk_id"], "reading")
             self.assertGreaterEqual(result["results"][0]["score"], 0.6)
 
+    def test_exact_text_candidate_recovers_when_ann_score_misses(self) -> None:
+        """短词命中不应依赖其 embedding 排进 FAISS 前 N。"""
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            settings = _settings(root)
+            settings.query_planning.mode = "off"
+            paths = initialize_databases(root / "data", settings)
+            sources = connect_sources(paths)
+            try:
+                sources.execute(
+                    """
+                    INSERT INTO sources (
+                        source_id, original_path, relative_path, path_hash, content_hash
+                    ) VALUES ('source-1', 'C:/notes.md', 'notes.md', 'path', 'content')
+                    """
+                )
+                sources.commit()
+            finally:
+                sources.close()
+
+            rag = connect_rag(paths)
+            try:
+                rows = [
+                    ("unrelated", "完全无关的内容", [1.0, 0.0, 0.0]),
+                    ("exact", "中央画布用于查看知识图谱", [0.0, 1.0, 0.0]),
+                ]
+                for vector_id, (chunk_id, content, vector) in enumerate(rows, start=1):
+                    rag.execute(
+                        """
+                        INSERT INTO chunks (
+                            chunk_id, source_id, content, chunk_index, token_count
+                        ) VALUES (?, 'source-1', ?, ?, 5)
+                        """,
+                        (chunk_id, content, vector_id - 1),
+                    )
+                    rag.execute(
+                        """
+                        INSERT INTO embeddings (
+                            vector_id, chunk_id, source_id, vector_blob,
+                            dimensions, model_name, vector_space_id
+                        ) VALUES (?, ?, 'source-1', ?, 3, 'test-embedding', 'test-space')
+                        """,
+                        (
+                            vector_id,
+                            chunk_id,
+                            np.asarray(vector, dtype=np.float32).tobytes(),
+                        ),
+                    )
+                rag.commit()
+            finally:
+                rag.close()
+
+            engine = RAGEngine(
+                root / "data",
+                settings=settings,
+                embedder=lambda texts: EmbeddingResult(
+                    [[1.0, 0.0, 0.0] for _ in texts],
+                    "test-space",
+                ),
+                reranker=lambda query, documents, top_n: [
+                    (index, 0.1) for index in range(min(top_n, len(documents)))
+                ],
+            )
+            result = engine.query("画布", top_k=1, threshold=0.6)
+
+            self.assertEqual(result["results"][0]["chunk_id"], "exact")
+            self.assertGreaterEqual(result["results"][0]["score"], 0.75)
+
 
 if __name__ == "__main__":
     unittest.main()

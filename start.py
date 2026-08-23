@@ -58,7 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("version", help="查看当前应用版本")
     subparsers.add_parser("update-check", help="从 GitHub 检查应用更新")
-    subparsers.add_parser("update", help="安全下载并安装 GitHub main 最新版本")
+    update_parser = subparsers.add_parser(
+        "update", help="安全下载并安装 GitHub main 最新版本"
+    )
+    update_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="远端与本地同版本时也重新安装当前提交",
+    )
 
     ingest_parser = subparsers.add_parser("ingest", help="整理 Markdown 文档")
     ingest_parser.add_argument("paths", nargs="*", help="要处理的 Markdown 路径")
@@ -71,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser = subparsers.add_parser("import", help="转换并导入本地文档")
     import_parser.add_argument(
         "path",
-        help="受支持文档的绝对路径（PDF、Office、EPUB、RTF、网页、文本、表格或结构化数据）",
+        help="受支持本地文档的绝对路径（PDF、Office、邮件、文本、表格或结构化数据）",
     )
     import_parser.add_argument(
         "--no-ingest",
@@ -312,7 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json({"ok": True, "data": data, "error": None})
             return 0
         if args.command == "update":
-            data = ApplicationUpdater().apply()
+            data = ApplicationUpdater().apply(force=bool(args.force))
             _print_json({"ok": True, "data": data, "error": None})
             return 0
         settings = load_config(config_path)

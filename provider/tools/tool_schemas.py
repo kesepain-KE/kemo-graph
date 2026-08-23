@@ -167,8 +167,8 @@ DELETE_DOCUMENT_SCHEMA = _function_schema(
 def _converter_schema(name: str, label: str) -> dict[str, Any]:
     return _function_schema(
         name,
-        f"将 {label} 文件转换为 Markdown 文本",
-        {"path": {"type": "string", "description": "待转换文件的绝对路径"}},
+        f"将本地 {label} 文件转换为 Markdown 文本；不访问网络",
+        {"path": {"type": "string", "description": "待转换本地文件的绝对路径"}},
         ["path"],
     )
 
@@ -183,11 +183,12 @@ CONVERT_SPREADSHEET_SCHEMA = _converter_schema("convert_spreadsheet", "XLSX/XLSM
 CONVERT_PPTX_SCHEMA = _converter_schema("convert_pptx", "PPTX")
 CONVERT_EPUB_SCHEMA = _converter_schema("convert_epub", "EPUB")
 CONVERT_RTF_SCHEMA = _converter_schema("convert_rtf", "RTF")
+CONVERT_EML_SCHEMA = _converter_schema("convert_eml", "EML 邮件")
 CONVERT_DATA_SCHEMA = _converter_schema("convert_data", "JSON/YAML/XML")
 
 IMPORT_DOCUMENT_SCHEMA = _function_schema(
     "import_document",
-    "检测文档格式、转换为 Markdown，并原子写入 external/markdown",
+    "检测本地文档格式、转换为 Markdown，并原子写入 external/markdown",
     {
         "path": {"type": "string", "description": "来源文件的绝对路径"},
         "external_dir": {
@@ -235,6 +236,7 @@ DOCUMENT_TOOL_SCHEMAS = [
     CONVERT_PPTX_SCHEMA,
     CONVERT_EPUB_SCHEMA,
     CONVERT_RTF_SCHEMA,
+    CONVERT_EML_SCHEMA,
     CONVERT_DATA_SCHEMA,
     IMPORT_DOCUMENT_SCHEMA,
 ]

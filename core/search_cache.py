@@ -23,7 +23,10 @@ from .db import (
 )
 
 
-CACHE_FORMAT_VERSION = "2"
+# Bump whenever retrieval semantics change.  Existing entries are still
+# inspectable in the cache history, but must not mask a newly improved recall
+# pipeline after an upgrade.
+CACHE_FORMAT_VERSION = "3"
 
 
 class SearchCacheError(RuntimeError):

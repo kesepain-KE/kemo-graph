@@ -329,11 +329,13 @@ export type UpdateStatusData = {
   current_version: string;
   latest_version: string | null;
   update_available: boolean;
+  force_update_available: boolean;
   installation_mode: "git" | "source" | string;
   checked_at: string | null;
   worktree_clean: boolean;
   dirty_files: string[];
   can_apply: boolean;
+  can_force_apply: boolean;
   blocking_reasons: string[];
   phase: "idle" | "checking" | "updating" | "completed" | "failed" | string;
   restart_required: boolean;

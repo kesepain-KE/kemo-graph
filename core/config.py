@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 from copy import deepcopy
@@ -24,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "config.json"
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
+GRAPH_EXTRACTION_PROFILE_VERSION = "sparse-v2"
 
 
 class ConfigLoadError(RuntimeError):
@@ -190,6 +192,8 @@ class AppConfig(BaseModel):
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     graph_tool_max_iterations: int = Field(default=40, ge=1, le=200)
     graph_build_mode: str = "auto"
+    # 图谱默认采用粗粒度，避免长文档被拆成大量细碎节点和关系。
+    graph_extract_granularity: str = "large"
     graph_extract_chunk_size: int = Field(default=12000, ge=2000, le=100000)
     graph_extract_concurrency: int = Field(default=3, ge=1, le=8)
     graph_path_limit: int = Field(default=50, ge=1, le=500)
@@ -252,6 +256,58 @@ class AppConfig(BaseModel):
         if value not in {"auto", "structured", "tools"}:
             raise ValueError("graph_build_mode 必须为 auto、structured 或 tools")
         return value
+
+    @field_validator("graph_extract_granularity")
+    @classmethod
+    def validate_graph_extract_granularity(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        # Accept the descriptive names used by older deployment templates,
+        # while serializing one stable canonical value for the Web/API config.
+        normalized = {
+            "fine": "small",
+            "balanced": "medium",
+            "coarse": "large",
+        }.get(normalized, normalized)
+        if normalized not in {"small", "medium", "large"}:
+            raise ValueError(
+                "graph_extract_granularity 必须为 small、medium 或 large"
+                "（也接受 fine、balanced、coarse）"
+            )
+        return normalized
+
+    def effective_graph_extract_chunk_size(self) -> int:
+        """返回当前图谱抽取的有效分段字符上限。
+
+        ``graph_extract_chunk_size`` 是用户可调的基准值；粒度档位只对该
+        基准值施加稳定倍率，既保留旧配置的精细控制，又让网页端可以用
+        ``small/medium/large`` 快速切换抽取密度。最终值始终落在协议允许的
+        2,000~100,000 字符范围内。
+        """
+
+        factor = {"small": 0.5, "medium": 1.0, "large": 2.0}[
+            self.graph_extract_granularity
+        ]
+        return max(2000, min(100000, round(self.graph_extract_chunk_size * factor)))
+
+    def graph_extraction_signature(self) -> str:
+        """返回会改变图谱抽取结果的配置指纹。"""
+
+        payload = {
+            "profile": GRAPH_EXTRACTION_PROFILE_VERSION,
+            "graph_build_mode": self.graph_build_mode,
+            "graph_extract_granularity": self.graph_extract_granularity,
+            "graph_extract_chunk_size": self.graph_extract_chunk_size,
+            "effective_chunk_size": self.effective_graph_extract_chunk_size(),
+            "graph_tool_max_iterations": self.graph_tool_max_iterations,
+            "llm_model": self.models.llm,
+        }
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def resolve_data_dir(self, project_root: Path = PROJECT_ROOT) -> Path:
         """解析数据目录；相对环境变量以项目根目录为基准。"""

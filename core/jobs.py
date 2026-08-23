@@ -173,7 +173,10 @@ class MaintenanceJobManager:
 
         try:
             if kind == "update":
-                result = self._updater_factory().apply(progress=progress)
+                result = self._updater_factory().apply(
+                    progress=progress,
+                    force=bool(options.get("force", False)),
+                )
             else:
                 service = self._service_factory()
                 result = self._run_service_job(service, kind, options, progress)

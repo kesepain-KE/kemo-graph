@@ -24,10 +24,16 @@ class ProviderError(RuntimeError):
         *,
         provider: str | None = None,
         status_code: int | None = None,
+        retryable: bool | None = None,
+        provider_code: str | None = None,
+        provider_status: int | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
+        self.retryable = retryable
+        self.provider_code = provider_code
+        self.provider_status = provider_status
 
 
 class ProviderConfigurationError(ProviderError):

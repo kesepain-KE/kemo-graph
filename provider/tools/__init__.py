@@ -85,6 +85,7 @@ def get_document_tools() -> list[ToolRegistration]:
         "convert_pptx": document_tools.convert_pptx,
         "convert_epub": document_tools.convert_epub,
         "convert_rtf": document_tools.convert_rtf,
+        "convert_eml": document_tools.convert_eml,
         "convert_data": document_tools.convert_data,
         "import_document": document_tools.import_document,
     }

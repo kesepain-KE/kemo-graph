@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.2.1-00a98f" alt="version 1.2.1"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.3.0-00a98f" alt="version 1.3.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -48,9 +48,10 @@
 |---|---|
 | 项目知识沉淀 | 把设计文档、笔记、决策记录逐步连接为可查询的概念网络 |
 | 智能体知识协作 | 让 kemo-agent 在需要时通过 API 取得图谱关系与原文证据 |
-| 多格式资料整理 | PDF、Word、PowerPoint、Excel、EPUB、RTF、网页、文本、表格与结构化数据统一转为 Markdown |
+| 多格式资料整理 | 本地 PDF、Word、PowerPoint、Excel、邮件、文本、表格与结构化数据统一转为 Markdown |
 | 来源追溯 | 从图谱或检索命中回到对应原文，避免只有结论没有依据 |
 | 多路检索 | 图谱、向量、混合、问答与全局主题五种方式，适合不同问题 |
+| 可调抽取与稳健召回 | 图谱抽取支持细/标准/粗颗粒度；检索结合查询扩展、FAISS 多路融合与精确词面兜底，兼顾语义与短词命中 |
 | 增量维护 | 文件变化后只更新受影响的数据，而不是反复重建整个知识库 |
 | 安全删除 | 删除文档或节点时检查共享来源，尽量避免误伤其他资料支撑的知识 |
 | 独立部署 | 提供本地 Web、CLI 与 HTTP API，也可接入更大的 Kemo 智能体系统 |
@@ -85,6 +86,10 @@ Copy-Item .env.example .env
 KEMO_API_KEY=你的-kemo-网关调用密钥
 ```
 
+图谱抽取默认采用 `large` 粗粒度，可在网页“系统配置”或 `config/config.json` 中调整为 `small`（细）、`medium`（标准）或 `large`（粗）；同时可用 `graph_extract_chunk_size` 调整基准分段大小。粗粒度会限制每段实体和关系预算，细节优先写入节点摘要，避免图谱膨胀。检索会自动保留原始问题，并在安全范围内扩展同义词、批量召回，再用精确词面通道补救中文短词和标识符命中。
+
+修改图谱档位后，下一次扫描会自动将已完成文档标记为 Graph 待重建；可运行 `python start.py rebuild-knowledge-base` 重新整理，而无需因此重建未变化的 RAG 向量。
+
 在 `config/config.json` 中确认网关地址与所需模型，然后构建网页前端并启动：
 
 ```powershell
@@ -117,6 +122,10 @@ python start_web.py
 ### 命令行
 
 ```powershell
+# 只转换为 Markdown，不初始化知识库，也不调用模型
+python -m markitdown $env:KEMO_GRAPH_IMPORT_FILE -o output.md
+python convert.py $env:KEMO_GRAPH_IMPORT_FILE -o output.md
+
 # 导入文件（先不消耗模型额度）
 python start.py import $env:KEMO_GRAPH_IMPORT_FILE --no-ingest
 
@@ -143,6 +152,8 @@ python start.py update
 # 根目录更新入口：同版本时会询问是否强制重新执行更新
 python update.py
 ```
+
+文档归一化层只处理本地普通文件。网页抓取、视频、音频、OCR 与远程链接应由上游智能体先处理，再把 Markdown 或本地文件交给 kemo-graph；转换器不会访问网络。
 
 ### HTTP API
 
@@ -180,7 +191,7 @@ kemo-graph 不试图成为替代所有文件管理、所有数据库或所有搜
 
 核心闭环已经可以实际运行：统一导入、增量更新、图谱与向量检索、混合问答、安全删除、定时维护，以及本地 Web、CLI、HTTP API 三个入口和面向 kemo-agent 等智能体的外部知识服务接口。
 
-当前版本为 **1.2.1**。本版本新增 Store 与内置库的 multipart 文件上传导入端点（配合 kemo-agent `import_file` 跨文件系统投递），并修复 docutils 弃用警告；上一版本（1.2.0）新增外部权威表记录的稳定同步协议与 Store API/CLI，扩展 Office、EPUB、RTF 和结构化数据转换，并进一步优化 GPU 优先的图谱渲染、检索结果分页及服务退出体验。完整变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本为 **1.3.0**。本版本将图谱抽取默认调整为粗粒度并加入按档位的实体/关系硬预算与稀疏关系过滤；检索链路增加查询扩展、精确词面兜底和缓存格式升级；同时按文档、图谱、检索、维护领域拆分知识库服务，并补齐 Web、CLI、HTTP API 的同版本强制更新链路与失败回滚保护。完整变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 仍在持续打磨：复杂文档版式的转换质量、大知识库与高并发下的存储与索引策略、外部 API 的内建鉴权与权限分层、更丰富的图谱人工校正与来源审查界面。
 

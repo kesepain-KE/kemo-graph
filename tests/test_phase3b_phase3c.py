@@ -197,6 +197,100 @@ class GraphEngineTests(unittest.TestCase):
             )
             self.assertEqual(one_character, [])
 
+    def test_exact_match_is_not_lost_when_entity_confidence_is_low(self) -> None:
+        settings = _settings()
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            paths = initialize_databases(temporary_dir, settings)
+            connection = connect_graph(paths)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO nodes (node_id, keyword, summary, aliases, tags)
+                    VALUES ('node-canvas', '中央画布', '图谱画布节点', '[]', '[]')
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            engine = GraphEngine(
+                temporary_dir,
+                settings=settings,
+                entity_extractor=lambda chunks: [
+                    Entity("画布", "concept", "画布", [], 0.35)
+                ],
+            )
+            result = engine.query("画布", depth=1, confidence=0.7)
+
+            self.assertEqual([node["node_id"] for node in result["hit_nodes"]], ["node-canvas"])
+            self.assertEqual(result["hit_nodes"][0]["match_score"], 0.85)
+
+    def test_summary_term_is_a_bounded_graph_fallback(self) -> None:
+        settings = _settings()
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            paths = initialize_databases(temporary_dir, settings)
+            connection = connect_graph(paths)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO nodes (node_id, keyword, summary, aliases, tags)
+                    VALUES ('node-canvas', 'GraphCanvas', '用于编辑中央画布的节点', '[]', '["图谱"]')
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            engine = GraphEngine(
+                temporary_dir,
+                settings=settings,
+                entity_extractor=lambda chunks: [
+                    Entity("画布", "concept", "画布", [], 1.0)
+                ],
+            )
+            result = engine.query("画布", depth=1, confidence=0.7)
+
+            self.assertEqual([node["node_id"] for node in result["hit_nodes"]], ["node-canvas"])
+            self.assertEqual(result["hit_nodes"][0]["match_score"], 0.78)
+
+    def test_strong_keyword_hit_suppresses_common_summary_fanout(self) -> None:
+        settings = _settings()
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            paths = initialize_databases(temporary_dir, settings)
+            connection = connect_graph(paths)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO nodes (node_id, keyword, summary, aliases, tags)
+                    VALUES ('node-canvas', '中央画布', '用于编辑中央画布的节点', '[]', '[]')
+                    """
+                )
+                for index in range(40):
+                    connection.execute(
+                        """
+                        INSERT INTO nodes (node_id, keyword, summary, aliases, tags)
+                        VALUES (?, ?, '包含画布相关说明', '[]', '[]')
+                        """,
+                        (f"summary-{index}", f"概念{index}"),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+
+            engine = GraphEngine(
+                temporary_dir,
+                settings=settings,
+                entity_extractor=lambda chunks: [
+                    Entity("画布", "concept", "画布", [], 1.0)
+                ],
+            )
+            result = engine.query("画布", depth=1, confidence=0.7)
+
+            self.assertEqual(
+                [node["node_id"] for node in result["hit_nodes"]],
+                ["node-canvas"],
+            )
+
 
 class HybridEngineTests(unittest.TestCase):
     def test_graph_anchor_boosts_rag_candidate_before_rerank(self) -> None:

@@ -22,6 +22,7 @@
   "rerank_top_n": 5,
   "graph_tool_max_iterations": 40,
   "graph_build_mode": "auto",
+  "graph_extract_granularity": "large",
   "graph_extract_chunk_size": 12000,
   "graph_extract_concurrency": 3,
   "graph_path_limit": 50,

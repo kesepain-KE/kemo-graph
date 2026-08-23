@@ -7,7 +7,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import RLock
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -15,7 +15,10 @@ from uuid import uuid4
 from core.config import AppConfig, load_config
 
 from . import (
+    ProviderError,
+    ProviderRequestError,
     ProviderResponseError,
+    ProviderTimeoutError,
     build_endpoint_url,
     get_api_key,
     kemo_headers,
@@ -25,6 +28,8 @@ from . import (
 
 ToolHandler = Callable[[str, dict[str, Any]], Any]
 _CAPABILITY_CACHE_TTL_SECONDS = 300.0
+_MAX_TOOL_REQUEST_RETRIES = 1
+_RETRYABLE_PROVIDER_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 _CAPABILITY_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
 _CAPABILITY_CACHE_LOCK = RLock()
 
@@ -77,14 +82,23 @@ def chat_with_tools(
     *,
     settings: AppConfig | None = None,
     max_iterations: int | None = None,
+    parallel_tool_calls: bool = False,
 ) -> str:
-    """循环调用 kemo LLM，执行工具并回传结果，直至得到纯文本。"""
+    """循环调用 kemo LLM，执行工具并回传结果，直至得到纯文本。
+
+    工具循环默认采用串行调用。部分 Kemo 网关 Provider 虽在能力声明中
+    标记支持并行工具，但在 OpenCode 的多工具续轮中可能返回上游 500；
+    串行模式仍保留完整的工具调用能力，并避免把一批工具结果一次性回放。
+    需要明确承担该兼容性风险的调用方可以显式传入 ``True``。
+    """
 
     _validate_messages(system, user)
     if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
         raise TypeError("tools 必须是工具 Schema 对象列表")
     if not callable(tool_handler):
         raise TypeError("tool_handler 必须可调用")
+    if not isinstance(parallel_tool_calls, bool):
+        raise TypeError("parallel_tool_calls 必须是布尔值")
 
     active_settings = settings or load_config()
     iteration_limit = (
@@ -101,14 +115,28 @@ def chat_with_tools(
     input_items: list[dict[str, Any]] = [_user_message_item(user)]
     parent_request_id: str | None = None
     for _ in range(iteration_limit):
-        response = _send_response_request(
-            system_prompt=system,
-            input_items=input_items,
-            settings=active_settings,
-            tools=tools,
-            parent_request_id=parent_request_id,
-        )
-        tool_calls = _extract_tool_calls(response, provider)
+        request_attempt = 1
+        while True:
+            try:
+                response = _send_response_request(
+                    system_prompt=system,
+                    input_items=input_items,
+                    settings=active_settings,
+                    tools=tools,
+                    parent_request_id=parent_request_id,
+                    parallel_tool_calls=parallel_tool_calls,
+                    attempt=request_attempt,
+                )
+                tool_calls = _extract_tool_calls(response, provider)
+                break
+            except ProviderError as exc:
+                if (
+                    request_attempt > _MAX_TOOL_REQUEST_RETRIES
+                    or not _is_retryable_provider_error(exc)
+                ):
+                    raise
+                sleep(min(1.0, 0.25 * request_attempt))
+                request_attempt += 1
         if not tool_calls:
             return _extract_text(response, provider)
 
@@ -241,18 +269,22 @@ def _send_response_request(
     model: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     parent_request_id: str | None = None,
+    parallel_tool_calls: bool = False,
+    attempt: int = 1,
 ) -> Any:
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise ValueError("attempt 必须是大于等于 1 的整数")
     api_key = get_api_key(settings.kemo)
     headers = kemo_headers(api_key)
     payload: dict[str, Any] = {
         "protocol_version": settings.kemo.protocol_version,
         "request_id": headers["X-Request-ID"],
-        "attempt": 1,
+        "attempt": attempt,
         "model": model or settings.models.llm,
         "stream": False,
         "system_prompt": system_prompt,
         "reasoning": None,
-        "generation": {"parallel_tool_calls": True},
+        "generation": {"parallel_tool_calls": parallel_tool_calls},
         "output": {"modalities": ["text"]},
         "tools": tools or [],
         "input": input_items,
@@ -277,6 +309,27 @@ def _validate_messages(system: str, user: str) -> None:
         raise TypeError("system 和 user 必须是字符串")
     if not user.strip():
         raise ValueError("user 消息不能为空")
+
+
+def _is_retryable_provider_error(error: ProviderError) -> bool:
+    """判断工具循环请求是否可以安全重试一次。"""
+
+    if isinstance(error, (ProviderRequestError, ProviderTimeoutError)):
+        return True
+    if error.retryable is True:
+        return True
+    status = error.provider_status or error.status_code
+    if status in _RETRYABLE_PROVIDER_STATUS_CODES:
+        return True
+    message = str(error).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "internal server error",
+            "cannot reliably connect",
+            "provider unavailable",
+        )
+    )
 
 
 def _user_message_item(user: str) -> dict[str, Any]:
@@ -495,9 +548,24 @@ def _raise_for_failed_response(response: Any, provider: str) -> None:
     error = response.get("error")
     message = error.get("message") if isinstance(error, dict) else None
     suffix = f"：{message}" if isinstance(message, str) and message else ""
+    provider_status = (
+        error.get("provider_status")
+        if isinstance(error, dict) and isinstance(error.get("provider_status"), int)
+        else None
+    )
+    provider_code = (
+        error.get("code")
+        if isinstance(error, dict) and isinstance(error.get("code"), str)
+        else None
+    )
+    retryable = error.get("retryable") is True if isinstance(error, dict) else False
     raise ProviderResponseError(
         f"{provider} LLM 请求未完成（{status or 'unknown'}）{suffix}",
         provider=provider,
+        status_code=provider_status,
+        retryable=retryable,
+        provider_code=provider_code,
+        provider_status=provider_status,
     )
 
 

@@ -135,11 +135,13 @@ describe("management API", () => {
       current_version: "1.0.0",
       latest_version: "1.1.0",
       update_available: true,
+      force_update_available: false,
       installation_mode: "git",
       checked_at: "2026-08-02T00:00:00Z",
       worktree_clean: true,
       dirty_files: [],
       can_apply: true,
+      can_force_apply: false,
       blocking_reasons: [],
       phase: "idle",
       restart_required: false,
@@ -179,6 +181,33 @@ describe("management API", () => {
     ]);
     expect(fetchMock.mock.calls[1][1].method).toBe("POST");
     expect(fetchMock.mock.calls[2][1].method).toBe("POST");
+  });
+
+  it("sends a force flag when reinstalling the same remote version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response({
+        job_id: "update-force-1",
+        kind: "update",
+        status: "queued",
+        progress: 0,
+        detail: "queued",
+        result: null,
+        error: null,
+        created_at: "2026-08-02T00:00:00Z",
+        started_at: null,
+        finished_at: null,
+        updated_at: "2026-08-02T00:00:00Z",
+        events: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.applyUpdate(true);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/update/apply");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ force: true });
   });
 
   it("requests a process-level restart and reads the replacement PID", async () => {

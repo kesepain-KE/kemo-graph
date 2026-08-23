@@ -113,8 +113,12 @@ export const api = {
     request<UpdateStatusData>("/update/status", { timeoutMs: 5_000 }),
   checkUpdate: () =>
     request<UpdateStatusData>("/update/check", { method: "POST", timeoutMs: 15_000 }),
-  applyUpdate: () =>
-    request<MaintenanceJob>("/update/apply", { method: "POST", timeoutMs: 15_000 }),
+  applyUpdate: (force = false) =>
+    request<MaintenanceJob>("/update/apply", {
+      method: "POST",
+      ...(force ? { body: JSON.stringify({ force: true }) } : {}),
+      timeoutMs: 15_000,
+    }),
   getRuntimeStatus: () =>
     request<RuntimeStatusData>("/system/runtime", { timeoutMs: 3_000 }),
   restartService: () =>

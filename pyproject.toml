@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kemo-graph-markitdown"
+version = "0.1.0"
+description = "Lightweight local document-to-Markdown normalization layer for kemo-graph"
+readme = "markitdown/README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+[project.scripts]
+markitdown = "markitdown.__main__:main"
+convert = "markitdown.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["markitdown*"]

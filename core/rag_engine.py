@@ -323,6 +323,7 @@ Embedder = Callable[[list[str]], EmbeddingResult | list[list[float]]]
 Reranker = Callable[[str, list[str], int], list[tuple[int, float]]]
 
 _DIRECT_LEXICAL_MATCH_SCORE = 0.75
+_LEXICAL_CANDIDATE_SCORE = 0.9
 _MIN_LEXICAL_QUERY_LENGTH = 2
 _LEXICAL_EDGE_PUNCTUATION = " \t\r\n,，;；:：.!！?？()（）[]【】{}<>《》\"'“”‘’"
 
@@ -425,6 +426,17 @@ class RAGEngine:
             query_weights=prepared.plan.weights,
             rrf_k=self.settings.query_planning.rrf_k,
         )
+        # FAISS is excellent for semantic similarity, but a short exact term
+        # can receive a poor embedding score (especially for mixed Chinese /
+        # Latin text, identifiers, and newly indexed chunks).  Add a bounded
+        # lexical candidate pass before hierarchy collapse so an exact hit is
+        # not lost merely because it fell outside the ANN top-k window.
+        lexical_candidates = self._load_lexical_candidates(
+            prepared.plan,
+            limit=search_limit,
+        )
+        if lexical_candidates:
+            candidates = _merge_candidates(candidates, lexical_candidates)
         if not candidates:
             return {"query": query, "results": []}
         if score_multipliers:
@@ -1473,6 +1485,84 @@ class RAGEngine:
             reverse=True,
         )
 
+    def _load_lexical_candidates(
+        self,
+        plan: QueryPlan,
+        *,
+        limit: int,
+    ) -> list[_Candidate]:
+        """Load a small exact-text candidate pool from ``rag.db``.
+
+        This is deliberately a recall supplement, not a replacement for FAISS:
+        terms are bounded, parameterized, and each variant is capped.  The
+        returned score is only used to select the pre-rerank pool; the final
+        result score still comes from rerank/lexical validation.
+        """
+
+        if limit < 1:
+            raise RAGQueryError("词面候选池上限必须大于等于 1")
+        terms: list[tuple[str, float]] = []
+        seen_terms: set[str] = set()
+        for variant in plan.variants:
+            raw = unicodedata.normalize("NFKC", variant.text).strip()
+            raw = raw.strip(_LEXICAL_EDGE_PUNCTUATION)
+            # Full natural-language questions are poor LIKE candidates and can
+            # force a table scan.  Keep lexical fallback for compact terms and
+            # planner-produced subqueries only.
+            if len(raw) < _MIN_LEXICAL_QUERY_LENGTH or len(raw) > 128:
+                continue
+            key = _normalize_lexical_text(raw)
+            if len(key) < _MIN_LEXICAL_QUERY_LENGTH or key in seen_terms:
+                continue
+            seen_terms.add(key)
+            terms.append((raw, float(variant.weight)))
+        if not terms:
+            return []
+
+        by_chunk: dict[str, _Candidate] = {}
+        # Keep the total lexical supplement bounded even when the planner emits
+        # several rewrites; each term receives a fair share of the pool.
+        per_term_limit = max(1, (limit + len(terms) - 1) // len(terms))
+        connection = connect_rag(self.paths)
+        try:
+            for term, weight in terms:
+                rows = connection.execute(
+                    """
+                    SELECT e.vector_id, c.chunk_id, c.source_id, c.content,
+                           c.granularity, c.parent_chunk_id
+                    FROM chunks c
+                    JOIN embeddings e ON e.chunk_id = c.chunk_id
+                    WHERE instr(c.content, ?) > 0
+                       OR instr(lower(c.content), lower(?)) > 0
+                    ORDER BY c.source_id, c.chunk_index, c.chunk_id
+                    LIMIT ?
+                    """,
+                    (term, term, int(per_term_limit)),
+                ).fetchall()
+                # Keep lexical candidates ahead of semantically similar but
+                # unrelated chunks.  This score is internal to candidate
+                # ordering and is intentionally not exposed as final relevance.
+                lexical_score = _LEXICAL_CANDIDATE_SCORE + max(0.0, weight) * 0.01
+                for row in rows:
+                    candidate = _Candidate(
+                        vector_id=int(row["vector_id"]),
+                        chunk_id=str(row["chunk_id"]),
+                        source_id=str(row["source_id"]),
+                        content=str(row["content"]),
+                        faiss_score=lexical_score,
+                        granularity=str(row["granularity"]),
+                        parent_chunk_id=row["parent_chunk_id"],
+                    )
+                    previous = by_chunk.get(candidate.chunk_id)
+                    if previous is None or candidate.faiss_score > previous.faiss_score:
+                        by_chunk[candidate.chunk_id] = candidate
+        finally:
+            connection.close()
+        return sorted(
+            by_chunk.values(),
+            key=lambda candidate: (-candidate.faiss_score, candidate.chunk_id),
+        )
+
     def _load_chunk_hierarchy(
         self,
         candidates: Sequence[_Candidate],
@@ -1733,6 +1823,25 @@ def _fuse_vector_hits(
         vector_id: max_scores[vector_id] + rrf_scores.get(vector_id, 0.0)
         for vector_id in max_scores
     }
+
+
+def _merge_candidates(
+    semantic_candidates: Sequence[_Candidate],
+    lexical_candidates: Sequence[_Candidate],
+) -> list[_Candidate]:
+    """Merge ANN and exact-text candidates, retaining the strongest evidence."""
+
+    by_chunk: dict[str, _Candidate] = {
+        candidate.chunk_id: candidate for candidate in semantic_candidates
+    }
+    for candidate in lexical_candidates:
+        previous = by_chunk.get(candidate.chunk_id)
+        if previous is None or candidate.faiss_score > previous.faiss_score:
+            by_chunk[candidate.chunk_id] = candidate
+    return sorted(
+        by_chunk.values(),
+        key=lambda candidate: (-candidate.faiss_score, candidate.chunk_id),
+    )
 
 
 def _collapse_candidates_by_family(

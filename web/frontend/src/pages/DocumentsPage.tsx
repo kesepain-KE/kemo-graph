@@ -457,7 +457,7 @@ export function DocumentsPage() {
               <button className="icon-button is-danger" disabled={deleting} title="精确删除当前文档" onClick={deleteOne}><Trash2 size={17} /></button>
             </div> : null}
           </div>
-          <div className="preview-body">
+          <div className={`preview-body ${detailMode === "edit" ? "is-editing" : ""}`}>
             {contentLoading ? <LoadingState label="正在加载内容…" /> : null}
             {!contentLoading && selected && detailMode === "preview" ? <MarkdownPreview content={content} /> : null}
             {!contentLoading && selected && detailMode === "edit" ? <textarea className="document-editor" aria-label="Markdown 文本编辑器" spellCheck={false} value={draft} onChange={(event) => setDraft(event.target.value)} /> : null}

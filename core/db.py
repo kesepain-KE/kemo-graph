@@ -457,6 +457,7 @@ def default_graph_meta() -> dict[str, Any]:
         "total_groups": 0,
         "last_summary_at": None,
         "changed_since_summary": 0,
+        "extraction_signature": None,
     }
 
 

@@ -4,6 +4,29 @@
 
 This project follows [Semantic Versioning](https://semver.org/). `version.json` is the single machine-readable source of the application version.
 
+## Unreleased
+
+- 新增轻量 `markitdown` 本地文档归一化层：以单一 `MarkItDown` 入口统一调度 PDF、Office、文本、表格与结构化数据 Converter。
+- `provider.tools.document_tools` 现在是兼容适配层，保留历史函数签名、绝对路径校验、稳定 Markdown 映射和原子写入。
+- 新增 `python -m markitdown`、`python convert.py` 与 Windows `convert.cmd` 转换入口；网络链接、视频、音频、OCR 和云服务明确排除。
+
+## 1.3.0 — 2026-08-22
+
+### Added / Changed
+
+- Graph extraction now defaults to the coarse `large` profile, with configurable `small` / `medium` / `large` section sizes and hard entity/relation budgets.
+- Coarse structured extraction filters weak and over-dense relations; tool extraction returns recoverable budget/evidence errors so the LLM can continue and finish the document transaction.
+- Retrieval keeps the original query, adds bounded planner variants, and supplements FAISS with exact lexical candidates for short terms and identifiers.
+- Search-cache format bumped to `3` so old results cannot mask the revised retrieval semantics.
+- `KnowledgeBaseService` now exposes document, graph, retrieval and maintenance domain services behind the original compatible facade; HTTP, CLI and Web callers keep their public contracts.
+- Same-version update is now available consistently from `update.py`, CLI, Web and local HTTP API, with optional `force` propagation and safe rollback after post-merge dependency/build failures.
+- Tool-call loops now default to serial Kemo requests and retry one transient gateway/provider failure with an incremented protocol attempt, preserving provider error metadata for diagnostics.
+
+### Documentation / Compatibility
+
+- Updated the bilingual README and external API guide for graph granularity, retrieval behavior, service boundaries and forced-update parameters.
+- Existing public method signatures, HTTP routes and CLI output envelopes remain compatible. Automatic updates still require a clean Git source checkout; deployment-package replacement is not included.
+
 ## 1.2.1 — 2026-08-06
 
 ### 新增 / Added
@@ -14,14 +37,14 @@ This project follows [Semantic Versioning](https://semver.org/). `version.json` 
 
 ### 修复 / Fixed
 
-- RST 转换改用 `publish_parts(writer="html5")` 替代已弃用的 `writer_name` 参数，消除 docutils 2.0 兼容警告（`docutils>=0.20` 均兼容）。
+- RST 转换使用 `publish_parts(source=rst, writer_name="html5")`，与当前支持的 docutils 版本兼容。
 
 ### 兼容性 / Compatibility
 
 - 现有 HTTP 端点、CLI 命令和默认项目知识库继续兼容；`/stores/import` 为新增端点。
 - 前端 `package.json` 的版本仅代表私有构建包，不作为应用发布版本。
 
-## 1.2.0 — 2026-08-05## 1.2.0 — 2026-08-05
+## 1.2.0 — 2026-08-05
 
 ### 新增 / Added
 

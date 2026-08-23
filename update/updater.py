@@ -190,17 +190,32 @@ class ApplicationUpdater:
             state = self._read_state()
             current_version = read_local_version(self.project_root)
             preflight = self._preflight()
+            latest_version = state.get("latest_version")
+            update_available = bool(state.get("update_available"))
+            force_update_available = bool(state.get("force_update_available"))
+            if latest_version:
+                try:
+                    latest = SemanticVersion.parse(str(latest_version))
+                    current = SemanticVersion.parse(current_version)
+                    update_available = latest > current
+                    force_update_available = latest == current
+                except ValueError:
+                    # ``check`` reports malformed remote data.  Keep status
+                    # readable and retain the last known relation until then.
+                    pass
             state.update(
                 {
                     "current_version": current_version,
                     "installation_mode": preflight["installation_mode"],
                     "worktree_clean": not preflight["dirty_files"],
                     "dirty_files": preflight["dirty_files"],
-                    "can_apply": bool(state.get("update_available"))
+                    "update_available": update_available,
+                    "force_update_available": force_update_available,
+                    "can_apply": update_available
                     and not preflight["blocking_reasons"]
                     and not state.get("error")
                     and state.get("phase") not in {"checking", "updating", "failed"},
-                    "can_force_apply": bool(state.get("force_update_available"))
+                    "can_force_apply": force_update_available
                     and not preflight["blocking_reasons"]
                     and not state.get("error")
                     and state.get("phase") not in {"checking", "updating", "failed"},
@@ -279,9 +294,12 @@ class ApplicationUpdater:
             self._write_state({**checked, "phase": "updating", "error": None})
             original_config: bytes | None = None
             config_path = self.project_root / "config" / "config.json"
-            config_restored = False
-            old_head = self._git_output(["git", "rev-parse", "HEAD"]).strip()
+            old_head = ""
+            merged = False
             try:
+                old_head = self._git_output(["git", "rev-parse", "HEAD"]).strip()
+                if not old_head:
+                    raise UpdateError("无法确定当前 Git 提交，已停止更新")
                 callback(0.05, "从 GitHub 获取最新代码")
                 self._git(["git", "fetch", "--prune", self.remote, self.branch])
                 target = f"{self.remote}/{self.branch}"
@@ -314,11 +332,11 @@ class ApplicationUpdater:
 
                 callback(0.36, "快进应用新版本")
                 self._git(["git", "merge", "--ff-only", target])
+                merged = True
 
                 callback(0.52, "合并新版默认配置与用户配置")
                 if original_config is not None:
                     self._merge_user_config(config_path, original_config)
-                    config_restored = True
 
                 callback(0.65, "安装 Python 依赖")
                 requirements = self.project_root / "requirements.txt"
@@ -362,9 +380,30 @@ class ApplicationUpdater:
                 callback(1.0, "更新完成，请重启 kemo-graph")
                 return completed
             except Exception as exc:
-                if original_config is not None and not config_restored:
-                    _write_bytes_atomic(config_path, original_config)
+                rollback_error: Exception | None = None
+                if merged and old_head:
+                    # Only reset when no new program files appeared during the
+                    # update.  This prevents a concurrent user edit from being
+                    # overwritten while still recovering dependency/build failures.
+                    try:
+                        if not self._dirty_files():
+                            self._git(["git", "reset", "--hard", old_head])
+                        else:
+                            rollback_error = UpdateBlockedError(
+                                "更新失败后检测到新的程序文件修改，未自动回滚 Git 提交"
+                            )
+                    except Exception as rollback_exc:
+                        rollback_error = rollback_exc
+                if original_config is not None:
+                    try:
+                        # Restore the user's config after a possible Git reset;
+                        # resetting first would otherwise overwrite it.
+                        _write_bytes_atomic(config_path, original_config)
+                    except OSError as config_exc:
+                        rollback_error = rollback_error or config_exc
                 error = exc if isinstance(exc, UpdateError) else UpdateError(str(exc))
+                if rollback_error is not None:
+                    error = UpdateError(f"{error}；自动回滚失败：{rollback_error}")
                 self._record_error(error)
                 raise error from exc if error is not exc else exc
 
@@ -490,16 +529,20 @@ class ApplicationUpdater:
         return self._run(command).stdout
 
     def _git_bytes(self, revision_path: str) -> bytes:
-        result = subprocess.run(
+        # Route this read through the injected command runner as well.  The
+        # updater's tests and deployment wrappers can then observe every Git
+        # operation, while the production runner still returns UTF-8 text.
+        result = self._command_runner(
             ["git", "show", revision_path],
-            cwd=self.project_root,
-            capture_output=True,
-            check=False,
+            self.project_root,
         )
         if result.returncode != 0:
-            message = result.stderr.decode(errors="replace")[-2000:].strip()
+            message = str(result.stderr or result.stdout or "")[-2000:].strip()
             raise UpdateError(f"Git 读取失败：{message}")
-        return result.stdout
+        output = result.stdout
+        if isinstance(output, bytes):
+            return output
+        return str(output or "").encode("utf-8")
 
     def _run(
         self,

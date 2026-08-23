@@ -309,7 +309,9 @@ class VectorSpaceTests(unittest.TestCase):
                 source_connection.close()
 
             self.assertIn(source["source_id"], scan.changed_source_ids)
-            self.assertEqual(row["graph_status"], "ready")
+            # 旧来源没有图谱抽取指纹；首次扫描需要把 Graph 标记为 pending，
+            # 让新的稀疏 Prompt/颗粒度配置真正应用到历史文档。
+            self.assertEqual(row["graph_status"], "pending")
             self.assertEqual(row["rag_status"], "pending")
 
     def test_old_chunks_table_is_migrated_for_hierarchical_metadata(self) -> None:

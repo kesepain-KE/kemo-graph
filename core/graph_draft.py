@@ -15,7 +15,7 @@ GRAPH_DRAFT_SCHEMA: dict[str, Any] = {
         "schema_version": {"type": "string", "enum": ["1.0"]},
         "entities": {
             "type": "array",
-            "maxItems": 1000,
+            "maxItems": 36,
             "items": {
                 "type": "object",
                 "properties": {
@@ -44,7 +44,7 @@ GRAPH_DRAFT_SCHEMA: dict[str, Any] = {
         },
         "relations": {
             "type": "array",
-            "maxItems": 2000,
+            "maxItems": 54,
             "items": {
                 "type": "object",
                 "properties": {
@@ -105,10 +105,10 @@ def validate_graph_draft(payload: Any) -> GraphDraft:
         raise GraphDraftError("图谱结构化输出 schema_version 必须为 1.0")
     raw_entities = payload.get("entities")
     raw_relations = payload.get("relations")
-    if not isinstance(raw_entities, list) or len(raw_entities) > 1000:
-        raise GraphDraftError("entities 必须是最多 1000 项的数组")
-    if not isinstance(raw_relations, list) or len(raw_relations) > 2000:
-        raise GraphDraftError("relations 必须是最多 2000 项的数组")
+    if not isinstance(raw_entities, list) or len(raw_entities) > 36:
+        raise GraphDraftError("entities 必须是最多 36 项的数组")
+    if not isinstance(raw_relations, list) or len(raw_relations) > 54:
+        raise GraphDraftError("relations 必须是最多 54 项的数组")
 
     entities: list[DraftEntity] = []
     local_ids: set[str] = set()

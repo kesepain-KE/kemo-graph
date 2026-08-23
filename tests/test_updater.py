@@ -6,12 +6,17 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from starlette.requests import Request
 
 import start
-from api.routes import _is_loopback_host
+from api.routes import _is_loopback_host, post_update_apply
+from api.schemas import UpdateApplyRequest
+from core.jobs import MaintenanceJobManager
 from update import (
     ApplicationUpdater,
     SemanticVersion,
+    UpdateError,
+    UpdatePermissionError,
     UpdateSourceError,
     migrate_legacy_runtime,
 )
@@ -92,6 +97,32 @@ def test_same_version_check_offers_force_update(tmp_path: Path) -> None:
     assert status["can_force_apply"] is True
 
 
+def test_status_recomputes_same_version_flags_from_saved_latest_version(tmp_path: Path) -> None:
+    root = _project(tmp_path, version="1.3.0")
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner())
+    state_path = root / "update" / "runtime" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "latest_version": "1.2.0",
+                "update_available": False,
+                "force_update_available": True,
+                "phase": "idle",
+                "error": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = updater.status()
+
+    assert status["update_available"] is False
+    assert status["force_update_available"] is False
+    assert status["can_force_apply"] is False
+
+
 def test_same_version_force_apply_rebuilds_without_version_bump(tmp_path: Path) -> None:
     root = _project(tmp_path, version="1.2.0")
     (root / ".git").mkdir()
@@ -119,6 +150,54 @@ def test_same_version_force_apply_rebuilds_without_version_bump(tmp_path: Path) 
     assert result["updated"] is True
     assert result["forced"] is True
     assert result["current_version"] == "1.2.0"
+
+
+def test_update_failure_after_merge_attempts_safe_git_rollback(tmp_path: Path) -> None:
+    root = _project(tmp_path, version="1.2.0")
+    (root / ".git").mkdir()
+    config_path = root / "config" / "config.json"
+    config_path.parent.mkdir()
+    original_config = b'{"user": true}\n'
+    config_path.write_bytes(original_config)
+    (root / "requirements.txt").write_text("example-package==0.0.0\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        del cwd
+        commands.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout="old-head", stderr="")
+        if command[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["git", "show"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"version": "1.2.0"}),
+                stderr="",
+            )
+        if command[:2] == ["git", "merge-base"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["git", "merge"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == ["git", "reset"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command and command[0] == "git":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="pip failed")
+
+    updater = ApplicationUpdater(
+        root,
+        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        command_runner=run,
+    )
+    updater._git_bytes = lambda _revision_path: b'{"default": true}\n'  # type: ignore[method-assign]
+
+    with pytest.raises(UpdateError, match="命令执行失败"):
+        updater.apply(force=True)
+
+    assert ["git", "reset", "--hard", "old-head"] in commands
+    assert config_path.read_bytes() == original_config
 
 
 def test_root_update_entry_prompts_for_same_version_force(monkeypatch, capsys) -> None:
@@ -230,10 +309,148 @@ def test_cli_version_outputs_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert start.main(["version"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["data"]["version"] == "1.2.1"
+    assert payload["data"]["version"] == "1.3.0"
 
 
 def test_update_apply_loopback_guard() -> None:
     assert _is_loopback_host("127.0.0.1") is True
     assert _is_loopback_host("::1") is True
     assert _is_loopback_host("192.168.1.10") is False
+
+
+def _request_for_update(host: str = "127.0.0.1") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/update/apply",
+            "raw_path": b"/api/v1/update/apply",
+            "query_string": b"",
+            "headers": [],
+            "client": (host, 8000),
+            "server": ("testserver", 8000),
+            "scheme": "http",
+            "http_version": "1.1",
+            "root_path": "",
+        }
+    )
+
+
+class _UpdateStatusStub:
+    def __init__(self, status: dict[str, object]) -> None:
+        self._status = status
+
+    def status(self) -> dict[str, object]:
+        return self._status
+
+
+class _UpdateJobsStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def submit(self, kind: str, **options: object) -> dict[str, object]:
+        self.calls.append((kind, options))
+        return {"job_id": "update-test", "kind": kind, **options}
+
+
+def test_update_apply_accepts_legacy_empty_request_for_new_version() -> None:
+    updater = _UpdateStatusStub(
+        {
+            "update_available": True,
+            "force_update_available": False,
+            "can_apply": True,
+            "can_force_apply": False,
+            "blocking_reasons": [],
+        }
+    )
+    jobs = _UpdateJobsStub()
+
+    result = post_update_apply(_request_for_update(), updater, jobs)
+
+    assert result["ok"] is True
+    assert jobs.calls == [("update", {})]
+
+
+def test_update_apply_accepts_same_version_force_body_and_query() -> None:
+    updater = _UpdateStatusStub(
+        {
+            "update_available": False,
+            "force_update_available": True,
+            "can_apply": False,
+            "can_force_apply": True,
+            "blocking_reasons": [],
+        }
+    )
+    jobs = _UpdateJobsStub()
+
+    body_result = post_update_apply(
+        _request_for_update(),
+        updater,
+        jobs,
+        UpdateApplyRequest(force=True),
+    )
+    query_result = post_update_apply(
+        _request_for_update(),
+        updater,
+        jobs,
+        force=True,
+    )
+
+    assert body_result["ok"] is True
+    assert query_result["ok"] is True
+    assert jobs.calls == [
+        ("update", {"force": True}),
+        ("update", {"force": True}),
+    ]
+
+
+def test_update_apply_rejects_non_loopback_even_when_force_requested() -> None:
+    updater = _UpdateStatusStub(
+        {
+            "update_available": False,
+            "force_update_available": True,
+            "can_apply": False,
+            "can_force_apply": True,
+            "blocking_reasons": [],
+        }
+    )
+    jobs = _UpdateJobsStub()
+
+    with pytest.raises(UpdatePermissionError, match="只允许从本机访问"):
+        post_update_apply(
+            _request_for_update("192.168.1.5"),
+            updater,
+            jobs,
+            force=True,
+        )
+    assert jobs.calls == []
+
+
+def test_update_job_forwards_force_flag_to_updater(tmp_path: Path) -> None:
+    class _Updater:
+        def __init__(self) -> None:
+            self.forced: list[bool] = []
+
+        def apply(self, *, progress, force: bool = False):
+            self.forced.append(force)
+            progress(0.5, "forced test")
+            return {"forced": force}
+
+    updater = _Updater()
+    manager = MaintenanceJobManager(
+        lambda: None,
+        data_dir=tmp_path / "data",
+        updater_factory=lambda: updater,
+    )
+    completed: list[dict[str, object]] = []
+    failures: list[str] = []
+    manager._set_running = lambda _job_id: None  # type: ignore[method-assign]
+    manager._set_progress = lambda _job_id, _value, _detail: None  # type: ignore[method-assign]
+    manager._complete = lambda _job_id, result: completed.append(result)  # type: ignore[method-assign]
+    manager._fail = lambda _job_id, error: failures.append(error)  # type: ignore[method-assign]
+
+    manager._run("job-force", "update", {"force": True})
+
+    assert failures == []
+    assert updater.forced == [True]
+    assert completed == [{"forced": True}]

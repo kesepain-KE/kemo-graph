@@ -15,6 +15,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api } from "../api/api";
 import { useRuntimeTasks, type RuntimeTask } from "../context/RuntimeTasksContext";
+import { useSearchSession } from "../context/SearchSessionContext";
 
 const navItems = [
   { to: "/documents", label: "文档管理", icon: FileText },
@@ -79,9 +80,11 @@ export function AppShell() {
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const taskCenterRef = useRef<HTMLDivElement>(null);
   const { tasks, activeTasks, clearFinished } = useRuntimeTasks();
+  const { loading: searchLoading, query: searchQuery, error: searchError } = useSearchSession();
+  const activeWorkCount = activeTasks.length + (searchLoading ? 1 : 0);
   const hasAttentionTask = tasks.some(
     (task) => task.status === "failed" || task.status === "interrupted",
-  );
+  ) || Boolean(searchError);
 
   useEffect(() => {
     let active = true;
@@ -151,14 +154,20 @@ export function AppShell() {
             <div className="runtime-task-center" ref={taskCenterRef}>
               <button
                 type="button"
-                className={`runtime-task-pill ${activeTasks.length ? "is-running" : hasAttentionTask ? "is-attention" : "is-idle"}`}
+                className={`runtime-task-pill ${activeWorkCount ? "is-running" : hasAttentionTask ? "is-attention" : "is-idle"}`}
                 aria-expanded={taskPanelOpen}
                 aria-haspopup="dialog"
                 onClick={() => setTaskPanelOpen((open) => !open)}
-                title="查看文档导入与知识库整理任务"
+                title={searchLoading ? `知识检索进行中：${searchQuery || "未命名查询"}` : "查看后台任务与知识检索状态"}
               >
-                {activeTasks.length ? <LoaderCircle className="spin" size={15} /> : <History size={15} />}
-                <span>{activeTasks.length ? `${activeTasks.length} 项处理中` : "运行记录"}</span>
+                {activeWorkCount ? <LoaderCircle className="spin" size={15} /> : <History size={15} />}
+                <span>
+                  {searchLoading && !activeTasks.length
+                    ? "知识检索中"
+                    : activeWorkCount
+                      ? `${activeWorkCount} 项处理中`
+                      : "运行记录"}
+                </span>
               </button>
 
               {taskPanelOpen ? (
@@ -166,7 +175,7 @@ export function AppShell() {
                   <header>
                     <span>
                       <strong>运行任务</strong>
-                      <small>服务端持久保存，刷新或切换页面后仍可继续追踪</small>
+                      <small>服务端任务与知识检索均不会因切换页面而中断</small>
                     </span>
                     <button
                       type="button"
@@ -178,7 +187,31 @@ export function AppShell() {
                   </header>
 
                   <div className="runtime-task-list">
-                    {!tasks.length ? (
+                    {searchLoading ? (
+                      <article className="runtime-task-item is-running" key="search-session">
+                        <span className="runtime-task-item__icon"><LoaderCircle className="spin" size={16} /></span>
+                        <div>
+                          <div className="runtime-task-item__title">
+                            <strong>知识检索</strong>
+                            <b>处理中</b>
+                          </div>
+                          <p>{searchQuery ? `正在处理：${searchQuery}` : "正在执行召回、重排与回答。"}</p>
+                        </div>
+                      </article>
+                    ) : null}
+                    {searchError && !searchLoading ? (
+                      <article className="runtime-task-item is-failed" key="search-session-error">
+                        <span className="runtime-task-item__icon"><XCircle size={16} /></span>
+                        <div>
+                          <div className="runtime-task-item__title">
+                            <strong>知识检索</strong>
+                            <b>失败</b>
+                          </div>
+                          <p>{searchError}</p>
+                        </div>
+                      </article>
+                    ) : null}
+                    {!tasks.length && !searchLoading && !searchError ? (
                       <div className="runtime-task-empty">
                         <History size={22} />
                         <span>当前没有文档处理记录</span>
