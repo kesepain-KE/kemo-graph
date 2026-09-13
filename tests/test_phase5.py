@@ -443,11 +443,17 @@ class APITests(unittest.TestCase):
             root = Path(temporary_dir)
             config_path = root / "config.json"
             config_path.write_text("{}", encoding="utf-8")
-            app = create_web_app(
-                config_path=config_path,
-                data_dir=root / "data",
-                external_dir=root / "markdown",
-            )
+            # /status 与 /graph 由前端挂载提供；显式提供构建目录，
+            # 避免测试结果取决于开发者本地是否执行过 npm run build。
+            dist = root / "dist"
+            (dist / "assets").mkdir(parents=True)
+            (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+            with patch("start_web.FRONTEND_DIST", dist):
+                app = create_web_app(
+                    config_path=config_path,
+                    data_dir=root / "data",
+                    external_dir=root / "markdown",
+                )
             fake = _FakeService()
             app.dependency_overrides[get_service] = lambda: fake
             client = TestClient(app)
