@@ -337,6 +337,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=args.host,
         port=args.port,
     )
+    # 这次启动本身就是更新提示所要求的重启，标志在这里终结；否则状态页会
+    # 一直提示需要重启，哪怕服务已经重启过很多次。
+    try:
+        ApplicationUpdater().clear_restart_required()
+    except Exception as exc:  # noqa: BLE001 - 状态清理失败不应阻止服务启动
+        logging.getLogger("start_web").warning("清理重启标志失败：%s", exc)
     with capture_terminal_logs(
         application.state.kemo_context.settings,
         config_path=application.state.kemo_context.config_path,

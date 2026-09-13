@@ -185,6 +185,24 @@ class ApplicationUpdater:
         self._lock = threading.RLock()
         migrate_legacy_runtime(self.project_root)
 
+    def clear_restart_required(self) -> bool:
+        """Mark the running process as current once it has started again.
+
+        ``apply()`` sets ``restart_required`` so the UI can ask for a restart.
+        Starting the service is exactly the event that satisfies that request,
+        so the flag is retired here; nothing else ever reset it, which left the
+        status page asking for a restart that had already happened.  Returns
+        whether a flag was actually cleared, and never creates a state file
+        just to record "nothing to do".
+        """
+
+        with self._lock:
+            state = self._read_state()
+            if not state.get("restart_required"):
+                return False
+            self._write_state({**state, "restart_required": False})
+            return True
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             state = self._read_state()
