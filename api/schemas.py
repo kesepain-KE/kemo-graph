@@ -14,6 +14,7 @@ class StrictRequest(BaseModel):
 class IngestRequest(StrictRequest):
     paths: list[str] | None = None
     mode: Literal["graph", "rag", "both"] = "both"
+    retry_failed: bool = False
 
     @field_validator("paths")
     @classmethod
@@ -414,6 +415,11 @@ class StoreDocumentListRequest(StoreRootRequest):
     status: Literal["active", "pending", "all"] | None = None
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
+    project: str | None = Field(default=None, max_length=160)
+    search: str | None = Field(default=None, max_length=200)
+    graph_status: str | None = Field(default=None, max_length=20)
+    rag_status: str | None = Field(default=None, max_length=20)
+    include_summary: bool = False
 
 
 class StoreSourceRequest(StoreRootRequest):

@@ -295,6 +295,11 @@ def post_store_documents_list(
                 status=status,
                 page=payload.page,
                 page_size=payload.page_size,
+                project=payload.project,
+                search=payload.search,
+                graph_status=payload.graph_status,
+                rag_status=payload.rag_status,
+                include_summary=payload.include_summary,
             ),
         )
     )
@@ -632,4 +637,3 @@ def post_store_job_get(payload: StoreJobRequest, context: Context) -> dict:
             lambda service: service.get_job(payload.job_id),
         )
     )
-

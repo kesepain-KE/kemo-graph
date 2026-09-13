@@ -32,6 +32,9 @@ from core.portable_store import (
 from .deps import RuntimeContext, get_context, get_job_manager, get_service, get_updater
 from .errors import success_response
 from .store_routes import _store_operation, router as store_router
+from .document_organization_routes import router as document_organization_router
+from .log_routes import router as log_router
+from .query_progress import router as query_progress_router
 from .schemas import (
     APIResponse,
     AnswerQueryRequest,
@@ -81,6 +84,7 @@ from .schemas import (
 
 
 router = APIRouter()
+router.include_router(query_progress_router)
 Service = Annotated[KnowledgeBaseService, Depends(get_service)]
 Jobs = Annotated[MaintenanceJobManager, Depends(get_job_manager)]
 Updater = Annotated[ApplicationUpdater, Depends(get_updater)]
@@ -130,7 +134,10 @@ def get_status(service: Service) -> dict:
 
 @router.post("/ingest", response_model=APIResponse)
 def post_ingest(payload: IngestRequest, service: Service) -> dict:
-    return success_response(service.ingest(paths=payload.paths, mode=payload.mode))
+    options = {"paths": payload.paths, "mode": payload.mode}
+    if payload.retry_failed:
+        options["retry_failed"] = True
+    return success_response(service.ingest(**options))
 
 
 @router.post("/query/graph", response_model=APIResponse)
@@ -251,10 +258,34 @@ def get_documents(
     status: Annotated[str | None, Query(description="active / pending / all")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    project: Annotated[str | None, Query(max_length=160, description="项目名；空字符串表示根目录，/ 表示全部项目")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="按相对路径字面搜索")] = None,
+    graph_status: Annotated[str | None, Query(description="Graph 状态过滤")] = None,
+    rag_status: Annotated[str | None, Query(description="RAG 状态过滤")] = None,
+    include_summary: Annotated[bool, Query(description="是否返回当前范围的状态摘要")] = False,
 ) -> dict:
-    return success_response(
-        service.list_documents(status=status, page=page, page_size=page_size)
-    )
+    if (
+        project is None
+        and search is None
+        and graph_status is None
+        and rag_status is None
+        and not include_summary
+    ):
+        # Keep the legacy call shape for external adapters and test doubles
+        # that implement only the original three pagination arguments.
+        result = service.list_documents(status=status, page=page, page_size=page_size)
+    else:
+        result = service.list_documents(
+            status=status,
+            page=page,
+            page_size=page_size,
+            project=project,
+            search=search,
+            graph_status=graph_status,
+            rag_status=rag_status,
+            include_summary=include_summary,
+        )
+    return success_response(result)
 
 
 @router.get("/documents/{source_id}/content", response_model=APIResponse)
@@ -292,10 +323,18 @@ def delete_all_documents(
         Literal["delete-all"],
         Query(description="破坏性操作确认值，必须为 delete-all"),
     ],
+    project: Annotated[
+        str | None,
+        Query(max_length=160, description="仅清空指定项目；空字符串表示未分组"),
+    ] = None,
 ) -> dict:
     if confirm != "delete-all":  # Literal 已校验；保留显式防线。
         raise ValueError("清空文档必须显式确认 delete-all")
-    return success_response(service.delete_all_documents())
+    return success_response(
+        service.delete_all_documents(project=project)
+        if project is not None
+        else service.delete_all_documents()
+    )
 
 
 @router.delete("/documents/{source_id}", response_model=APIResponse)
@@ -316,13 +355,15 @@ async def post_import(
         bool,
         Query(alias="ingest", description="转换后是否立即整理图谱与 RAG"),
     ] = True,
+    project: Annotated[str | None, Query(max_length=160, description="目标项目；空字符串为未分组，省略时保持原行为")] = None,
 ) -> dict:
     with tempfile.TemporaryDirectory(prefix="kemo-graph-import-") as temporary_dir:
         filename, staged = await _stage_uploaded_document(file, Path(temporary_dir))
         result = service.import_document(
             staged,
             ingest_after_import=ingest_after_import,
-            _original_identity=f"upload://{filename}",
+            _original_identity=f"upload://{project}/{filename}" if project else f"upload://{filename}",
+            **({"project": project} if project is not None else {}),
         )
         _raise_import_failure(result)
     return success_response(result)
@@ -500,9 +541,10 @@ def _is_loopback_host(host: str) -> bool:
 
 @router.post("/jobs/ingest", response_model=APIResponse)
 def post_ingest_job(payload: IngestRequest, jobs: Jobs) -> dict:
-    return success_response(
-        jobs.submit("ingest", paths=payload.paths, mode=payload.mode)
-    )
+    options = {"paths": payload.paths, "mode": payload.mode}
+    if payload.retry_failed:
+        options["retry_failed"] = True
+    return success_response(jobs.submit("ingest", **options))
 
 
 @router.post("/jobs/summarize", response_model=APIResponse)
@@ -679,3 +721,5 @@ def _validated_upload_filename(value: str | None) -> str:
     return filename
 
 router.include_router(store_router)
+router.include_router(document_organization_router)
+router.include_router(log_router)

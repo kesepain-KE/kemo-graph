@@ -196,6 +196,11 @@ class MaintenanceJobManager:
             result = service.ingest(
                 paths=options.get("paths"),
                 mode=options.get("mode", "both"),
+                **(
+                    {"retry_failed": True}
+                    if options.get("retry_failed")
+                    else {}
+                ),
             )
             if int(result.get("failed", 0)):
                 raise RuntimeError(f"文档整理有 {result['failed']} 个失败项")
