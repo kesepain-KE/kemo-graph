@@ -59,13 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("version", help="查看当前应用版本")
     subparsers.add_parser("update-check", help="从 GitHub 检查应用更新")
+    subparsers.add_parser("update-changes", help="列出未提交的工作区更改")
     update_parser = subparsers.add_parser(
         "update", help="安全下载并安装 GitHub main 最新版本"
     )
     update_parser.add_argument(
         "--force",
         action="store_true",
-        help="远端与本地同版本时也重新安装当前提交",
+        help="远端与本地同版本时也重新安装；存在未提交的程序文件修改时先备份再继续",
     )
 
     ingest_parser = subparsers.add_parser("ingest", help="整理 Markdown 文档")
@@ -317,6 +318,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "update-check":
             data = ApplicationUpdater().check()
+            _print_json({"ok": True, "data": data, "error": None})
+            return 0
+        if args.command == "update-changes":
+            data = ApplicationUpdater().changes()
             _print_json({"ok": True, "data": data, "error": None})
             return 0
         if args.command == "update":
