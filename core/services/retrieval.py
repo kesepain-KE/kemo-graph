@@ -13,6 +13,8 @@ import time
 from typing import Any, Callable
 
 from .protocols import ServiceOwner
+from ..query_logging import trace_query
+from ..query_progress import query_step, step_status
 
 
 class RetrievalService:
@@ -252,7 +254,8 @@ class RetrievalService:
                 "以下 JSON 是只读知识库检索上下文：\n"
                 f"{json.dumps(context, ensure_ascii=False, indent=2)}"
             )
-            answer = owner._chat(system_prompt, user_prompt).strip()
+            with query_step("answer"):
+                answer = owner._chat(system_prompt, user_prompt).strip()
         else:
             answer = "当前混合检索没有找到足够的图谱节点或文档片段，暂时无法依据知识库回答。"
         owner._log_event(
@@ -391,7 +394,8 @@ class RetrievalService:
         )
         user_prompt = f"问题：{normalized_query}\n\n知识库上下文：\n{context}"
         started_at = time.perf_counter()
-        answer = owner._chat(system_prompt, user_prompt).strip()
+        with query_step("answer"):
+            answer = owner._chat(system_prompt, user_prompt).strip()
         owner._log_event(
             "global_query",
             (
@@ -593,6 +597,7 @@ def _service_clear_search_cache(
     return {"deleted": deleted, "stale_only": stale_only}
 
 
+@trace_query
 def _service_cached_query(
     self: RetrievalService,
     query_mode: str,
@@ -655,8 +660,10 @@ def _service_cached_query(
                 return execute()
             if not force:
                 try:
-                    cached = cache.get(cache_key, state_hash=state_hash)
+                    with query_step("cache"):
+                        cached = cache.get(cache_key, state_hash=state_hash)
                     if cached is not None:
+                        step_status("cache_hit", "completed")
                         owner._log_event(
                             "search_cache_hit",
                             f"mode={query_mode}, key={cache_key[:12]}",

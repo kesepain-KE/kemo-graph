@@ -16,6 +16,8 @@ import numpy as np
 from provider.engine import chat_structured
 
 from .config import AppConfig, load_config
+from .read_cache import READ_CACHE, file_revision
+from .query_progress import query_step, step_status, tracked_step
 
 
 LOGGER = logging.getLogger(__name__)
@@ -143,9 +145,11 @@ def plan_query(
         )
     )
     try:
-        payload = planner(prompt, user, _PLAN_SCHEMA)
+        with query_step("llm"):
+            payload = planner(prompt, user, _PLAN_SCHEMA)
         return _plan_from_payload(original, payload, active_settings, mode)
     except Exception as exc:
+        step_status("llm", "fallback")
         LOGGER.warning("查询规划失败，已退化为原始查询：%s", exc)
         return replace(_rule_plan(original, mode=mode), degraded=True)
 
@@ -185,12 +189,17 @@ def query_planner_signature(settings: AppConfig) -> str:
     payload = {
         "version": QUERY_PLANNER_VERSION,
         "config": settings.query_planning.model_dump(mode="json"),
-        "prompt_sha256": hashlib.sha256(_PROMPT_PATH.read_bytes()).hexdigest(),
+        "prompt_sha256": READ_CACHE.get_or_load(
+            ("query-prompt-hash", str(_PROMPT_PATH.resolve())),
+            lambda: file_revision(_PROMPT_PATH),
+            lambda: hashlib.sha256(_PROMPT_PATH.read_bytes()).hexdigest(),
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
+@tracked_step("split")
 def _plan_from_payload(
     original: str,
     payload: Any,
@@ -290,6 +299,7 @@ def _original_only(original: str, *, mode: str, degraded: bool = False) -> Query
     )
 
 
+@tracked_step("normalize")
 def _rule_plan(original: str, *, mode: str) -> QueryPlan:
     # 规则模式只做安全规范化；不使用静态同义词表猜测用户意图。
     return _original_only(original, mode=mode)

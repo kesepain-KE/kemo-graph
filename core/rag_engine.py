@@ -30,6 +30,7 @@ from .db import (
 )
 from .logger import DailyTSVLogger
 from .faiss_index import FaissIndexManager, _as_float32_matrix
+from .query_progress import query_step, step_status, tracked_step
 from .rag_errors import FaissUnavailableError, IndexIntegrityError, RAGError, RAGQueryError
 from .rag_auxiliary import RAGAuxiliaryMixin
 from .rag_support import (
@@ -154,6 +155,7 @@ class RAGEngine(RAGAuxiliaryMixin):
             self.settings.query_planning.candidate_pool_size,
         )
         search_limit = max(effective_top_k * 3, candidate_pool_limit)
+        step_status("vector", "running")
         raw_hits = self.index.search(
             query_vectors,
             search_limit,
@@ -168,10 +170,13 @@ class RAGEngine(RAGAuxiliaryMixin):
         # Latin text, identifiers, and newly indexed chunks).  Add a bounded
         # lexical candidate pass before hierarchy collapse so an exact hit is
         # not lost merely because it fell outside the ANN top-k window.
+        step_status("vector", "completed")
+        step_status("lexical", "running")
         lexical_candidates = self._load_lexical_candidates(
             prepared.plan,
             limit=search_limit,
         )
+        step_status("lexical", "completed")
         if lexical_candidates:
             candidates = _merge_candidates(candidates, lexical_candidates)
         if not candidates:
@@ -191,12 +196,14 @@ class RAGEngine(RAGAuxiliaryMixin):
                 reverse=True,
             )
 
+        step_status("chunks", "running")
         hierarchy = self._load_chunk_hierarchy(candidates)
         candidates = _collapse_candidates_by_family(
             candidates,
             hierarchy,
             candidate_pool_limit,
         )
+        step_status("chunks", "completed")
         if not candidates:
             return {"query": query, "results": []}
 
@@ -211,6 +218,7 @@ class RAGEngine(RAGAuxiliaryMixin):
             _candidate_context_content(candidate, hierarchy)
             for candidate in candidates
         ]
+        step_status("rerank", "running")
         rerank_started_at = time.perf_counter()
         if self._reranker is None:
             try:
@@ -240,6 +248,7 @@ class RAGEngine(RAGAuxiliaryMixin):
             f"model={self.settings.models.rerank}, candidates={len(documents)}",
             _elapsed_ms(rerank_started_at),
         )
+        step_status("rerank", "completed")
         source_paths = self._load_source_paths(
             {candidate.source_id for candidate in candidates}
         )
@@ -313,7 +322,8 @@ class RAGEngine(RAGAuxiliaryMixin):
         plan = plan_query(query, settings=self.settings)
         embedding_started_at = time.perf_counter()
         try:
-            embedding = self._embed_texts(plan.texts, input_type="query")
+            with query_step("embedding"):
+                embedding = self._embed_texts(plan.texts, input_type="query")
         except Exception:
             self._log_event(
                 "embedding_request",
@@ -382,6 +392,7 @@ class RAGEngine(RAGAuxiliaryMixin):
 
         return self._sync_auxiliary_vectors("community", communities)
 
+    @tracked_step("entities")
     def search_entities(
         self,
         query: str,
@@ -402,6 +413,7 @@ class RAGEngine(RAGAuxiliaryMixin):
             prepared_query=prepared_query,
         )
 
+    @tracked_step("communities")
     def search_communities(
         self,
         query: str,

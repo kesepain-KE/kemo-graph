@@ -15,6 +15,7 @@ from .config import AppConfig, load_config
 from .db import DatabasePaths, connect_graph, initialize_databases
 from .entity_extractor import Entity, extract
 from .query_planner import QueryPlan, plan_query
+from .query_progress import step_status
 
 
 class GraphError(RuntimeError):
@@ -103,6 +104,7 @@ class GraphEngine:
             self.settings.max_query_depth,
         )
         active_plan = query_plan or plan_query(query, settings=self.settings)
+        step_status("graph", "running")
         if active_plan.mode == "off":
             entities = self._entity_extractor([active_plan.original])
         else:
@@ -131,6 +133,7 @@ class GraphEngine:
         finally:
             connection.close()
 
+        step_status("graph", "completed")
         return {
             "query": query,
             "hit_nodes": [_matched_node_to_dict(item) for item in matched],
