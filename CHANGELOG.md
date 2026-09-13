@@ -31,6 +31,7 @@ The application, frontend and converter-package metadata share version 1.4.0. Pr
 - 仓库新增 GitHub Actions 工作流 `CI`，在推送与合并请求时自动执行发布前检查：后端在 Python 3.10 与 3.12 上安装 `requirements-dev.txt`、运行语法检查与全部单元测试；前端执行类型检查、单元测试与生产构建。
 - 这些检查此前只在发布前手工执行，现在由 CI 固定执行，不必依赖本地环境是否完整。
 - 同时补充两类行为测试：失败来源重试开关（`retry_failed`）的默认保守行为与 API 透传，以及知识库的符号链接边界防护。符号链接用例在无法创建链接的平台自动跳过，由 Linux 运行器覆盖。
+- 工作流首次运行即暴露两处只在本机成立、新克隆会复现的缺陷，均已修复：忽略规则中的 `data/` 曾把 `web/frontend/src/features/graph/data/` 源码目录一并排除在仓库之外，导致新克隆无法通过前端类型检查；Web 路由测试隐式依赖本地已执行过 `npm run build` 的前端产物。
 
 ### 发布验证 / Release verification
 
