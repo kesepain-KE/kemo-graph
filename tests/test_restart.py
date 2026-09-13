@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from restart import _pid_exists, read_runtime_state, remove_runtime_state, write_runtime_state
+from restart import (
+    _detached_command,
+    _pid_exists,
+    read_runtime_state,
+    remove_runtime_state,
+    write_runtime_state,
+)
 from start_web import create_app
 
 
@@ -87,3 +93,57 @@ def test_restart_endpoint_schedules_helper_then_requests_graceful_exit(
         command=application.state.kemo_restart_command,
         cwd=tmp_path,
     )
+
+
+def _fake_scripts(tmp_path: Path, *, windowed: bool = True) -> Path:
+    scripts = tmp_path / "Scripts"
+    scripts.mkdir()
+    (scripts / "python.exe").write_bytes(b"")
+    if windowed:
+        (scripts / "pythonw.exe").write_bytes(b"")
+    return scripts
+
+
+def test_detached_command_prefers_windowed_interpreter(tmp_path: Path) -> None:
+    """Windows 上把 python.exe 换成 pythonw.exe，替换进程才不会持有控制台。"""
+
+    scripts = _fake_scripts(tmp_path)
+    with patch("restart.os.name", "nt"):
+        result = _detached_command(
+            [str(scripts / "python.exe"), "start_web.py", "--port", "8008"]
+        )
+
+    assert result == [
+        str(scripts / "pythonw.exe"),
+        "start_web.py",
+        "--port",
+        "8008",
+    ]
+
+
+def test_detached_command_keeps_interpreter_without_windowed_binary(
+    tmp_path: Path,
+) -> None:
+    scripts = _fake_scripts(tmp_path, windowed=False)
+    command = [str(scripts / "python.exe"), "start_web.py"]
+    with patch("restart.os.name", "nt"):
+        assert _detached_command(command) == command
+
+
+def test_detached_command_ignores_other_executables(tmp_path: Path) -> None:
+    command = [str(tmp_path / "python3.14.exe"), "start_web.py"]
+    with patch("restart.os.name", "nt"):
+        assert _detached_command(command) == command
+
+
+def test_detached_command_is_noop_off_windows(tmp_path: Path) -> None:
+    scripts = _fake_scripts(tmp_path)
+    command = [str(scripts / "python.exe"), "start_web.py"]
+    with patch("restart.os.name", "posix"):
+        assert _detached_command(command) == command
+
+
+def test_detached_command_handles_empty_command() -> None:
+    with patch("restart.os.name", "nt"):
+        assert _detached_command([]) == []
+        assert _detached_command(()) == []
