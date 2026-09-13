@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.4.0-00a98f" alt="version 1.4.0"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.0-00a98f" alt="version 1.5.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -240,9 +240,14 @@ python start.py rebuild-all
 # 检查并应用更新
 python start.py update-check
 python start.py update
+python start.py update-changes
 
 # 根目录更新入口：同版本时会询问是否强制重新执行更新
 python update.py
+
+# 更新前先看有哪些未提交的更改，或备份未提交修改后强制更新
+python update.py --dirty
+python update.py --force
 ```
 
 文档归一化层只处理本地普通文件。网页抓取、视频、音频、OCR 与远程链接应由上游智能体先处理，再把 Markdown 或本地文件交给 kemo-graph；转换器不会访问网络。
@@ -283,7 +288,7 @@ kemo-graph 不试图成为替代所有文件管理、所有数据库或所有搜
 
 核心闭环已经可以实际运行：统一导入、增量更新、图谱与向量检索、混合问答、安全删除、定时维护，以及本地 Web、CLI、HTTP API 三个入口和面向 kemo-agent 等智能体的外部知识服务接口。
 
-当前版本为 **1.4.0**。本次更新集中完善日常知识工作台：项目文件夹、文档重命名与移动、独立构建状态页、精简文案的真实检索进度、分类运行日志，以及减少重复磁盘读取的有界内存缓存。系统配置中的维护入口更精简；删除到回收站时允许替换同路径旧副本，并保留失败回滚处理。此前的本地文件快照、SHA-256 核验和来源身份保护继续保留。
+当前版本为 **1.5.0**。本次更新聚焦更新入口的可用性：`python update.py --dirty`（或 `start.py update-changes`）可以在更新前查看未提交的工作区更改，并区分会阻塞更新的程序文件与不影响更新的用户配置；`python update.py --force` 会在更新前把未提交的程序文件修改备份到 `update/runtime/dirty-backup/` 再继续安装，失败时自动放回原位置。更新被拒绝时，错误信息会附带可直接执行的下一步提示。此前的项目文件夹、构建状态页、检索进度与运行日志等能力保持不变。
 
 完整更新摘要、升级注意事项与发布验证命令见 [CHANGELOG.md](CHANGELOG.md)。应用版本以根目录 `version.json` 为准，前端包和转换层包的发布元数据同步为同一版本；Kemo 协议仍为 1.0，HTTP 路径仍为 `/api/v1`。
 

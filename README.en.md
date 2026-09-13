@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.4.0-00a98f" alt="version 1.4.0"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.0-00a98f" alt="version 1.5.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -283,7 +283,7 @@ An agent that truly accompanies a long-lived project should not only have a long
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
 
-The current release is **1.4.0**. This release improves the everyday knowledge workspace with project folders, document renaming and moves, a dedicated build-status page, concise real query-stage progress, categorized runtime logs and bounded memory caching to reduce repeated disk reads. The maintenance UI is simpler, and recycling a document can replace an older same-path copy with failure rollback handling. Existing local-file snapshots, SHA-256 verification and source-identity protections remain in place.
+The current release is **1.5.0**. This release focuses on the update entry point: `python update.py --dirty` (or `start.py update-changes`) lists uncommitted worktree changes before an update and separates blocking program files from user configuration that never blocks an update, while `python update.py --force` backs up uncommitted program changes to `update/runtime/dirty-backup/` and continues, restoring them if the update fails. When an update is refused, the error carries an actionable next step. Project folders, the build-status page, query progress and runtime logs are unchanged.
 
 See [CHANGELOG.md](CHANGELOG.md) for the release summary, upgrade notes and verification commands. The root `version.json` is the application-version source; frontend and converter-package release metadata share the same version. The Kemo protocol remains 1.0 and HTTP routes remain under `/api/v1`.
 

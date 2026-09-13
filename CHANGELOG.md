@@ -1,5 +1,38 @@
 # 更新记录 / Changelog
 
+## 1.5.0 — 2026-09-13
+
+### 本次更新
+
+- 更新入口新增只读检查：`python update.py --dirty`（别名 `--changes`）与 `start.py update-changes` 列出工作区中未提交的更改，并区分会阻塞更新的程序文件，以及不影响更新的用户配置与运行数据。
+- 更新入口新增强制选项：`python update.py --force` 在存在未提交的程序文件修改时，先备份到 `update/runtime/dirty-backup/<时间戳>/` 并还原工作区，再继续安装；安装失败会把这些修改放回原位置。
+- 更新被拒绝时，错误对象附带 `hint` 字段，直接给出查看未提交更改与强制更新的命令。
+- 编辑器与手动备份文件（`*.bak`、`*.bak.*`、`*.orig`）不再被计为未提交的程序文件修改。
+- Web 系统配置页与 `/api/v1/update/*` 接口的既有行为保持不变。
+
+### 升级说明
+
+- 应用版本统一为 1.5.0：`version.json`、前端包及锁文件、Python 转换层包元数据和说明文档同步。Kemo 1.0、`/api/v1` 与存储格式版本不随应用版本改号。
+- 旧版更新入口在检测到未提交的程序文件修改时仍会拒绝更新；需要先更新到 1.5.0 才能使用 `--dirty` 与 `--force`。
+- 未提交修改的备份保存在 `update/runtime/dirty-backup/`，属于运行状态目录，不会被更新覆盖，也不会进入版本库。
+- `--force` 会临时移除工作区中的未提交修改；需要对照原始内容时保留该备份目录即可。
+
+### Release summary
+
+Read-only worktree inspection before updating; an explicit `--force` that backs up uncommitted program changes and restores them when the update fails; actionable refusal hints; and editor backup files no longer counted as uncommitted program changes.
+
+### 发布验证 / Release verification
+
+```bash
+python -m pytest tests/ -q
+python -m compileall -q core api provider markitdown update start.py start_web.py
+python start.py version
+cd web/frontend
+npm run typecheck
+npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
+npm run build
+```
+
 ## 1.4.0 — 2026-09-13
 
 ### 本次更新
