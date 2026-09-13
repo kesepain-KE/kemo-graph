@@ -194,7 +194,7 @@ def _run_helper(
     try:
         with RESTART_LOG_PATH.open("ab") as log_file:
             process = subprocess.Popen(
-                list(command),
+                _detached_command(command),
                 cwd=cwd,
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
@@ -207,6 +207,28 @@ def _run_helper(
     except OSError as exc:
         _append_log(restart_id, f"新进程启动失败：{exc}")
         return 3
+
+
+def _detached_command(command: Sequence[str]) -> list[str]:
+    """Prefer the windowed interpreter so the replacement never owns a console.
+
+    ``python.exe`` is a console-subsystem binary.  Launched detached it has no
+    console, and any code path that allocates one makes Windows show a terminal
+    window whose process *is* the service: closing that window kills the
+    service.  The windowed interpreter ``pythonw.exe`` never owns a console, so
+    a restarted service cannot end up tied to a terminal.
+    """
+
+    items = [str(item) for item in command]
+    if not items or os.name != "nt":
+        return items
+    executable = Path(items[0])
+    if executable.name.casefold() != "python.exe":
+        return items
+    windowed = executable.with_name("pythonw.exe")
+    if not windowed.is_file():
+        return items
+    return [str(windowed), *items[1:]]
 
 
 def _detached_options() -> dict[str, Any]:
