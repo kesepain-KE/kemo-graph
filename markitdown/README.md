@@ -3,7 +3,7 @@
 这是 kemo-graph 内部的轻量文档归一化模块，参考 Microsoft MarkItDown 的
 Converter 调度思路重新实现，不复制完整上游项目。
 
-本模块随 kemo-graph **1.4.0** 发布，包名为 `kemo-graph-markitdown`；版本元数据与项目 `version.json` 同步。这不是 Microsoft 上游 MarkItDown 的版本号。
+本模块随 kemo-graph **1.5.0** 发布，包名为 `kemo-graph-markitdown`；版本元数据与项目 `version.json` 同步。这不是 Microsoft 上游 MarkItDown 的版本号。
 
 ## 入口
 
