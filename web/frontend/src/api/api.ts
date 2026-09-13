@@ -1,5 +1,6 @@
 import type {
   AnswerQueryData,
+  QueryProgressData,
   ApiEnvelope,
   ConfigData,
   DeleteDocumentData,
@@ -7,6 +8,10 @@ import type {
   DocumentContentData,
   DocumentContentUpdateData,
   DocumentListData,
+  DocumentProject,
+  DocumentLocation,
+  LogCategory,
+  RuntimeLogs,
   FullGraphData,
   GlobalQueryData,
   GraphNeighborhoodData,
@@ -121,6 +126,10 @@ export const api = {
     }),
   getRuntimeStatus: () =>
     request<RuntimeStatusData>("/system/runtime", { timeoutMs: 3_000 }),
+  getSystemLogs: (category: LogCategory, date: string, signal?: AbortSignal) =>
+    request<RuntimeLogs>(`/system/logs?${new URLSearchParams({ category, date, limit: "200" })}`, { signal, timeoutMs: 10_000 }),
+  getQueryProgress: (id: string, signal?: AbortSignal) =>
+    request<QueryProgressData>(`/query/progress/${encodeURIComponent(id)}`, { signal, timeoutMs: 3_000 }),
   restartService: () =>
     request<RestartData>("/system/restart", {
       method: "POST",
@@ -133,10 +142,10 @@ export const api = {
       body: JSON.stringify({ paths, mode }),
       timeoutMs: null,
     }),
-  startIngestJob: (paths: string[] | null = null, mode: IngestMode = "both") =>
+  startIngestJob: (paths: string[] | null = null, mode: IngestMode = "both", retryFailed = false) =>
     request<MaintenanceJob>("/jobs/ingest", {
       method: "POST",
-      body: JSON.stringify({ paths, mode }),
+      body: JSON.stringify({ paths, mode, ...(retryFailed ? { retry_failed: true } : {}) }),
     }),
   startSummarizeJob: () =>
     request<MaintenanceJob>("/jobs/summarize", { method: "POST" }),
@@ -164,10 +173,12 @@ export const api = {
       confidence?: number;
       force?: boolean;
     } = {},
+    progressId?: string,
   ) => {
     const { force = false, ...payload } = options;
     return request<GraphQueryData>(`/query/graph${force ? "?force=true" : ""}`, {
       method: "POST",
+      ...(progressId ? { headers: { "X-Kemo-Progress-Id": progressId } } : {}),
       body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
     });
@@ -175,10 +186,12 @@ export const api = {
   queryRag: (
     query: string,
     options: { top_k?: number; threshold?: number; force?: boolean } = {},
+    progressId?: string,
   ) => {
     const { force = false, ...payload } = options;
     return request<RagQueryData>(`/query/rag${force ? "?force=true" : ""}`, {
       method: "POST",
+      ...(progressId ? { headers: { "X-Kemo-Progress-Id": progressId } } : {}),
       body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
     });
@@ -192,10 +205,12 @@ export const api = {
       rag_threshold?: number;
       force?: boolean;
     } = {},
+    progressId?: string,
   ) => {
     const { force = false, ...payload } = options;
     return request<HybridQueryData>(`/query/hybrid${force ? "?force=true" : ""}`, {
       method: "POST",
+      ...(progressId ? { headers: { "X-Kemo-Progress-Id": progressId } } : {}),
       body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
     });
@@ -209,10 +224,12 @@ export const api = {
       rag_threshold?: number;
       force?: boolean;
     } = {},
+    progressId?: string,
   ) => {
     const { force = false, ...payload } = options;
     return request<AnswerQueryData>(`/query/answer${force ? "?force=true" : ""}`, {
       method: "POST",
+      ...(progressId ? { headers: { "X-Kemo-Progress-Id": progressId } } : {}),
       body: JSON.stringify({ query, ...payload }),
       timeoutMs: 3 * 60_000,
     });
@@ -220,10 +237,12 @@ export const api = {
   queryGlobal: (
     query: string,
     options: { top_k?: number; force?: boolean } = {},
+    progressId?: string,
   ) => {
     const { force = false, ...payload } = options;
     return request<GlobalQueryData>(`/query/global${force ? "?force=true" : ""}`, {
       method: "POST",
+      ...(progressId ? { headers: { "X-Kemo-Progress-Id": progressId } } : {}),
       body: JSON.stringify({ query, ...payload }),
       timeoutMs: 2 * 60_000,
     });
@@ -307,17 +326,42 @@ export const api = {
     request<DeleteDocumentData>(`/documents/${encodeURIComponent(sourceId)}`, {
       method: "DELETE",
     }),
+  getDocumentProjects: () => request<{ projects: DocumentProject[] }>("/projects"),
+  createDocumentProject: (name: string) => request<DocumentProject>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  renameDocument: (sourceId: string, filename: string, expectedRelativePath: string) =>
+    request<DocumentLocation>(`/documents/${encodeURIComponent(sourceId)}/location`, {
+      method: "PATCH", body: JSON.stringify({ filename, expected_relative_path: expectedRelativePath }),
+    }),
+  moveDocuments: (sourceIds: string[], project: string) =>
+    request<{ documents: DocumentLocation[] }>("/documents/move-batch", { method: "POST", body: JSON.stringify({ source_ids: sourceIds, project }) }),
   emptyRecycle: () =>
     request<RecycleCleanupData>("/maintenance/recycle", {
       method: "DELETE",
     }),
-  getDocuments: (page = 1, pageSize = 20, status?: "active" | "pending" | "all") => {
+  getDocuments: (
+    page = 1,
+    pageSize = 20,
+    status?: "active" | "pending" | "all",
+    signal?: AbortSignal,
+    options?: {
+      project?: string;
+      search?: string;
+      graphStatus?: string;
+      ragStatus?: string;
+      includeSummary?: boolean;
+    },
+  ) => {
     const parameters = new URLSearchParams();
     if (page !== 1) parameters.set("page", String(page));
     if (pageSize !== 20) parameters.set("page_size", String(pageSize));
     if (status) parameters.set("status", status);
+    if (options?.project !== undefined) parameters.set("project", options.project);
+    if (options?.search) parameters.set("search", options.search);
+    if (options?.graphStatus && options.graphStatus !== "all") parameters.set("graph_status", options.graphStatus);
+    if (options?.ragStatus && options.ragStatus !== "all") parameters.set("rag_status", options.ragStatus);
+    if (options?.includeSummary) parameters.set("include_summary", "true");
     const query = parameters.size ? `?${parameters.toString()}` : "";
-    return request<DocumentListData>(`/documents${query}`);
+    return request<DocumentListData>(`/documents${query}`, { signal });
   },
   getDocumentContent: (sourceId: string) =>
     request<DocumentContentData>(
@@ -345,11 +389,14 @@ export const api = {
       body: JSON.stringify({ source_ids: sourceIds }),
       timeoutMs: 2 * 60_000,
     }),
-  deleteAllDocuments: () =>
-    request<DocumentBatchDeleteData>("/documents?confirm=delete-all", {
-      method: "DELETE",
-      timeoutMs: null,
-    }),
+  deleteAllDocuments: (project?: string) =>
+    request<DocumentBatchDeleteData>(
+      `/documents?confirm=delete-all${project !== undefined ? `&project=${encodeURIComponent(project)}` : ""}`,
+      {
+        method: "DELETE",
+        timeoutMs: null,
+      },
+    ),
   getConfig: () => request<ConfigData>("/config"),
   saveConfig: (config: ConfigData) =>
     request<ConfigData>("/config", {
@@ -362,10 +409,10 @@ export const api = {
       body: JSON.stringify({ filename: file.name, content: await file.text() }),
       timeoutMs: 2 * 60_000,
     }),
-  importFile: (file: File, ingestAfterImport = true) => {
+  importFile: (file: File, ingestAfterImport = true, project?: string) => {
     const body = new FormData();
     body.append("file", file, file.name);
-    return request<ImportData>(`/import?ingest=${ingestAfterImport}`, {
+    return request<ImportData>(`/import?ingest=${ingestAfterImport}${project !== undefined ? `&project=${encodeURIComponent(project)}` : ""}`, {
       method: "POST",
       body,
       timeoutMs: null,

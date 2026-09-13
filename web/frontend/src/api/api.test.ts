@@ -14,6 +14,47 @@ afterEach(() => {
 });
 
 describe("management API", () => {
+  it("sends an optional progress UUID without changing query bodies", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response({ query: "test", results: [] }))
+      .mockResolvedValueOnce(response({ available: true, status: "running", steps: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const progressId = "123e4567-e89b-42d3-a456-426614174000";
+
+    await api.queryRag("test", { top_k: 3 }, progressId);
+    await api.getQueryProgress(progressId);
+
+    const [queryUrl, queryInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(queryUrl).toBe("/api/v1/query/rag");
+    expect(new Headers(queryInit.headers).get("X-Kemo-Progress-Id")).toBe(progressId);
+    expect(JSON.parse(String(queryInit.body))).toEqual({ query: "test", top_k: 3 });
+    expect(fetchMock.mock.calls[1][0]).toBe(`/api/v1/query/progress/${progressId}`);
+  });
+
+  it("reads a bounded log category and passes cancellation to fetch", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => response({ entries: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await api.getSystemLogs("query", "2026-09-13", controller.signal);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/system/logs?category=query&date=2026-09-13&limit=200");
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+  it("creates projects, relocates documents and imports to an encoded project", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => response({}));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.getDocumentProjects();
+    await api.createDocumentProject("研究资料");
+    await api.renameDocument("s/1", "新名称.md", "old.md");
+    await api.moveDocuments(["s1", "s2"], "");
+    await api.importFile(new File(["text"], "a.txt"), false, "研究资料");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/projects", "/api/v1/projects", "/api/v1/documents/s%2F1/location",
+      "/api/v1/documents/move-batch", `/api/v1/import?ingest=false&project=${encodeURIComponent("研究资料")}`,
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ filename: "新名称.md", expected_relative_path: "old.md" });
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({ source_ids: ["s1", "s2"], project: "" });
+  });
   it("loads documents and document content from the real endpoints", async () => {
     const fetchMock = vi
       .fn()
@@ -35,6 +76,49 @@ describe("management API", () => {
     await expect(api.getDocumentContent("s/1")).resolves.toMatchObject({ content: "# A" });
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/documents");
     expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/documents/s%2F1/content");
+  });
+
+  it("sends document pagination, server filters and project-scoped deletion", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response({
+        documents: [],
+        pagination: { page: 2, page_size: 6, total: 8, total_pages: 2 },
+        summary: {
+          total_active: 8,
+          pending_documents: 2,
+          needs_rebuild_documents: 3,
+          graph: { pending: 1, processing: 1, ready: 5, failed: 1 },
+          rag: { pending: 2, processing: 0, ready: 5, failed: 1 },
+        },
+      }))
+      .mockResolvedValueOnce(response({ requested: 3, deleted: 3, failed: 0, documents: [], failures: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getDocuments(2, 6, "active", undefined, {
+      project: "研究资料",
+      search: "画布 设计",
+      graphStatus: "ready",
+      ragStatus: "failed",
+      includeSummary: true,
+    });
+    await api.deleteAllDocuments("研究资料");
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `/api/v1/documents?${new URLSearchParams({
+        page: "2",
+        page_size: "6",
+        status: "active",
+        project: "研究资料",
+        search: "画布 设计",
+        graph_status: "ready",
+        rag_status: "failed",
+        include_summary: "true",
+      }).toString()}`,
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `/api/v1/documents?confirm=delete-all&project=${encodeURIComponent("研究资料")}`,
+    );
   });
 
   it("updates Markdown with a hash precondition and supports scoped bulk deletion", async () => {
@@ -290,6 +374,32 @@ describe("management API", () => {
       summarize: false,
     });
     expect(fetchMock.mock.calls.every(([, init]) => init.method === "POST")).toBe(true);
+  });
+
+  it("can retry failed documents without enumerating every source path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({
+      job_id: "job-retry",
+      kind: "ingest",
+      status: "queued",
+      progress: 0,
+      detail: "queued",
+      result: null,
+      error: null,
+      created_at: "2026-09-13T00:00:00Z",
+      started_at: null,
+      finished_at: null,
+      updated_at: "2026-09-13T00:00:00Z",
+      events: [],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.startIngestJob(null, "both", true);
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
+      paths: null,
+      mode: "both",
+      retry_failed: true,
+    });
   });
 
   it("lists jobs and encodes a job id when loading its event history", async () => {

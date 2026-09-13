@@ -23,6 +23,7 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
+import { SearchProgressCard, searchModeHelp } from "../components/SearchProgressCard";
 import {
   useSearchSession,
   type SearchResultDisplayMode,
@@ -395,6 +396,8 @@ export function SearchPage() {
     result,
     loading,
     error,
+    progress,
+    historyRevision,
     setQuery,
     selectMode,
     resultDisplayMode,
@@ -425,7 +428,7 @@ export function SearchPage() {
 
   useEffect(() => {
     void loadHistory();
-  }, [loadHistory]);
+  }, [historyRevision, loadHistory]);
 
   useEffect(() => {
     if (!historyOpen) return undefined;
@@ -445,7 +448,6 @@ export function SearchPage() {
     const data = await startSearch(query, mode, force);
     if (data) {
       setHistoryNotice(force ? "已强制刷新结果并更新服务端缓存。" : null);
-      await loadHistory();
     }
   };
 
@@ -510,15 +512,16 @@ export function SearchPage() {
         <div className="search-orbit" aria-hidden="true"><Sparkles size={22} /></div>
         <p className="eyebrow">Local-first knowledge retrieval</p>
         <h2>从你的知识网络中找到答案</h2>
-        <p>图谱理解结构，向量召回语义；混合模式会让两者互相增强。</p>
+        <p>用自然语言提问，查找文档依据与知识关系。想直接获得回答，可使用默认的 LLM 回答模式。</p>
 
         <form className="hero-search" onSubmit={(event) => void runSearch(event)}>
           <Search size={21} />
           <input
             autoFocus
+            aria-label="检索问题"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="输入问题、概念或关系…"
+            placeholder="描述你想了解的问题，或输入概念、实体名称…"
           />
           <button
             className="hero-search__refresh"
@@ -527,10 +530,10 @@ export function SearchPage() {
             title="跳过已有缓存并重新执行检索"
             type="button"
           >
-            <RefreshCw size={16} />刷新
+            <RefreshCw size={16} />重新检索
           </button>
           <button className="hero-search__submit" disabled={loading || !query.trim()} type="submit">
-            {loading ? "检索中" : "开始检索"}<ArrowRight size={17} />
+            {loading ? "处理中…" : mode === "answer" ? "获取回答" : "开始检索"}<ArrowRight size={17} />
           </button>
         </form>
 
@@ -540,6 +543,8 @@ export function SearchPage() {
               type="button"
               role="tab"
               aria-selected={mode === value}
+              disabled={loading}
+              title={searchModeHelp[value].description}
               className={mode === value ? "is-active" : ""}
               key={value}
               onClick={() => {
@@ -550,6 +555,8 @@ export function SearchPage() {
             </button>
           ))}
         </div>
+
+        <p className="search-mode-help">{searchModeHelp[mode].description}</p>
 
         <div className="search-suggestions">
           <span>试试：</span>
@@ -574,8 +581,8 @@ export function SearchPage() {
 
       <div className="search-workspace">
         <div className="search-primary">
+          {progress ? <SearchProgressCard progress={progress} /> : null}
           {error ? <ErrorNotice message={error} /> : null}
-          {loading ? <div className="search-loading card"><LoadingState label="正在执行召回、重排与阈值过滤…" /></div> : null}
 
           {result ? (
             <div className="search-results-frame">
@@ -629,8 +636,9 @@ export function SearchPage() {
                 alt=""
                 aria-hidden="true"
               />
-              <h3>一次查询，多种知识视角</h3>
-              <p>服务端缓存会保留成功结果，切换页面后仍可从右侧历史抽屉恢复。</p>
+              <h3>从一个具体问题开始</h3>
+              <p>请先在文档管理中导入资料并完成整理。检索启动后可切换页面，返回时继续查看进度和结果。</p>
+              <p>右上角“搜索历史”可查看已缓存的结果；“重新检索”会跳过缓存，再查询一次。</p>
             </div>
           ) : null}
         </div>

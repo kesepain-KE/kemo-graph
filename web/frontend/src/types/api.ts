@@ -245,8 +245,21 @@ export type RecycleCleanupData = {
   forced: boolean;
 };
 
+export type QueryProgressStep = {
+  id: string;
+  label: string;
+  status: "running" | "completed" | "failed" | "fallback";
+};
+
+export type QueryProgressData = {
+  available: boolean;
+  status?: "running" | "completed" | "failed";
+  steps: QueryProgressStep[];
+};
+
 export type DocumentRecord = {
   source_id: string;
+  source_uri?: string | null;
   relative_path: string;
   original_path?: string;
   content_hash?: string;
@@ -262,6 +275,22 @@ export type DocumentRecord = {
 export type DocumentListData = {
   documents: DocumentRecord[];
   pagination: Pagination;
+  summary?: DocumentListSummary;
+};
+
+export type DocumentStatusCounts = {
+  pending: number;
+  processing: number;
+  ready: number;
+  failed: number;
+};
+
+export type DocumentListSummary = {
+  total_active: number;
+  pending_documents: number;
+  needs_rebuild_documents: number;
+  graph: DocumentStatusCounts;
+  rag: DocumentStatusCounts;
 };
 
 export type DocumentContentData = {
@@ -386,3 +415,9 @@ export type MaintenanceJobListData = { jobs: MaintenanceJob[] };
 
 export type IngestMode = "graph" | "rag" | "both";
 export type SearchMode = SearchCacheMode;
+
+export type DocumentProject = { name: string; document_count: number };
+export type LogCategory = "terminal" | "query" | "internal";
+export type RuntimeLogEntry = { id: string; time: string; level: string; module: string; action: string; detail: string; elapsed_ms: string };
+export type RuntimeLogs = { category: LogCategory; date: string; timezone: string; entries: RuntimeLogEntry[]; truncated: boolean; available: boolean; limit: number };
+export type DocumentLocation = { source_id: string; previous_relative_path: string; relative_path: string; changed: boolean };
