@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
 import { DocumentsPage } from "./pages/DocumentsPage";
+import { BuildStatusPage } from "./pages/BuildStatusPage";
 import { GraphPage } from "./pages/GraphPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -13,6 +14,7 @@ export function App() {
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/documents" replace />} />
         <Route path="documents" element={<DocumentsPage />} />
+        <Route path="build-status" element={<BuildStatusPage />} />
         <Route path="graph" element={<GraphPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="settings" element={<SettingsPage />} />

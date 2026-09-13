@@ -1,5 +1,6 @@
 import {
   Activity,
+  ListChecks,
   CheckCircle2,
   CircleAlert,
   FileText,
@@ -19,6 +20,7 @@ import { useSearchSession } from "../context/SearchSessionContext";
 
 const navItems = [
   { to: "/documents", label: "文档管理", icon: FileText },
+  { to: "/build-status", label: "构建状态", icon: ListChecks },
   { to: "/graph", label: "知识图谱", icon: Network },
   { to: "/search", label: "知识检索", icon: Search },
   { to: "/settings", label: "系统配置", icon: Settings2 },
@@ -27,6 +29,7 @@ const navItems = [
 
 const pageMeta: Record<string, { title: string; eyebrow: string }> = {
   "/documents": { title: "文档管理", eyebrow: "Sources / Ingest" },
+  "/build-status": { title: "构建状态", eyebrow: "Build / Graph / RAG" },
   "/graph": { title: "知识图谱", eyebrow: "Explore / Visualize" },
   "/search": { title: "知识检索", eyebrow: "Graph / RAG / Hybrid" },
   "/settings": { title: "系统配置", eyebrow: "Runtime / Providers" },
