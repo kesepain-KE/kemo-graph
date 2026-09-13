@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
+import { RuntimeLogPanel } from "../components/RuntimeLogPanel";
 import { loadIngestHistory, type IngestHistoryItem } from "../lib/history";
 import type { StatusData } from "../types/api";
 
@@ -84,7 +85,7 @@ export function StatusPage() {
     <section className="status-page page-stack">
       <PageIntro
         title="知识库运行概览"
-        description="检查来源状态、图谱规模、向量一致性和最近由当前浏览器触发的整理记录。"
+        description="检查知识库健康与整理记录，按标签查看终端启动、查询和内部运行日志。"
         actions={<button className="button button--secondary" onClick={load} disabled={loading}><RefreshCw className={loading ? "spin" : ""} size={16} />刷新状态</button>}
       />
       {error ? <ErrorNotice message={error} /> : null}
@@ -144,6 +145,7 @@ export function StatusPage() {
           </div>
         </>
       ) : null}
+      <RuntimeLogPanel />
     </section>
   );
 }

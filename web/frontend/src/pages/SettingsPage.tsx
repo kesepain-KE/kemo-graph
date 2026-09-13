@@ -1,18 +1,14 @@
 import {
   CheckCircle2,
   ChevronRight,
-  Combine,
   Database,
-  DownloadCloud,
   History,
   KeyRound,
   Network,
   Power,
   RotateCcw,
-  RefreshCw,
   Save,
   ServerCog,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,8 +17,7 @@ import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
 import { ThemedSelect } from "../components/ThemedSelect";
-import { useRuntimeTasks } from "../context/RuntimeTasksContext";
-import type { ConfigData, UpdateStatusData } from "../types/api";
+import type { ConfigData } from "../types/api";
 
 type FieldKind = "boolean" | "number" | "password" | "select" | "text" | "time";
 
@@ -293,7 +288,6 @@ function validateConfig(config: ConfigData): string | null {
 }
 
 export function SettingsPage() {
-  const { refreshServerTasks } = useRuntimeTasks();
   const [config, setConfig] = useState<ConfigData | null>(null);
   const [savedConfig, setSavedConfig] = useState<ConfigData | null>(null);
   const [activeGroupId, setActiveGroupId] = useState(groups[0].id);
@@ -301,10 +295,6 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [emptyingRecycle, setEmptyingRecycle] = useState(false);
   const [clearingCache, setClearingCache] = useState<"all" | "stale" | null>(null);
-  const [maintenanceSubmitting, setMaintenanceSubmitting] = useState<string | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatusData | null>(null);
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [applyingUpdate, setApplyingUpdate] = useState(false);
   const [restartingService, setRestartingService] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -312,15 +302,6 @@ export function SettingsPage() {
   const panelRef = useRef<HTMLElement>(null);
 
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? groups[0];
-  const forceUpdateAvailable = Boolean(
-    updateStatus?.force_update_available &&
-      !updateStatus.update_available &&
-      updateStatus.can_force_apply,
-  );
-  const canApplyUpdate = Boolean(
-    updateStatus &&
-      ((updateStatus.update_available && updateStatus.can_apply) || forceUpdateAvailable),
-  );
   const dirty = useMemo(
     () => Boolean(config && savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig)),
     [config, savedConfig],
@@ -348,17 +329,6 @@ export function SettingsPage() {
     void loadConfig();
   }, [loadConfig]);
 
-  const loadUpdateStatus = useCallback(async () => {
-    try {
-      setUpdateStatus(await api.getUpdateStatus());
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "无法读取更新状态");
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadUpdateStatus();
-  }, [loadUpdateStatus]);
 
   useEffect(() => {
     panelRef.current?.scrollTo({ top: 0, behavior: "auto" });
@@ -446,74 +416,6 @@ export function SettingsPage() {
     }
   };
 
-  const submitMaintenance = async (
-    kind: "organize" | "changed" | "all",
-  ) => {
-    const confirmations = {
-      organize: "开始知识图谱整理？该操作不重读文档、不重建向量，会检查并合并语义重复节点。",
-      changed: "重建变化文档的知识库？未变化文档会被跳过。",
-      all: "确认执行全项目重建？系统会在影子目录重建 Graph、RAG 与 FAISS，验证后切换，并保留旧数据备份。",
-    };
-    if (!window.confirm(confirmations[kind])) return;
-    setMaintenanceSubmitting(kind);
-    setNotice(null);
-    setError(null);
-    try {
-      const job = kind === "organize"
-        ? await api.organizeGraph({ use_llm: true, summarize: true })
-        : kind === "changed"
-          ? await api.rebuildKnowledgeBase()
-          : await api.rebuildAll();
-      await refreshServerTasks();
-      setNotice(`维护任务已进入后台队列（${job.job_id.slice(0, 8)}），可在右上角运行记录中查看进度和日志。`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "无法启动维护任务");
-    } finally {
-      setMaintenanceSubmitting(null);
-    }
-  };
-
-  const checkForUpdate = async () => {
-    setCheckingUpdate(true);
-    setNotice(null);
-    setError(null);
-    try {
-      const status = await api.checkUpdate();
-      setUpdateStatus(status);
-      setNotice(
-        status.update_available
-          ? `发现新版本 ${status.latest_version}，请确认安装条件后执行更新。`
-          : status.force_update_available
-            ? `当前 ${status.current_version} 与 GitHub 版本相同，可选择强制重新安装当前提交。`
-            : `当前 ${status.current_version} 已是最新版本。`,
-      );
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "检查更新失败");
-    } finally {
-      setCheckingUpdate(false);
-    }
-  };
-
-  const applyApplicationUpdate = async (force = false) => {
-    if (!updateStatus?.latest_version) return;
-    const confirmation = force
-      ? `当前版本 ${updateStatus.current_version} 与 GitHub 版本相同。确认强制重新安装当前提交？这会重新安装依赖并重建前端，完成后需要重启 kemo-graph。`
-      : `确认从 GitHub 更新至 ${updateStatus.latest_version}？更新完成后需要重启 kemo-graph。`;
-    if (!window.confirm(confirmation)) return;
-    setApplyingUpdate(true);
-    setNotice(null);
-    setError(null);
-    try {
-      const job = await api.applyUpdate(force);
-      await refreshServerTasks();
-      setNotice(`更新任务已进入后台队列（${job.job_id.slice(0, 8)}）。完成后请重启服务。`);
-      await loadUpdateStatus();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "无法启动更新任务");
-    } finally {
-      setApplyingUpdate(false);
-    }
-  };
 
   const restartWebService = async () => {
     if (!window.confirm(
@@ -652,89 +554,21 @@ export function SettingsPage() {
               ))}
               {activeGroup.id === "system" ? (
                 <>
-                  <div className="settings-update-zone">
-                    <span className="settings-update-zone__icon"><DownloadCloud size={18} /></span>
+                  <div className="settings-update-zone settings-restart-zone">
+                    <span className="settings-update-zone__icon"><Power size={18} /></span>
                     <span className="settings-update-zone__content">
-                      <strong>kemo-graph 应用更新</strong>
-                      <small>
-                        当前版本 <b>{updateStatus?.current_version ?? "读取中"}</b>
-                        {updateStatus?.latest_version
-                          ? <> · GitHub 最新 <b>{updateStatus.latest_version}</b></>
-                          : " · 尚未检查 GitHub"}
-                      </small>
-                      {updateStatus?.restart_required ? (
-                        <em>新版本已安装，请重启 Web 服务以加载全部代码。</em>
-                      ) : null}
-                      {updateStatus?.blocking_reasons.length ? (
-                        <em className="is-warning">
-                          {updateStatus.blocking_reasons.join("；")}
-                          {updateStatus.dirty_files.length
-                            ? `（${updateStatus.dirty_files.length} 个程序文件）`
-                            : ""}
-                        </em>
-                      ) : null}
+                      <strong>服务重启</strong>
+                      <small>完整退出当前服务并启动新进程，期间会暂时断开连接。请先保存配置，并等待正在运行的任务完成。</small>
                     </span>
-                    <span className="settings-update-zone__actions">
-                      <button
-                        className="button button--secondary"
-                        disabled={checkingUpdate || applyingUpdate || restartingService}
-                        onClick={() => void checkForUpdate()}
-                        type="button"
-                      >
-                        <RefreshCw className={checkingUpdate ? "spin" : ""} size={15} />
-                        {checkingUpdate ? "检查中" : "检查更新"}
-                      </button>
-                      <button
-                        className="button button--primary"
-                        disabled={
-                          applyingUpdate
-                          || checkingUpdate
-                          || restartingService
-                          || !canApplyUpdate
-                        }
-                        onClick={() => void applyApplicationUpdate(forceUpdateAvailable)}
-                        type="button"
-                      >
-                        <DownloadCloud size={15} />
-                        {applyingUpdate
-                          ? "提交中"
-                          : forceUpdateAvailable
-                            ? "强制重新安装"
-                            : "下载并更新"}
-                      </button>
-                      <button
-                        className="button button--secondary"
-                        disabled={restartingService || checkingUpdate || applyingUpdate}
-                        onClick={() => void restartWebService()}
-                        type="button"
-                      >
-                        <Power size={15} />
-                        {restartingService ? "重启中" : "重启服务"}
-                      </button>
-                    </span>
-                  </div>
-                  <div className="settings-maintenance-actions">
-                    <article>
-                      <span><Combine size={17} /></span>
-                      <div><strong>知识图谱整理</strong><small>合并重叠节点和关系，保留来源事实，不调用 Embedding。</small></div>
-                      <button className="button button--secondary" disabled={Boolean(maintenanceSubmitting)} onClick={() => void submitMaintenance("organize")} type="button">
-                        {maintenanceSubmitting === "organize" ? "提交中" : "开始整理"}
-                      </button>
-                    </article>
-                    <article>
-                      <span><RotateCcw size={17} /></span>
-                      <div><strong>变化文档知识库重建</strong><small>只重读新增、修改、删除和失败文档，跳过未变化内容。</small></div>
-                      <button className="button button--secondary" disabled={Boolean(maintenanceSubmitting)} onClick={() => void submitMaintenance("changed")} type="button">
-                        {maintenanceSubmitting === "changed" ? "提交中" : "重建变化项"}
-                      </button>
-                    </article>
-                    <article className="is-critical">
-                      <span><Sparkles size={17} /></span>
-                      <div><strong>全项目重建</strong><small>影子重建 Graph、RAG 和 FAISS；校验通过后切换并保留备份。</small></div>
-                      <button className="button button--secondary" disabled={Boolean(maintenanceSubmitting)} onClick={() => void submitMaintenance("all")} type="button">
-                        {maintenanceSubmitting === "all" ? "提交中" : "全量重建"}
-                      </button>
-                    </article>
+                    <button
+                      className="button button--secondary"
+                      disabled={restartingService}
+                      onClick={() => void restartWebService()}
+                      type="button"
+                    >
+                      <Power size={15} />
+                      {restartingService ? "重启中" : "重启服务"}
+                    </button>
                   </div>
                   <div className="settings-cache-zone">
                     <span className="settings-cache-zone__icon"><History size={17} /></span>

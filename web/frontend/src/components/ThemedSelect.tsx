@@ -218,7 +218,9 @@ export function ThemedSelect({
             </button>
           ))}
         </div>,
-        document.body,
+        // A modal dialog makes body-level portals inert and hides them behind
+        // its top layer. Keep the themed menu inside its owning dialog.
+        rootRef.current?.closest("dialog") ?? document.body,
       ) : null}
     </div>
   );
