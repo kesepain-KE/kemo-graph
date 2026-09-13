@@ -26,6 +26,22 @@ _SENSITIVE_PATTERNS = (
     ),
 )
 
+_QUOTED_SECRET = re.compile(
+    r'''(?i)(["']?\b(?:api[_ -]?key|authorization|access[_ -]?token|refresh[_ -]?token|token|secret|password)["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)'''
+)
+
+
+def redact_log_text(value: Any, secrets: tuple[str, ...] = (), limit: int = 2000) -> str:
+    """Safe plain-text output for persisted console logs and the log viewer."""
+    text = str(value)
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    text = _SENSITIVE_PATTERNS[0].sub("Bearer [REDACTED]", text)
+    text = _QUOTED_SECRET.sub(lambda match: match.group(1) + "[REDACTED]", text)
+    return _single_line(text, limit)
+
 
 class DailyTSVLogger:
     """线程安全地写入 ``log/YYYY-MM-DD.tsv``。"""
@@ -88,7 +104,7 @@ def _normalize_level(level: str) -> str:
 
 
 def _sanitize_detail(detail: Any) -> str:
-    value = _single_line(detail, _MAX_DETAIL_LENGTH * 2)
+    value = redact_log_text(detail, limit=_MAX_DETAIL_LENGTH * 2)
     value = _SENSITIVE_PATTERNS[0].sub("Bearer [REDACTED]", value)
     value = _SENSITIVE_PATTERNS[1].sub(
         lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]",

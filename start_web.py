@@ -28,9 +28,11 @@ try:
     from api.deps import create_context, create_service
     from api.errors import install_exception_handlers, success_response
     from api.routes import _is_loopback_host, router
+    from api.query_progress import install_query_progress
     from api.schemas import RestartRequest
     from core.scheduler import MaintenanceScheduler
     from core.jobs import MaintenanceJobManager
+    from core.terminal_logging import capture_terminal_logs
     from update import ApplicationUpdater, read_local_version
     from restart import (
         RestartPermissionError,
@@ -180,19 +182,27 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        job_manager.start()
-        scheduler.start()
-        try:
-            yield
-        finally:
-            scheduler.stop()
-            job_manager.stop()
+        with capture_terminal_logs(
+            context.settings,
+            config_path=context.config_path,
+        ) as terminal:
+            terminal.log("start_web", "startup", f"Web service starting, pid={os.getpid()}")
+            try:
+                job_manager.start()
+                scheduler.start()
+                terminal.log("start_web", "ready", "后台队列与维护调度器已启动")
+                yield
+            finally:
+                scheduler.stop()
+                job_manager.stop()
+                terminal.log("start_web", "shutdown", "后台队列与维护调度器已停止")
 
     application = FastAPI(
         title="kemo-graph Web",
         version=read_local_version(),
         lifespan=lifespan,
     )
+    install_query_progress(application)
     application.state.kemo_context = context
     application.state.kemo_scheduler = scheduler
     application.state.kemo_job_manager = job_manager
@@ -327,21 +337,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=args.host,
         port=args.port,
     )
-    print(f"kemo-graph Web 正在启动：{service_url}", flush=True)
-    try:
+    with capture_terminal_logs(
+        application.state.kemo_context.settings,
+        config_path=application.state.kemo_context.config_path,
+    ) as terminal:
+        terminal.log("start_web", "launch", f"pid={os.getpid()}, address={service_url}")
+        print(f"kemo-graph Web 正在启动：{service_url}", flush=True)
         try:
-            server.run()
-        except KeyboardInterrupt:
-            UVICORN_LOGGER.info("已收到 Ctrl+C，kemo-graph Web 服务已安全停止。")
-        except asyncio.CancelledError:
-            # 部分 Python/uvicorn 组合会在正常信号关闭后直接抛出
-            # CancelledError；仅当服务器已进入退出状态时将其视为正常关闭。
-            if not server.should_exit:
-                raise
-            UVICORN_LOGGER.info("kemo-graph Web 服务已安全停止。")
-        return 0
-    finally:
-        remove_runtime_state(os.getpid())
+            try:
+                server.run()
+            except KeyboardInterrupt:
+                UVICORN_LOGGER.info("已收到 Ctrl+C，kemo-graph Web 服务已安全停止。")
+            except asyncio.CancelledError:
+                # 部分 Python/uvicorn 组合会在正常信号关闭后直接抛出
+                # CancelledError；仅当服务器已进入退出状态时将其视为正常关闭。
+                if not server.should_exit:
+                    raise
+                UVICORN_LOGGER.info("kemo-graph Web 服务已安全停止。")
+            return 0
+        finally:
+            remove_runtime_state(os.getpid())
 
 
 def _run_cli() -> int:

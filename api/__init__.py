@@ -9,6 +9,8 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from core.jobs import MaintenanceJobManager
+from core.terminal_logging import capture_terminal_logs
+from .query_progress import install_query_progress
 from update import ApplicationUpdater, read_local_version
 
 from .deps import create_context, create_service
@@ -37,11 +39,17 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        jobs.start()
-        try:
-            yield
-        finally:
-            jobs.stop()
+        with capture_terminal_logs(
+            context.settings,
+            config_path=context.config_path,
+        ) as terminal:
+            terminal.log("api", "startup", "API service starting")
+            try:
+                jobs.start()
+                yield
+            finally:
+                jobs.stop()
+                terminal.log("api", "shutdown", "API service stopped")
 
     app = FastAPI(
         title="kemo-graph API",
@@ -49,6 +57,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.kemo_context = context
+    install_query_progress(app)
     app.state.kemo_job_manager = jobs
     app.state.kemo_updater = updater
     install_exception_handlers(app)
