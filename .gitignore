@@ -27,8 +27,11 @@ Thumbs.db
 .playwright-mcp/
 
 # Data / runtime
-data/
-external/
+# Anchor data/ and external/ to the repository root: the frontend keeps source
+# modules under web/frontend/src/features/graph/data/, which must stay tracked.
+# log/, output/ and tmp/ stay unanchored so web/frontend/output/ keeps being ignored.
+/data/
+/external/
 log/
 output/
 tmp/
