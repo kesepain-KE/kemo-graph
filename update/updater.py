@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import total_ordering
@@ -226,6 +226,26 @@ class ApplicationUpdater:
             )
             return state
 
+    def changes(self) -> dict[str, Any]:
+        """列出工作区中未提交的更改，不联网、不写入任何状态。
+
+        ``blocking_files`` 会导致更新被拒绝；``protected_files`` 是用户配置与
+        运行数据，更新过程本就不会覆盖它们，因此不阻塞更新。
+        """
+
+        with self._lock:
+            preflight = self._preflight()
+            blocking = list(preflight["dirty_files"])
+            return {
+                "installation_mode": preflight["installation_mode"],
+                "worktree_clean": not blocking,
+                "blocking_files": blocking,
+                "protected_files": list(preflight.get("protected_files") or []),
+                "blocking_reasons": list(preflight["blocking_reasons"]),
+                "can_force_update": bool(blocking)
+                and preflight["installation_mode"] == "git",
+            }
+
     def check(self) -> dict[str, Any]:
         with self._lock:
             self._write_state({**self._read_state(), "phase": "checking", "error": None})
@@ -280,22 +300,38 @@ class ApplicationUpdater:
         with self._lock:
             checked = self.check()
             forced_same_version = bool(force and checked.get("force_update_available"))
-            if not checked["update_available"] and not forced_same_version:
+            dirty_files = list(checked.get("dirty_files") or [])
+            installable = bool(checked["update_available"]) or forced_same_version
+            # ``force`` 同时允许工作区存在未提交的程序文件修改：这些文件会先
+            # 被暂存到 update/runtime，否则 fast-forward 会因工作区不干净而失败。
+            forced_dirty = bool(force and dirty_files and installable)
+            if not installable:
                 message = (
                     "当前已是最新版本"
                     if checked.get("force_update_available")
                     else "本地版本高于远端版本，未执行降级"
                 )
                 return {**checked, "updated": False, "forced": False, "message": message}
-            if not (checked["can_apply"] or (forced_same_version and checked["can_force_apply"])):
-                reasons = "；".join(checked["blocking_reasons"]) or "当前安装不可更新"
-                raise UpdateBlockedError(reasons)
+            can_proceed = bool(checked["can_apply"]) or (
+                forced_same_version and checked["can_force_apply"]
+            )
+            if not can_proceed:
+                remaining = [
+                    reason
+                    for reason in checked["blocking_reasons"]
+                    if reason != "工作区包含未提交的程序文件修改"
+                ]
+                if not forced_dirty or remaining:
+                    reasons = "；".join(checked["blocking_reasons"]) or "当前安装不可更新"
+                    raise UpdateBlockedError(reasons)
 
             self._write_state({**checked, "phase": "updating", "error": None})
             original_config: bytes | None = None
             config_path = self.project_root / "config" / "config.json"
             old_head = ""
             merged = False
+            stashed_files: list[str] = []
+            dirty_backup_dir: Path | None = None
             try:
                 old_head = self._git_output(["git", "rev-parse", "HEAD"]).strip()
                 if not old_head:
@@ -311,6 +347,13 @@ class ApplicationUpdater:
                     raise UpdateBlockedError("本地分支与远端 main 已分叉，无法安全快进更新")
 
                 changed_during_fetch = self._dirty_files()
+                if forced_dirty:
+                    # ``--force``：先把未提交的程序文件修改备份并还原，否则
+                    # fast-forward 会因为工作区不干净而失败。
+                    callback(0.12, "备份并暂存未提交的程序文件修改")
+                    stashed_files = changed_during_fetch or list(checked["dirty_files"])
+                    dirty_backup_dir = self._stash_dirty_files(stashed_files)
+                    changed_during_fetch = self._dirty_files()
                 if changed_during_fetch:
                     raise UpdateBlockedError(
                         "获取更新期间工作区发生变化，已停止安装："
@@ -370,7 +413,11 @@ class ApplicationUpdater:
                     "phase": "completed",
                     "restart_required": True,
                     "updated": True,
-                    "forced": forced_same_version,
+                    "forced": forced_same_version or bool(stashed_files),
+                    "stashed_files": list(stashed_files),
+                    "dirty_backup_dir": (
+                        str(dirty_backup_dir) if dirty_backup_dir is not None else None
+                    ),
                     "previous_commit": old_head,
                     "current_commit": self._git_output(["git", "rev-parse", "HEAD"]).strip(),
                     "finished_at": _now_iso(),
@@ -401,42 +448,27 @@ class ApplicationUpdater:
                         _write_bytes_atomic(config_path, original_config)
                     except OSError as config_exc:
                         rollback_error = rollback_error or config_exc
+                if stashed_files:
+                    try:
+                        # 把更新前暂存的未提交修改放回原位置，使失败后的工作区
+                        # 与更新前保持一致；备份目录同时保留以备对照。
+                        self._restore_stashed_files(dirty_backup_dir, stashed_files)
+                    except OSError as restore_exc:
+                        rollback_error = rollback_error or restore_exc
                 error = exc if isinstance(exc, UpdateError) else UpdateError(str(exc))
                 if rollback_error is not None:
                     error = UpdateError(f"{error}；自动回滚失败：{rollback_error}")
                 self._record_error(error)
                 raise error from exc if error is not exc else exc
 
-    def _preflight(self) -> dict[str, Any]:
-        if not (self.project_root / ".git").exists():
-            return {
-                "installation_mode": "source",
-                "dirty_files": [],
-                "blocking_reasons": ["当前不是 Git 安装，暂不支持自动应用更新"],
-            }
-        try:
-            dirty = self._dirty_files()
-        except UpdateError as exc:
-            return {
-                "installation_mode": "git",
-                "dirty_files": [],
-                "blocking_reasons": [str(exc)],
-            }
-        reasons = []
-        if dirty:
-            reasons.append("工作区包含未提交的程序文件修改")
-        return {
-            "installation_mode": "git",
-            "dirty_files": dirty,
-            "blocking_reasons": reasons,
-        }
+    def _git_changes(self) -> list[str]:
+        """Return every changed path in the worktree, protected ones included."""
 
-    def _dirty_files(self) -> list[str]:
         result = self._run(
             ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]
         )
         records = result.stdout.split("\0")
-        dirty: list[str] = []
+        changes: list[str] = []
         skip_next = False
         for record in records:
             if not record:
@@ -450,15 +482,90 @@ class ApplicationUpdater:
             path = record[3:].replace("\\", "/")
             if status[0] in {"R", "C"}:
                 skip_next = True
-            if not self._is_protected(path):
-                dirty.append(path)
-        return sorted(set(dirty))
+            changes.append(path)
+        return sorted(set(changes))
+
+    def _dirty_files(self) -> list[str]:
+        return [path for path in self._git_changes() if not self._is_protected(path)]
+
+    def _preflight(self) -> dict[str, Any]:
+        if not (self.project_root / ".git").exists():
+            return {
+                "installation_mode": "source",
+                "dirty_files": [],
+                "protected_files": [],
+                "blocking_reasons": ["当前不是 Git 安装，暂不支持自动应用更新"],
+            }
+        try:
+            changes = self._git_changes()
+        except UpdateError as exc:
+            return {
+                "installation_mode": "git",
+                "dirty_files": [],
+                "protected_files": [],
+                "blocking_reasons": [str(exc)],
+            }
+        dirty = [path for path in changes if not self._is_protected(path)]
+        protected = [path for path in changes if self._is_protected(path)]
+        reasons = []
+        if dirty:
+            reasons.append("工作区包含未提交的程序文件修改")
+        return {
+            "installation_mode": "git",
+            "dirty_files": dirty,
+            "protected_files": protected,
+            "blocking_reasons": reasons,
+        }
 
     def _is_protected(self, path: str) -> bool:
         normalized = path.strip().lstrip("./").replace("\\", "/")
         return normalized in self._PROTECTED_EXACT or normalized.startswith(
             self._PROTECTED_PREFIXES
         )
+
+    def _stash_dirty_files(self, paths: Sequence[str]) -> Path | None:
+        """备份未提交的程序文件修改并还原工作区，返回备份目录。
+
+        备份在改动工作区之前完成；任何一步失败都会向上抛出，避免未提交内容
+        被无声丢弃。已跟踪文件用 ``git checkout`` 还原，未跟踪文件用
+        ``git clean`` 移除，两者都已在备份目录留下副本。
+        """
+
+        if not paths:
+            return None
+        backup_dir = self.update_dir / "dirty-backup" / _timestamp()
+        for relative in paths:
+            source = self.project_root / relative
+            if not source.is_file():
+                continue
+            destination = backup_dir / Path(relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+        untracked_raw = self._run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"]
+        ).stdout
+        untracked = {item for item in untracked_raw.split("\0") if item}
+        removable = [path for path in paths if path in untracked]
+        restorable = [path for path in paths if path not in untracked]
+        if restorable:
+            self._git(["git", "checkout", "--", *restorable])
+        if removable:
+            self._git(["git", "clean", "-f", "-d", "--", *removable])
+        return backup_dir
+
+    def _restore_stashed_files(self, backup_dir: Path | None, paths: Sequence[str]) -> None:
+        """更新失败后把暂存内容放回原位置。"""
+
+        if backup_dir is None:
+            return
+        for relative in paths:
+            source = backup_dir / Path(relative)
+            if not source.is_file():
+                continue
+            destination = self.project_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
 
     def _read_remote_version(self, target: str) -> str:
         raw = self._git_output(["git", "show", f"{target}:{VERSION_FILE}"])
@@ -613,6 +720,12 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _timestamp() -> str:
+    """文件系统安全的 UTC 时间戳，用于未提交修改的备份目录名。"""
+
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 def migrate_legacy_runtime(project_root: Path | str | None = None) -> Path:
