@@ -209,6 +209,32 @@ def _run_helper(
         return 3
 
 
+def _is_windows() -> bool:
+    """Whether the current interpreter runs on Windows.
+
+    Kept as a tiny indirection so the platform decision can be exercised on
+    every runner.  Patching ``os.name`` globally is not an option: ``pathlib``
+    reads it too and would try to build ``WindowsPath`` on POSIX.
+    """
+
+    return os.name == "nt"
+
+
+def _windowed_interpreter(executable: str) -> str:
+    """Return the windowed sibling of a console interpreter, when it exists.
+
+    Only path semantics are involved, so this helper is platform independent
+    and can be exercised on every runner; the Windows-only decision lives in
+    :func:`_detached_command`.
+    """
+
+    path = Path(executable)
+    if path.name.casefold() != "python.exe":
+        return executable
+    windowed = path.with_name("pythonw.exe")
+    return str(windowed) if windowed.is_file() else executable
+
+
 def _detached_command(command: Sequence[str]) -> list[str]:
     """Prefer the windowed interpreter so the replacement never owns a console.
 
@@ -220,15 +246,9 @@ def _detached_command(command: Sequence[str]) -> list[str]:
     """
 
     items = [str(item) for item in command]
-    if not items or os.name != "nt":
+    if not items or not _is_windows():
         return items
-    executable = Path(items[0])
-    if executable.name.casefold() != "python.exe":
-        return items
-    windowed = executable.with_name("pythonw.exe")
-    if not windowed.is_file():
-        return items
-    return [str(windowed), *items[1:]]
+    return [_windowed_interpreter(items[0]), *items[1:]]
 
 
 def _detached_options() -> dict[str, Any]:

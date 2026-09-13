@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from restart import (
     _detached_command,
     _pid_exists,
+    _windowed_interpreter,
     read_runtime_state,
     remove_runtime_state,
     write_runtime_state,
@@ -104,14 +105,42 @@ def _fake_scripts(tmp_path: Path, *, windowed: bool = True) -> Path:
     return scripts
 
 
-def test_detached_command_prefers_windowed_interpreter(tmp_path: Path) -> None:
-    """Windows 上把 python.exe 换成 pythonw.exe，替换进程才不会持有控制台。"""
+def test_windowed_interpreter_prefers_pythonw(tmp_path: Path) -> None:
+    """``python.exe`` 有窗口版兄弟时换成它，替换进程才不会持有控制台。"""
 
     scripts = _fake_scripts(tmp_path)
-    with patch("restart.os.name", "nt"):
-        result = _detached_command(
-            [str(scripts / "python.exe"), "start_web.py", "--port", "8008"]
-        )
+
+    assert _windowed_interpreter(str(scripts / "python.exe")) == str(
+        scripts / "pythonw.exe"
+    )
+
+
+def test_windowed_interpreter_keeps_console_binary_when_sibling_missing(
+    tmp_path: Path,
+) -> None:
+    scripts = _fake_scripts(tmp_path, windowed=False)
+    console = str(scripts / "python.exe")
+
+    assert _windowed_interpreter(console) == console
+
+
+def test_windowed_interpreter_ignores_unrelated_executables(tmp_path: Path) -> None:
+    """其它解释器（如 python3.14.exe）不是控制台子系统，保持原样。"""
+
+    other = str(tmp_path / "python3.14.exe")
+
+    assert _windowed_interpreter(other) == other
+
+
+def test_detached_command_rewrites_interpreter_and_keeps_arguments(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scripts = _fake_scripts(tmp_path)
+    monkeypatch.setattr("restart._is_windows", lambda: True)
+
+    result = _detached_command(
+        [str(scripts / "python.exe"), "start_web.py", "--port", "8008"]
+    )
 
     assert result == [
         str(scripts / "pythonw.exe"),
@@ -121,29 +150,16 @@ def test_detached_command_prefers_windowed_interpreter(tmp_path: Path) -> None:
     ]
 
 
-def test_detached_command_keeps_interpreter_without_windowed_binary(
-    tmp_path: Path,
-) -> None:
-    scripts = _fake_scripts(tmp_path, windowed=False)
-    command = [str(scripts / "python.exe"), "start_web.py"]
-    with patch("restart.os.name", "nt"):
-        assert _detached_command(command) == command
-
-
-def test_detached_command_ignores_other_executables(tmp_path: Path) -> None:
-    command = [str(tmp_path / "python3.14.exe"), "start_web.py"]
-    with patch("restart.os.name", "nt"):
-        assert _detached_command(command) == command
-
-
-def test_detached_command_is_noop_off_windows(tmp_path: Path) -> None:
+def test_detached_command_is_noop_off_windows(tmp_path: Path, monkeypatch) -> None:
     scripts = _fake_scripts(tmp_path)
     command = [str(scripts / "python.exe"), "start_web.py"]
-    with patch("restart.os.name", "posix"):
-        assert _detached_command(command) == command
+    monkeypatch.setattr("restart._is_windows", lambda: False)
+
+    assert _detached_command(command) == command
 
 
-def test_detached_command_handles_empty_command() -> None:
-    with patch("restart.os.name", "nt"):
-        assert _detached_command([]) == []
-        assert _detached_command(()) == []
+def test_detached_command_handles_empty_command(monkeypatch) -> None:
+    monkeypatch.setattr("restart._is_windows", lambda: True)
+
+    assert _detached_command([]) == []
+    assert _detached_command(()) == []
