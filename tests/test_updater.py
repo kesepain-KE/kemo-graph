@@ -467,7 +467,7 @@ def test_changes_separates_blocking_and_protected_files(tmp_path: Path) -> None:
     porcelain = (
         " M config/config.json\0"
         "?? data/index.bin\0"
-        " M web/frontend/pnpm-workspace.yaml\0"
+        " M web/frontend/vite.config.ts\0"
         "?? tools/scratch.py\0"
     )
     updater = ApplicationUpdater(root, command_runner=_runner(porcelain))
@@ -476,7 +476,7 @@ def test_changes_separates_blocking_and_protected_files(tmp_path: Path) -> None:
 
     assert changes["blocking_files"] == [
         "tools/scratch.py",
-        "web/frontend/pnpm-workspace.yaml",
+        "web/frontend/vite.config.ts",
     ]
     assert changes["protected_files"] == ["config/config.json", "data/index.bin"]
     assert changes["worktree_clean"] is False
@@ -515,7 +515,7 @@ def test_force_apply_backs_up_dirty_files_before_merging(tmp_path: Path) -> None
 
     root = _project(tmp_path, version="1.2.0")
     (root / ".git").mkdir()
-    dirty_file = root / "web" / "frontend" / "pnpm-workspace.yaml"
+    dirty_file = root / "web" / "frontend" / "vite.config.ts"
     dirty_file.parent.mkdir(parents=True)
     dirty_file.write_text("allowBuilds:\n  esbuild: true\n", encoding="utf-8")
     untracked_file = root / "tools" / "scratch.py"
@@ -523,7 +523,7 @@ def test_force_apply_backs_up_dirty_files_before_merging(tmp_path: Path) -> None
     untracked_file.write_text("print('local')\n", encoding="utf-8")
     commands: list[list[str]] = []
     porcelain = (
-        " M web/frontend/pnpm-workspace.yaml\0?? tools/scratch.py\0"
+        " M web/frontend/vite.config.ts\0?? tools/scratch.py\0"
     )
 
     def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -559,17 +559,17 @@ def test_force_apply_backs_up_dirty_files_before_merging(tmp_path: Path) -> None
     assert result["updated"] is True
     assert result["stashed_files"] == [
         "tools/scratch.py",
-        "web/frontend/pnpm-workspace.yaml",
+        "web/frontend/vite.config.ts",
     ]
     backup_dir = Path(str(result["dirty_backup_dir"]))
     assert backup_dir.is_dir()
-    assert (backup_dir / "web/frontend/pnpm-workspace.yaml").read_text(
+    assert (backup_dir / "web/frontend/vite.config.ts").read_text(
         encoding="utf-8"
     ) == "allowBuilds:\n  esbuild: true\n"
     assert (backup_dir / "tools/scratch.py").read_text(encoding="utf-8") == (
         "print('local')\n"
     )
-    assert ["git", "checkout", "--", "web/frontend/pnpm-workspace.yaml"] in commands
+    assert ["git", "checkout", "--", "web/frontend/vite.config.ts"] in commands
     assert ["git", "clean", "-f", "-d", "--", "tools/scratch.py"] in commands
 
 
@@ -581,13 +581,13 @@ def test_dirty_worktree_still_blocks_without_force(tmp_path: Path) -> None:
     updater = ApplicationUpdater(
         root,
         fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
-        command_runner=_runner(" M web/frontend/pnpm-workspace.yaml\0"),
+        command_runner=_runner(" M web/frontend/vite.config.ts\0"),
     )
 
     with pytest.raises(UpdateBlockedError, match="未提交"):
         updater.apply()
 
-    assert updater._dirty_files() == ["web/frontend/pnpm-workspace.yaml"]
+    assert updater._dirty_files() == ["web/frontend/vite.config.ts"]
 
 
 def test_root_update_entry_lists_changes_with_dirty_flag(monkeypatch, capsys) -> None:
@@ -600,7 +600,7 @@ def test_root_update_entry_lists_changes_with_dirty_flag(monkeypatch, capsys) ->
             return {
                 "installation_mode": "git",
                 "worktree_clean": False,
-                "blocking_files": ["web/frontend/pnpm-workspace.yaml"],
+                "blocking_files": ["web/frontend/vite.config.ts"],
                 "protected_files": ["config/config.json"],
                 "blocking_reasons": ["工作区包含未提交的程序文件修改"],
                 "can_force_update": True,
@@ -614,7 +614,7 @@ def test_root_update_entry_lists_changes_with_dirty_flag(monkeypatch, capsys) ->
     assert entry.main(["--dirty"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["data"]["blocking_files"] == ["web/frontend/pnpm-workspace.yaml"]
+    assert payload["data"]["blocking_files"] == ["web/frontend/vite.config.ts"]
     assert asked == [True]
 
 
