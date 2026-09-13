@@ -110,6 +110,19 @@ class KnowledgeStatusMixin:
     def _status_impl(self) -> dict[str, Any]:
         """返回 03 文档约定的知识库状态，不隐式初始化数据库。"""
 
+        from .read_cache import READ_CACHE, databases_revision, file_revision
+
+        def revision():
+            databases = databases_revision(self.paths.sources_db, self.paths.graph_db, self.paths.rag_db)
+            return None if databases is None else (databases, file_revision(self.paths.faiss_index))
+
+        return READ_CACHE.get_or_load(
+            ("knowledge-status", str(self.paths.data_dir.resolve()), self.settings.models.embedding_dimensions),
+            revision, self._read_status,
+        )
+
+    def _read_status(self) -> dict[str, Any]:
+
         initialized = self.paths.sources_db.exists()
         result: dict[str, Any] = {
             "initialized": initialized,

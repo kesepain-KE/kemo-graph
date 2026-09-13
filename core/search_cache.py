@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 from .config import AppConfig
+from .read_cache import READ_CACHE, databases_revision, files_revision
 from .db import (
     DatabasePaths,
     connect_graph,
@@ -33,7 +34,7 @@ class SearchCacheError(RuntimeError):
     """搜索缓存无法读取、序列化或维护。"""
 
 
-_KEY_LOCKS: dict[tuple[Path, str], threading.RLock] = {}
+_KEY_LOCKS: dict[tuple[Path, str], tuple[threading.RLock, int]] = {}
 _KEY_LOCKS_GUARD = threading.Lock()
 
 
@@ -83,6 +84,18 @@ def search_config_hash(settings: AppConfig) -> str:
 def compute_state_hash(paths: DatabasePaths, settings: AppConfig) -> str:
     """聚合查询相关权威数据与元信息，生成内容驱动的知识库指纹。"""
 
+    def revision():
+        databases = databases_revision(paths.sources_db, paths.graph_db, paths.rag_db)
+        return None if databases is None else (databases, files_revision(paths.graph_meta, paths.rag_meta))
+
+    return READ_CACHE.get_or_load(
+        ("search-state", str(paths.data_dir.resolve()), search_config_hash(settings)),
+        revision, lambda: _compute_state_hash_uncached(paths, settings),
+    )
+
+
+def _compute_state_hash_uncached(paths: DatabasePaths, settings: AppConfig) -> str:
+
     digest = hashlib.sha256()
     _feed_digest(digest, f"cache-format:{CACHE_FORMAT_VERSION}")
     _feed_digest(digest, f"search-config:{search_config_hash(settings)}")
@@ -95,7 +108,7 @@ def compute_state_hash(paths: DatabasePaths, settings: AppConfig) -> str:
                 "sources",
                 connection,
                 """
-                SELECT source_id, content_hash, graph_hash, rag_hash,
+                SELECT source_id, relative_path, content_hash, graph_hash, rag_hash,
                        graph_status, rag_status, exists_status
                 FROM sources
                 WHERE exists_status = 'active'
@@ -258,9 +271,18 @@ def cache_key_lock(paths: DatabasePaths, cache_key: str) -> Iterator[None]:
 
     identity = (paths.search_cache_db.resolve(), cache_key)
     with _KEY_LOCKS_GUARD:
-        lock = _KEY_LOCKS.setdefault(identity, threading.RLock())
-    with lock:
-        yield
+        lock, users = _KEY_LOCKS.get(identity, (threading.RLock(), 0))
+        _KEY_LOCKS[identity] = (lock, users + 1)
+    try:
+        with lock:
+            yield
+    finally:
+        with _KEY_LOCKS_GUARD:
+            _, users = _KEY_LOCKS[identity]
+            if users == 1:
+                del _KEY_LOCKS[identity]
+            else:
+                _KEY_LOCKS[identity] = (lock, users - 1)
 
 
 class SearchCache:

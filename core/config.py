@@ -9,6 +9,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from .read_cache import READ_CACHE, file_revision
 
 from dotenv import load_dotenv
 from pydantic import (
@@ -354,12 +355,20 @@ def load_config(
         load_dotenv(dotenv_path=Path(env_path), override=False)
 
     path = Path(config_path)
-    if not path.exists() or not path.read_text(encoding="utf-8").strip():
+    def read_text():
+        return READ_CACHE.get_or_load(
+            ("config-text", str(path.resolve())), lambda: file_revision(path),
+            lambda: path.read_text(encoding="utf-8"),
+        )
+
+    text = read_text() if path.exists() else ""
+    if not text.strip():
         write_default_config(path)
         LOGGER.warning("已创建默认配置，请检查并修改 %s", path)
+        text = read_text()
 
     try:
-        raw_config = json.loads(path.read_text(encoding="utf-8"))
+        raw_config = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ConfigLoadError(f"配置文件不是合法 JSON：{path}: {exc}") from exc
 
