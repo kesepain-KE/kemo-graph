@@ -685,3 +685,52 @@ def test_root_update_entry_blocked_error_carries_actionable_hint(
     assert payload["error"]["code"] == "UpdateBlockedError"
     assert "--dirty" in payload["error"]["hint"]
     assert "--force" in payload["error"]["hint"]
+
+
+def test_clear_restart_required_retires_the_flag(tmp_path: Path) -> None:
+    """服务重新启动后，重启标志必须被终结，状态页不再要求重启。"""
+
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner(""))
+    updater._write_state({"restart_required": True, "latest_version": "1.2.0"})
+
+    assert updater.clear_restart_required() is True
+    assert updater._read_state()["restart_required"] is False
+    assert updater.status()["restart_required"] is False
+
+
+def test_clear_restart_required_keeps_other_saved_results(tmp_path: Path) -> None:
+    """清理只动重启标志，不丢掉已保存的检查结果。"""
+
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner(""))
+    updater._write_state({"restart_required": True, "latest_version": "9.9.9"})
+
+    updater.clear_restart_required()
+
+    assert updater._read_state()["latest_version"] == "9.9.9"
+
+
+def test_clear_restart_required_does_not_create_state_file(tmp_path: Path) -> None:
+    """没有更新记录时不应为了写一个 False 而凭空生成状态文件。"""
+
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner(""))
+
+    assert updater.clear_restart_required() is False
+    assert not updater.state_path.exists()
+
+
+def test_clear_restart_required_reports_no_change_on_second_call(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner(""))
+    updater._write_state({"restart_required": True})
+
+    assert updater.clear_restart_required() is True
+    assert updater.clear_restart_required() is False
