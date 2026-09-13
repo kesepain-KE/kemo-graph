@@ -15,6 +15,7 @@
 - 应用版本统一为 1.5.0：`version.json`、前端包及锁文件、Python 转换层包元数据和说明文档同步。Kemo 1.0、`/api/v1` 与存储格式版本不随应用版本改号。
 - 旧版更新入口在检测到未提交的程序文件修改时仍会拒绝更新；需要先更新到 1.5.0 才能使用 `--dirty` 与 `--force`。
 - 未提交修改的备份保存在 `update/runtime/dirty-backup/`，属于运行状态目录，不会被更新覆盖，也不会进入版本库。
+- 前端依赖统一使用 npm：移除仓库中的 `pnpm-lock.yaml` 与 `pnpm-workspace.yaml`。更新器、CI 与文档一直使用 `npm ci` 与 `npm run build`，保留两份锁文件只会让它们各自演进；此前 `pnpm-workspace.yaml` 中的构建脚本审批占位符还会在 pnpm 安装时被反复改写，进而把工作区标记为未提交。
 - `--force` 会临时移除工作区中的未提交修改；需要对照原始内容时保留该备份目录即可。
 
 ### Release summary
