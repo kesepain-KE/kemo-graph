@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,12 +17,15 @@ from ._graph_build import _recalculate_edges, _recalculate_nodes
 from ._utils import _now_iso, _safe_source_path, _write_json_atomic
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 class DocumentNotFoundError(IngestError):
     """请求删除的活动文档不存在。"""
 
 
 class RecycleConflictError(IngestError):
-    """回收站中已存在同路径文件，拒绝覆盖。"""
+    """文件路径发生不可覆盖的冲突（保留兼容的公开异常类型）。"""
 
 
 def delete_document(self, source_id: str) -> dict[str, Any]:
@@ -87,14 +93,25 @@ def _move_source_to_recycle(self, relative_path: str) -> str | None:
         return None
 
     recycle_root = (self.external_dir.parent / "recycle").resolve()
+    if recycle_root.parent != self.external_dir.parent.resolve() or recycle_root.name != "recycle":
+        raise IngestError("回收站目录不安全")
+    if (recycle_root / relative_path).is_symlink():
+        raise IngestError(f"回收站目标不能是符号链接：{relative_path}")
     destination = (recycle_root / relative_path).resolve()
     try:
         destination.relative_to(recycle_root)
     except ValueError as exc:
         raise IngestError(f"非法回收站相对路径：{relative_path}") from exc
     meta_path = destination.with_name(destination.name + ".meta.json")
-    if destination.exists() or meta_path.exists():
-        raise RecycleConflictError(f"回收站中已存在同路径文件：{relative_path}")
+    if not source_path.is_file():
+        raise IngestError(f"源路径不是普通文件：{relative_path}")
+    # Only replace regular files inside the recycle tree, never directories or
+    # metadata symlinks (including the atomic writer's temporary destination).
+    for path in (meta_path, meta_path.with_suffix(meta_path.suffix + ".tmp")):
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise RecycleConflictError(f"回收站元数据路径不安全：{relative_path}")
+    if destination.exists() and not destination.is_file():
+        raise RecycleConflictError(f"回收站目标不是普通文件：{relative_path}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -105,13 +122,60 @@ def _move_source_to_recycle(self, relative_path: str) -> str | None:
             now + timedelta(days=self.settings.recycle_life_days)
         ).isoformat(),
     }
-    shutil.move(str(source_path), str(destination))
+    # Preserve previous recycled content until both the new file and metadata
+    # have been written. Rollback must restore the active AND recycled copies.
+    backup_dir = Path(tempfile.mkdtemp(prefix=".recycle-replace-", dir=destination.parent))
+    previous_file = backup_dir / "document"
+    previous_meta = backup_dir / "metadata"
+    moved_source = False
     try:
+        if destination.exists():
+            destination.replace(previous_file)
+        if meta_path.exists():
+            meta_path.replace(previous_meta)
+        shutil.move(str(source_path), str(destination))
+        moved_source = True
         _write_json_atomic(meta_path, metadata)
     except Exception:
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(destination), str(source_path))
+        # If rollback itself fails, intentionally leave the backup directory
+        # intact for recovery rather than deleting the only remaining copy.
+        if moved_source:
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(destination), str(source_path))
+        if previous_file.exists():
+            previous_file.replace(destination)
+        if previous_meta.exists():
+            previous_meta.replace(meta_path)
+        backup_dir.rmdir()
         raise
+    # The active file and the new recycle copy are already consistent at this
+    # point.  A failure while deleting the best-effort replacement backup must
+    # not make the caller report a failed deletion (which would leave the
+    # sources row marked active even though its file has moved).  Keep the
+    # backup directory for a later maintenance pass and surface a warning.
+    try:
+        shutil.rmtree(backup_dir)
+    except Exception as exc:  # pragma: no cover - platform/filesystem specific
+        log_event = getattr(self, "_log_event", None)
+        if callable(log_event):
+            try:
+                log_event(
+                    "recycle_backup_cleanup_deferred",
+                    f"path={relative_path}, backup={backup_dir}, error={exc}",
+                    level="WARNING",
+                )
+            except Exception:
+                LOGGER.warning(
+                    "回收站替换备份清理失败，将保留备份目录 %s：%s",
+                    backup_dir,
+                    exc,
+                )
+        else:
+            LOGGER.warning(
+                "回收站替换备份清理失败，将保留备份目录 %s：%s",
+                backup_dir,
+                exc,
+            )
     return destination.relative_to(recycle_root.parent).as_posix()
 
 

@@ -210,6 +210,23 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             self.assertEqual(len(document_page["documents"]), 1)
             self.assertEqual(document_page["pagination"]["total"], 1)
 
+            service.create_project("project-b")
+            service.relocate_documents([{"source_id": source_id, "project": "project-b", "filename": "renamed.md"}])
+            self.assertEqual(service.status()["graph"], status["graph"])
+            self.assertEqual(service.status()["rag"], status["rag"])
+            scanned = ingestor.scan_sources()
+            self.assertEqual(scanned.new_source_ids, [])
+            self.assertEqual(scanned.newly_deleted_source_ids, [])
+            self.assertIn(source_id, scanned.unchanged_source_ids)
+            moved_record = service.list_documents()["documents"][0]
+            self.assertEqual(moved_record["graph_status"], "ready")
+            self.assertEqual(moved_record["rag_status"], "ready")
+            service.relocate_documents([{"source_id": source_id, "project": "nested", "filename": "doc.md"}])
+
+            # Re-imported documents may already have an older recycled copy.
+            previous_recycled = root / "external" / "recycle" / "nested" / "doc.md"
+            previous_recycled.parent.mkdir(parents=True)
+            previous_recycled.write_text("previous revision", encoding="utf-8")
             result = service.delete_document(source_id)
 
             self.assertEqual(result["deleted_source_id"], source_id)
@@ -217,6 +234,7 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             self.assertFalse(document.exists())
             recycled = root / "external" / "recycle" / "nested" / "doc.md"
             self.assertTrue(recycled.exists())
+            self.assertEqual(recycled.read_text(encoding="utf-8"), "Alpha links Beta")
             metadata = json.loads(
                 recycled.with_name("doc.md.meta.json").read_text(encoding="utf-8")
             )
