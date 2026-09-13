@@ -5,6 +5,11 @@ __pycache__/
 venv/
 .venv/
 
+# Editor / manual backups (must not look like uncommitted program changes)
+*.bak
+*.bak.*
+*.orig
+
 # Env
 .env
 *.env.local
