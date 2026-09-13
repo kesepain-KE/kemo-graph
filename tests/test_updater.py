@@ -15,6 +15,7 @@ from core.jobs import MaintenanceJobManager
 from update import (
     ApplicationUpdater,
     SemanticVersion,
+    UpdateBlockedError,
     UpdateError,
     UpdatePermissionError,
     UpdateSourceError,
@@ -221,7 +222,7 @@ def test_root_update_entry_prompts_for_same_version_force(monkeypatch, capsys) -
     monkeypatch.setattr(entry, "ApplicationUpdater", FakeUpdater)
     monkeypatch.setattr("builtins.input", lambda: "y")
 
-    assert entry.main() == 0
+    assert entry.main([]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["data"] == {"updated": True, "forced": True}
@@ -456,3 +457,231 @@ def test_update_job_forwards_force_flag_to_updater(tmp_path: Path) -> None:
     assert failures == []
     assert updater.forced == [True]
     assert completed == [{"forced": True}]
+
+
+def test_changes_separates_blocking_and_protected_files(tmp_path: Path) -> None:
+    """``changes()`` 把会阻塞更新的程序文件与受保护的用户配置分开列出。"""
+
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    porcelain = (
+        " M config/config.json\0"
+        "?? data/index.bin\0"
+        " M web/frontend/pnpm-workspace.yaml\0"
+        "?? tools/scratch.py\0"
+    )
+    updater = ApplicationUpdater(root, command_runner=_runner(porcelain))
+
+    changes = updater.changes()
+
+    assert changes["blocking_files"] == [
+        "tools/scratch.py",
+        "web/frontend/pnpm-workspace.yaml",
+    ]
+    assert changes["protected_files"] == ["config/config.json", "data/index.bin"]
+    assert changes["worktree_clean"] is False
+    assert changes["can_force_update"] is True
+    assert changes["blocking_reasons"] == ["工作区包含未提交的程序文件修改"]
+
+
+def test_changes_reports_clean_worktree_without_force(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner(""))
+
+    changes = updater.changes()
+
+    assert changes["worktree_clean"] is True
+    assert changes["blocking_files"] == []
+    assert changes["can_force_update"] is False
+
+
+def test_changes_does_not_touch_saved_update_state(tmp_path: Path) -> None:
+    """查看未提交更改是只读操作，不应改写 update/runtime/state.json。"""
+
+    root = _project(tmp_path)
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(root, command_runner=_runner("?? tools/scratch.py\0"))
+    updater._write_state({"phase": "idle", "latest_version": "1.2.0"})
+    before = updater.state_path.read_bytes()
+
+    updater.changes()
+
+    assert updater.state_path.read_bytes() == before
+
+
+def test_force_apply_backs_up_dirty_files_before_merging(tmp_path: Path) -> None:
+    """``--force`` 会先备份未提交修改再更新，并回报备份位置。"""
+
+    root = _project(tmp_path, version="1.2.0")
+    (root / ".git").mkdir()
+    dirty_file = root / "web" / "frontend" / "pnpm-workspace.yaml"
+    dirty_file.parent.mkdir(parents=True)
+    dirty_file.write_text("allowBuilds:\n  esbuild: true\n", encoding="utf-8")
+    untracked_file = root / "tools" / "scratch.py"
+    untracked_file.parent.mkdir()
+    untracked_file.write_text("print('local')\n", encoding="utf-8")
+    commands: list[list[str]] = []
+    porcelain = (
+        " M web/frontend/pnpm-workspace.yaml\0?? tools/scratch.py\0"
+    )
+
+    def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        del cwd
+        commands.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout="abc123", stderr="")
+        if command[:3] == ["git", "ls-files", "--others"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="tools/scratch.py\0", stderr=""
+            )
+        if command[:2] == ["git", "status"]:
+            # 首次预检仍视为脏；备份之后再次查询则返回干净工作区。
+            already_stashed = any(
+                entry[:3] == ["git", "clean", "-f", "-d"] for entry in commands[:-1]
+            ) or any(entry[:2] == ["git", "checkout"] for entry in commands[:-1])
+            stdout = "" if already_stashed else porcelain
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[:2] == ["git", "show"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout=json.dumps({"version": "1.2.0"}), stderr=""
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    updater = ApplicationUpdater(
+        root,
+        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        command_runner=run,
+    )
+
+    result = updater.apply(force=True)
+
+    assert result["updated"] is True
+    assert result["stashed_files"] == [
+        "tools/scratch.py",
+        "web/frontend/pnpm-workspace.yaml",
+    ]
+    backup_dir = Path(str(result["dirty_backup_dir"]))
+    assert backup_dir.is_dir()
+    assert (backup_dir / "web/frontend/pnpm-workspace.yaml").read_text(
+        encoding="utf-8"
+    ) == "allowBuilds:\n  esbuild: true\n"
+    assert (backup_dir / "tools/scratch.py").read_text(encoding="utf-8") == (
+        "print('local')\n"
+    )
+    assert ["git", "checkout", "--", "web/frontend/pnpm-workspace.yaml"] in commands
+    assert ["git", "clean", "-f", "-d", "--", "tools/scratch.py"] in commands
+
+
+def test_dirty_worktree_still_blocks_without_force(tmp_path: Path) -> None:
+    """没有 ``--force`` 时，未提交的程序文件修改仍然阻止更新。"""
+
+    root = _project(tmp_path, version="1.1.0")
+    (root / ".git").mkdir()
+    updater = ApplicationUpdater(
+        root,
+        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        command_runner=_runner(" M web/frontend/pnpm-workspace.yaml\0"),
+    )
+
+    with pytest.raises(UpdateBlockedError, match="未提交"):
+        updater.apply()
+
+    assert updater._dirty_files() == ["web/frontend/pnpm-workspace.yaml"]
+
+
+def test_root_update_entry_lists_changes_with_dirty_flag(monkeypatch, capsys) -> None:
+    entry = _load_update_entry()
+    asked: list[bool] = []
+
+    class FakeUpdater:
+        def changes(self):
+            asked.append(True)
+            return {
+                "installation_mode": "git",
+                "worktree_clean": False,
+                "blocking_files": ["web/frontend/pnpm-workspace.yaml"],
+                "protected_files": ["config/config.json"],
+                "blocking_reasons": ["工作区包含未提交的程序文件修改"],
+                "can_force_update": True,
+            }
+
+        def check(self):  # pragma: no cover - --dirty 不应联网检查
+            raise AssertionError("--dirty 不应触发更新检查")
+
+    monkeypatch.setattr(entry, "ApplicationUpdater", FakeUpdater)
+
+    assert entry.main(["--dirty"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["data"]["blocking_files"] == ["web/frontend/pnpm-workspace.yaml"]
+    assert asked == [True]
+
+
+def test_root_update_entry_accepts_changes_alias(monkeypatch, capsys) -> None:
+    entry = _load_update_entry()
+
+    class FakeUpdater:
+        def changes(self):
+            return {"worktree_clean": True, "blocking_files": []}
+
+    monkeypatch.setattr(entry, "ApplicationUpdater", FakeUpdater)
+
+    assert entry.main(["--changes"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["worktree_clean"] is True
+
+
+def test_root_update_entry_force_skips_confirmation(monkeypatch, capsys) -> None:
+    entry = _load_update_entry()
+    calls: list[bool] = []
+
+    class FakeUpdater:
+        def check(self):
+            return {
+                "current_version": "1.2.0",
+                "latest_version": "1.2.0",
+                "update_available": False,
+                "force_update_available": True,
+                "can_force_apply": True,
+            }
+
+        def apply(self, *, force=False):
+            calls.append(force)
+            return {"updated": True, "forced": force}
+
+    def fail_input():  # pragma: no cover - --force 不应询问
+        raise AssertionError("--force 不应要求交互确认")
+
+    monkeypatch.setattr(entry, "ApplicationUpdater", FakeUpdater)
+    monkeypatch.setattr("builtins.input", fail_input)
+
+    assert entry.main(["--force"]) == 0
+    assert json.loads(capsys.readouterr().out)["data"]["forced"] is True
+    assert calls == [True]
+
+
+def test_root_update_entry_blocked_error_carries_actionable_hint(
+    monkeypatch, capsys
+) -> None:
+    entry = _load_update_entry()
+
+    class FakeUpdater:
+        def check(self):
+            return {
+                "current_version": "1.1.0",
+                "latest_version": "1.2.0",
+                "update_available": True,
+                "force_update_available": False,
+            }
+
+        def apply(self, *, force=False):
+            raise UpdateBlockedError("工作区包含未提交的程序文件修改")
+
+    monkeypatch.setattr(entry, "ApplicationUpdater", FakeUpdater)
+
+    assert entry.main([]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "UpdateBlockedError"
+    assert "--dirty" in payload["error"]["hint"]
+    assert "--force" in payload["error"]["hint"]
