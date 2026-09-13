@@ -20,7 +20,7 @@ from ._exceptions import (
 )
 from ._markitdown import MarkItDown
 
-__version__ = "0.1.0"
+__version__ = "1.4.0"
 
 __all__ = [
     "DocumentConversionError",

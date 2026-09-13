@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.3.1`
+> **当前版本**：`1.4.0`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
 
 ---
@@ -504,6 +504,7 @@ GET /api/v1/documents?status=active
 GET /api/v1/documents?status=pending
 GET /api/v1/documents?status=all
 GET /api/v1/documents?status=active&page=1&page_size=20
+GET /api/v1/documents?status=active&page=1&page_size=6&project=研究资料&search=画布&graph_status=ready&rag_status=ready&include_summary=true
 ```
 
 返回：
@@ -529,6 +530,13 @@ GET /api/v1/documents?status=active&page=1&page_size=20
       "page_size": 20,
       "total": 1,
       "total_pages": 1
+    },
+    "summary": {
+      "total_active": 12,
+      "pending_documents": 2,
+      "needs_rebuild_documents": 3,
+      "graph": {"pending": 1, "processing": 0, "ready": 10, "failed": 1},
+      "rag": {"pending": 1, "processing": 0, "ready": 10, "failed": 1}
     }
   },
   "error": null
@@ -536,6 +544,47 @@ GET /api/v1/documents?status=active&page=1&page_size=20
 ```
 
 建议智能体删除或读取内容前，先调用本端点取得 `source_id`。
+
+可选筛选参数：
+
+- `project`：项目名；空字符串表示根目录“未分组”，`/` 表示全部项目；命名项目包含其嵌套路径；
+- `search`：按 `relative_path` 做不区分大小写的字面子串搜索，`%` 和 `_` 不作为通配符；
+- `graph_status` / `rag_status`：`pending`、`processing`、`ready`、`failed`；
+- `include_summary=true`：附加当前活动知识库的 Graph/RAG 汇总统计，不改变 `documents` 分页内容。
+
+`summary.needs_rebuild_documents` 表示 Graph 或 RAG 为 `pending/failed` 的活动文档数，可用于显示批量重建提示。默认不返回 `summary`，以保持旧客户端响应大小和兼容性。
+
+### 5.1.1 项目文件夹、重命名与移动
+
+项目对应当前知识库规范 Markdown 根目录下的真实一级文件夹。`project=""` 表示根目录（网页显示“未分组”）；项目不隔离检索、图谱或向量数据。列表中的 `relative_path` 包含项目目录，原有 `GET /documents` 分页契约保持不变。
+
+| 方法与端点 | 用途 | 请求体 / 参数 |
+| --- | --- | --- |
+| `GET /api/v1/projects` | 列出项目，包含空项目和未分组 | 无 |
+| `POST /api/v1/projects` | 新建一级项目文件夹 | `{"name":"研究资料"}` |
+| `PATCH /api/v1/documents/{source_id}/location` | 重命名、移动，或同时执行 | `{"filename":"设计说明.md","project":"研究资料","expected_relative_path":"old.md"}` |
+| `POST /api/v1/documents/move-batch` | 将多篇文档移入项目 | `{"source_ids":["source-a","source-b"],"project":"研究资料"}` |
+| `POST /api/v1/import?ingest=false&project=研究资料` | multipart 上传到指定项目 | `file` 文件字段；项目需先创建，查询参数按 URL 编码 |
+
+`GET /projects` 的 `data` 示例：
+
+```json
+{"projects":[{"name":"","document_count":2},{"name":"研究资料","document_count":6}]}
+```
+
+位置更新中的 `filename`、`project` 至少提供一个。未提供 `filename` 时保留文件名；未提供 `project` 时保留当前目录；`filename` 未带 `.md` 会自动补全。`expected_relative_path` 可选，用于拒绝客户端基于旧路径提交的修改。成功后 `data` 返回：
+
+```json
+{"source_id":"source-a","previous_relative_path":"old.md","relative_path":"研究资料/设计说明.md","changed":true}
+```
+
+批量移动最多 1000 篇，返回 `data.documents`（同上结构的数组）。整批先检查冲突，再执行；普通文件/映射/数据库写入错误会尝试回滚，不按部分成功提交。名称禁止路径分隔符、`..`、控制字符及跨平台保留名称。目标文件或历史来源记录占用目标路径时返回冲突，不覆盖活动文档。
+
+改名或移动保留 `source_id`、正文哈希、Graph/RAG 构建状态和向量 ID，不重建、不调用模型。更新文件路径、`path_hash`、`file_map.json`，路径参与检索缓存指纹以防旧结果引用旧位置。原始磁盘导入文件不被改名/搬运；浏览器上传的虚拟来源身份随项目更新，以便在目标项目再次上传同名原文件时更新原文档。
+
+后台任务排队/执行中、文档处于 processing、或记录包含外部同步 `source_uri` 时，位置更新返回 `409 CONTENT_CONFLICT`。外部同步资料应在上游修改。项目接口当前用于服务默认知识库，未新增 Store 专用 HTTP 端点；已有 Store 和 CLI 契约不变。
+
+导入请求省略 `project` 时保持原有行为；提供空字符串表示导入根目录。同名原文件可分别上传到不同项目，获得独立来源身份。
 
 ---
 
@@ -748,6 +797,8 @@ sources.exists_status → deleted
 重算仍有来源的节点引用数和边权重
 ```
 
+回收站已存在同一相对路径的文件时，用本次删除的内容覆盖旧副本，并刷新回收时间和过期时间，不再因重复文件阻止删除。旧回收副本在成功覆盖后不再保留；文件移动或元数据写入失败时会尝试恢复原文件与旧回收副本。目录冲突和不安全路径仍会被拒绝。
+
 响应包含：
 
 ```text
@@ -763,6 +814,7 @@ rag_deleted
 ```http
 POST   /api/v1/documents/delete-batch
 DELETE /api/v1/documents?confirm=delete-all
+DELETE /api/v1/documents?confirm=delete-all&project=研究资料
 ```
 
 批量请求体：
@@ -771,7 +823,7 @@ DELETE /api/v1/documents?confirm=delete-all
 {"source_ids": ["source-uuid-1", "source-uuid-2"]}
 ```
 
-两者都只作用于当前 API 实例绑定的知识库，不会跨 Portable Store。返回 `requested / deleted / failed / documents / failures`；批量操作逐篇报告失败，已成功项不会因另一篇失败而伪装成未执行。调用方必须在执行前向用户显示影响数量并二次确认；清空端点还要求固定确认参数 `confirm=delete-all`。
+两者都只作用于当前 API 实例绑定的知识库，不会跨 Portable Store。返回 `requested / deleted / failed / documents / failures`；批量操作逐篇报告失败，已成功项不会因另一篇失败而伪装成未执行。调用方必须在执行前向用户显示影响数量并二次确认；清空端点还要求固定确认参数 `confirm=delete-all`。提供 `project` 时仅清空该一级项目及其嵌套文档；空字符串表示未分组，省略时清空当前知识库全部项目。项目清空由服务端直接解析并分批处理，不要求客户端先枚举全部 `source_id`。
 
 ---
 
@@ -907,10 +959,10 @@ DELETE /api/v1/maintenance/recycle
 POST /api/v1/jobs/ingest
 Content-Type: application/json
 
-{"paths": null, "mode": "both"}
+{"paths": null, "mode": "both", "retry_failed": false}
 ```
 
-与同步 `/ingest` 使用相同参数，但立即返回 job。网页导入完成后使用此端点，避免页面切换或请求连接中断影响长任务。
+与同步 `/ingest` 使用相同参数，但立即返回 job。网页导入完成后使用此端点，避免页面切换或请求连接中断影响长任务。`retry_failed=true` 时会把此前状态为 `failed` 的 Graph/RAG 文档重新纳入本次扫描；默认只处理 pending 文档。同步 `POST /api/v1/ingest` 也接受同一字段。
 
 ### 7.7 后台总结节点群
 
@@ -982,7 +1034,8 @@ POST /api/v1/update/apply
   旧客户端可以发送空请求体；需要同版本重装时发送 `{"force": true}`，或使用
   `?force=true`。服务端仅在 `force_update_available=true` 且 `can_force_apply=true`
   时接受强制请求；新版本存在时仍走普通升级路径。
-- Web 的“强制重新安装”、`python start.py update --force` 与上述 API 使用同一后台任务和
+- 网页系统维护仅保留“重启服务”，不再提供检查、下载或强制安装更新按钮；更新功能仍可通过终端与 API 使用。
+- `python start.py update --force` 与上述 API 使用同一后台任务和
   更新实现，不会绕过工作区保护。
 - 自动安装只支持可安全 fast-forward 的 Git 工作区；程序文件有未提交修改时返回 `409 UPDATE_BLOCKED`。
 - Git 合并后依赖安装或前端构建失败时，若没有并发的程序文件修改，会自动回滚到更新前提交并恢复用户配置；
@@ -1011,6 +1064,38 @@ POST /api/v1/system/restart
 - 也可以在项目根目录运行 `python restart.py`，该模块会读取 `update/runtime/web-runtime.json` 并调用同一重启流程。
 
 ---
+
+### 7.14 只读运行日志
+
+```http
+GET /api/v1/system/logs?category=query&date=2026-09-13&limit=200
+```
+
+- `category`：`terminal`（Web 启停及 Python/Uvicorn 日志）、`query`（检索生命周期、缓存和召回事件）、`internal`（导入、建库、维护等其他事件）；默认 `internal`。
+- `date`：可选 UTC 日期 `YYYY-MM-DD`，默认当天；不接受文件名或磁盘路径。
+- `limit`：1–500，默认 200。仅扫描所选日志末尾 2 MB，结果按旧到新排列。
+- `data` 包含 `category`、`date`、`timezone: "UTC"`、`limit`、`available`、`truncated` 和 `entries`。
+- 每条记录包含 `id`、`time`、`level`、`module`、`action`、`detail`、`elapsed_ms`；无耗时为 `"-"`。
+- `available=false` 表示当日文件尚不存在，返回空数组，不创建日志文件；有文件但没有匹配分类时也返回空数组。
+- `truncated=true` 表示扫描窗口或条数受到限制，不代表已读取该日完整日志。
+
+日志来源固定为配置 `log_dir` 下的 `YYYY-MM-DD.tsv`，终端副本位于其 `terminal/` 子目录。接口只读、不提供日志删除或任意文件读取。输出为脱敏纯文本，不应当作 HTML 执行；仍应保护部署服务的访问边界，因为日志可能包含业务文件名和内部运行信息。
+
+未变化的日志通过进程内有界读取缓存复用，文件追加、替换或脱敏密钥变化后重新读取。文档列表、知识库状态和搜索所用知识库指纹也使用同一内存读取层；缓存最多 256 项／32 MiB 序列化载荷，单项最多 2 MiB、有效期最多 30 秒，按绝对 Store 路径隔离。每次读取检查对应文件变化，数据库额外检查文件头；存在非空 WAL／事务日志时绕过数据库缓存。HTTP 参数与响应格式不变，不新增延迟写入机制。
+
+新增终端记录从服务重启后开始；它不是交互式终端，也不能读取过去未保存的输出。查询日志对网页、API、CLI 使用的公共检索链路生效；`query_start` / `query_complete` / `query_failed` 通过 `query_id` 关联，不额外记录问题正文、回答或认证请求头。
+
+### 7.15 检索步骤进度（可选）
+
+标准 `POST /query/graph`、`/query/rag`、`/query/hybrid`、`/query/answer`、`/query/global` 可携带 `X-Kemo-Progress-Id` 请求头，值为客户端生成的随机 UUID。原查询请求体、响应包络和结果结构不变；不携带该请求头时，仍按原方式执行。
+
+```http
+GET /api/v1/query/progress/{progress_id}
+```
+
+返回 `data.available`、`data.status` 与 `data.steps`。步骤包含 `id`、简短 `label` 和 `status`（`running` / `completed` / `failed` / `fallback`）；仅记录实际执行环节，不提供估算百分比。不存在、已过期或请求落在其他工作进程时返回 `available=false, steps=[]`。
+
+记录只驻留当前应用进程内存，最多 128 项、最长保留 10 分钟，不存查询正文、模型回答或认证信息；容量不足时放弃新进度记录，不阻止检索。进度 UUID 应每次查询重新随机生成并按临时访问凭据保护，勿复用；重复 ID 不覆盖既有记录。网页每秒轮询，检索结束后停止；轮询失败不影响实际查询。当前独立 Store 查询接口未接入此步骤通道。多工作进程部署需使用同进程路由／粘性会话；重启后进度清空。
 
 ## 8. 智能体推荐调用流程
 
