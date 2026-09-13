@@ -5,6 +5,7 @@ import {
   Eye,
   FilePenLine,
   FileText,
+  FolderInput,
   Pencil,
   RefreshCw,
   Save,
@@ -13,17 +14,17 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
 import { MarkdownPreview } from "../components/MarkdownPreview";
 import { PageIntro } from "../components/PageIntro";
 import { ThemedSelect } from "../components/ThemedSelect";
+import { ALL_PROJECTS, ProjectFolders, DocumentOrganizationDialog, type OrganizationAction } from "../components/DocumentOrganization";
 import { useRuntimeTasks } from "../context/RuntimeTasksContext";
-import type { DocumentRecord, ImportData } from "../types/api";
+import type { DocumentListSummary, DocumentProject, DocumentRecord, ImportData, Pagination } from "../types/api";
 
-type StatusFilter = "all" | "pending" | "processing" | "ready" | "failed";
 type ImportJobStatus = "queued" | "processing" | "completed" | "failed";
 type DetailMode = "preview" | "edit";
 
@@ -42,13 +43,6 @@ const ALLOWED_IMPORT_EXTENSIONS = new Set([
   "json", "jsonl", "ndjson", "yaml", "yml", "xml",
 ]);
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
-const STATUS_FILTER_OPTIONS = [
-  { value: "all", label: "全部" },
-  { value: "pending", label: "待处理" },
-  { value: "processing", label: "处理中" },
-  { value: "ready", label: "就绪" },
-  { value: "failed", label: "失败" },
-];
 
 function StatusBadge({ status, label }: { status: string; label: string }) {
   return <span className={`status-badge is-${status}`}>{label}</span>;
@@ -74,6 +68,12 @@ export function DocumentsPage() {
   const { activeTasks, createTask, updateTask, refreshServerTasks } = useRuntimeTasks();
   const previousActiveTaskCountRef = useRef(activeTasks.length);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [pagination, setPagination] = useState<Pagination>({ page: 1, page_size: PAGE_SIZE, total: 0, total_pages: 0 });
+  const [summary, setSummary] = useState<DocumentListSummary | null>(null);
+  const [projects, setProjects] = useState<DocumentProject[]>([{ name: "", document_count: 0 }]);
+  const [activeProject, setActiveProject] = useState(ALL_PROJECTS);
+  const [importProject, setImportProject] = useState("");
+  const [organizationAction, setOrganizationAction] = useState<OrganizationAction | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [content, setContent] = useState("");
@@ -81,8 +81,6 @@ export function DocumentsPage() {
   const [loadedHash, setLoadedHash] = useState<string | null>(null);
   const [detailMode, setDetailMode] = useState<DetailMode>("preview");
   const [query, setQuery] = useState("");
-  const [graphFilter, setGraphFilter] = useState<StatusFilter>("all");
-  const [ragFilter, setRagFilter] = useState<StatusFilter>("all");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [contentLoading, setContentLoading] = useState(false);
@@ -91,51 +89,83 @@ export function DocumentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [importJobs, setImportJobs] = useState<ImportJob[]>([]);
+  const requestSequenceRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
   const uploading = activeTasks.some((task) => task.kind === "import");
   const ingesting = activeTasks.some((task) =>
     ["ingest", "rebuild_knowledge_base", "rebuild_all"].includes(task.kind),
   );
   const isDirty = detailMode === "edit" && draft !== content;
 
-  const loadDocuments = async (preferredPath?: string): Promise<DocumentRecord[] | null> => {
+  const loadDocuments = async (
+    preferredPath?: string,
+    projectFilter = activeProject,
+    requestedPage = page,
+    searchFilter = query,
+  ): Promise<DocumentRecord[] | null> => {
+    const requestId = ++requestSequenceRef.current;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const firstPage = await api.getDocuments(1, 100);
-      const allDocuments = [...firstPage.documents];
-      for (let nextPage = 2; nextPage <= firstPage.pagination.total_pages; nextPage += 1) {
-        const response = await api.getDocuments(nextPage, 100);
-        allDocuments.push(...response.documents);
-      }
-      const next = allDocuments.filter(
-        (document) => !document.exists_status || document.exists_status === "active",
-      );
+      const [projectData, nextPage] = await Promise.all([
+        api.getDocumentProjects(),
+        api.getDocuments(
+          requestedPage,
+          PAGE_SIZE,
+          "active",
+          controller.signal,
+          {
+            project: projectFilter === ALL_PROJECTS ? undefined : projectFilter,
+            search: searchFilter,
+            includeSummary: true,
+          },
+        ),
+      ]);
+      if (requestId !== requestSequenceRef.current) return null;
+      setProjects(projectData.projects);
+      const next = nextPage.documents;
       setDocuments(next);
+      setPagination(nextPage.pagination);
+      setSummary(nextPage.summary ?? null);
+      if (nextPage.pagination.page && nextPage.pagination.page !== requestedPage) setPage(nextPage.pagination.page);
       setCheckedIds((current) => new Set(
         [...current].filter((sourceId) => next.some((item) => item.source_id === sourceId)),
       ));
       setSelectedId((current) => {
-        const preferred = preferredPath
-          ? next.find((document) => document.relative_path === preferredPath)
-          : null;
+        const candidates = next;
+        const preferred = preferredPath ? candidates.find((document) => document.relative_path === preferredPath) : null;
         if (preferred) return preferred.source_id;
-        if (current && next.some((document) => document.source_id === current)) return current;
-        return next[0]?.source_id ?? null;
+        if (current && candidates.some((document) => document.source_id === current)) return current;
+        return candidates[0]?.source_id ?? null;
       });
       return next;
     } catch (caught) {
+      if (controller.signal.aborted || requestId !== requestSequenceRef.current) return null;
       setDocuments([]);
+      setPagination({ page: requestedPage, page_size: PAGE_SIZE, total: 0, total_pages: 0 });
+      setSummary(null);
       setSelectedId(null);
       setError(caught instanceof Error ? caught.message : "无法加载文档列表");
       return null;
     } finally {
-      setLoading(false);
+      if (requestId === requestSequenceRef.current) {
+        setLoading(false);
+        if (requestControllerRef.current === controller) requestControllerRef.current = null;
+      }
     }
   };
 
   useEffect(() => {
-    void loadDocuments();
+    void loadDocuments(undefined, activeProject, page, query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject, page, query]);
+
+  useEffect(() => () => {
+    requestSequenceRef.current += 1;
+    requestControllerRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -146,6 +176,26 @@ export function DocumentsPage() {
   }, [activeTasks.length]);
 
   const selected = documents.find((document) => document.source_id === selectedId) ?? null;
+  const organizationDisabled = loading || uploading || ingesting || saving || deleting || isDirty;
+  const selectProject = (name: string) => {
+    if (isDirty && !window.confirm("当前修改尚未保存，确认放弃并切换项目？")) return;
+    setActiveProject(name);
+    setImportProject(name === ALL_PROJECTS ? "" : name);
+    setCheckedIds(new Set());
+    setQuery("");
+    setSelectedId(null);
+  };
+  const finishOrganization = async (message: string, createdProject?: string) => {
+    const target = createdProject ?? activeProject;
+    if (createdProject !== undefined) {
+      setActiveProject(createdProject);
+      setImportProject(createdProject);
+    }
+    setCheckedIds(new Set());
+    setPage(1);
+    const refreshed = await loadDocuments(undefined, target, 1, query);
+    if (refreshed) setNotice(message);
+  };
 
   useEffect(() => {
     if (!selected) {
@@ -175,21 +225,15 @@ export function DocumentsPage() {
     return () => { active = false; };
   }, [selected?.source_id]);
 
-  const visibleDocuments = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase();
-    return documents.filter((document) => {
-      const matchesQuery = !keyword
-        || document.relative_path.toLocaleLowerCase().includes(keyword);
-      const matchesGraph = graphFilter === "all" || document.graph_status === graphFilter;
-      const matchesRag = ragFilter === "all" || document.rag_status === ragFilter;
-      return matchesQuery && matchesGraph && matchesRag;
-    });
-  }, [documents, graphFilter, query, ragFilter]);
-  const totalPages = Math.max(1, Math.ceil(visibleDocuments.length / PAGE_SIZE));
-  const pageDocuments = visibleDocuments.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const rebuildDocuments = documents.filter(needsRebuild);
+  const visibleDocuments = documents;
+  const totalPages = Math.max(1, pagination.total_pages);
+  const pageDocuments = documents;
+  const rebuildCount = summary?.needs_rebuild_documents ?? documents.filter(needsRebuild).length;
+  const deleteScopeCount = activeProject === ALL_PROJECTS
+    ? projects.reduce((total, project) => total + project.document_count, 0)
+    : projects.find((project) => project.name === activeProject)?.document_count ?? 0;
 
-  useEffect(() => setPage(1), [graphFilter, query, ragFilter]);
+  useEffect(() => setPage(1), [query, activeProject]);
   useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
 
   const selectDocument = (sourceId: string) => {
@@ -210,6 +254,9 @@ export function DocumentsPage() {
 
   const handleFiles = async (files: FileList | null) => {
     if (!files?.length) return;
+    const destinationProject = importProject;
+    setActiveProject(destinationProject);
+    setCheckedIds(new Set());
     const selectedFiles = Array.from(files);
     const initialJobs = selectedFiles.map((file): ImportJob => {
       const format = file.name.split(".").pop()?.toLocaleLowerCase() ?? "未知";
@@ -243,7 +290,7 @@ export function DocumentsPage() {
         : item));
       updateTask(job.id, { status: "running", detail: "上传并转换为 Markdown" }, "文件已发送到服务端，正在进行格式转换。");
       try {
-        const imported: ImportData = await api.importFile(file, false);
+        const imported: ImportData = await api.importFile(file, false, destinationProject);
         lastImportedPath = imported.markdown_relative_path;
         completed += 1;
         const detail = "转换完成，等待手动批量重建";
@@ -260,22 +307,23 @@ export function DocumentsPage() {
         updateTask(job.id, { status: "failed", detail: message }, `处理失败：${message}`);
       }
     }
-    const refreshed = await loadDocuments(lastImportedPath);
+    setPage(1);
+    const refreshed = await loadDocuments(lastImportedPath, destinationProject, 1, "");
     if (refreshed && completed) setNotice(`已成功转换 ${completed} 个文档，请点击“批量重建”更新 Graph/RAG。`);
     if (failed) setError(`${failed} 个文件导入失败，请查看导入记录。`);
     if (inputRef.current) inputRef.current.value = "";
   };
 
   const runIngest = async () => {
-    if (!rebuildDocuments.length) {
+    if (!rebuildCount) {
       setNotice("当前没有待重建或失败的文档。");
       return;
     }
     setError(null);
     try {
-      await api.startIngestJob(rebuildDocuments.map((document) => document.relative_path), "both");
+      await api.startIngestJob(null, "both", true);
       await refreshServerTasks();
-      setNotice(`已将 ${rebuildDocuments.length} 篇文档加入后台重建队列。`);
+      setNotice(`已将 ${rebuildCount} 篇待处理文档加入后台重建队列。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "无法启动批量重建");
     }
@@ -290,7 +338,7 @@ export function DocumentsPage() {
       setContent(draft);
       setLoadedHash(result.content_hash);
       setDetailMode("preview");
-      await loadDocuments(selected.relative_path);
+      await loadDocuments(selected.relative_path, activeProject, page, query);
       setNotice(result.changed
         ? "Markdown 已保存，旧 Graph/RAG 仍可使用；该文档已进入待重建列表。"
         : "内容没有变化，无需重建。");
@@ -303,12 +351,12 @@ export function DocumentsPage() {
 
   const deleteOne = async () => {
     if (!selected) return;
-    if (!window.confirm(`确认删除“${selected.relative_path}”？文件将移入当前知识库回收站。`)) return;
+    if (!window.confirm(`确认删除“${selected.relative_path}”？文件将移入当前知识库回收站；若已有同路径文件，将覆盖旧回收副本。`)) return;
     setDeleting(true);
     setError(null);
     try {
       await api.deleteDocument(selected.source_id);
-      await loadDocuments();
+      await loadDocuments(undefined, activeProject, page, query);
       setNotice("文档已精确删除并移入回收站。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "删除失败");
@@ -320,12 +368,12 @@ export function DocumentsPage() {
   const deleteChecked = async () => {
     const ids = [...checkedIds];
     if (!ids.length) return;
-    if (!window.confirm(`确认删除已勾选的 ${ids.length} 篇文档？它们将移入当前知识库回收站。`)) return;
+    if (!window.confirm(`确认删除已勾选的 ${ids.length} 篇文档？它们将移入当前知识库回收站；同路径的旧回收副本将被覆盖。`)) return;
     setDeleting(true);
     setError(null);
     try {
       const result = await api.deleteDocuments(ids);
-      await loadDocuments();
+      await loadDocuments(undefined, activeProject, page, query);
       setNotice(`批量删除完成：成功 ${result.deleted} 篇，失败 ${result.failed} 篇。`);
       if (result.failed) setError(result.failures.map((item) => item.message).join("；"));
     } catch (caught) {
@@ -336,14 +384,17 @@ export function DocumentsPage() {
   };
 
   const deleteAll = async () => {
-    if (!documents.length) return;
-    if (!window.confirm(`危险操作：确认删除当前知识库的全部 ${documents.length} 篇文档？不会影响其他 Store。`)) return;
-    if (!window.confirm("请再次确认：全部文档、关联 Graph 与 RAG 数据将被清理，原文会移入回收站。")) return;
+    const targetCount = deleteScopeCount;
+    if (!targetCount) return;
+    const scope = activeProject === ALL_PROJECTS ? "当前知识库" : `项目“${activeProject || "未分组"}”`;
+    if (!window.confirm(`危险操作：确认删除${scope}的全部 ${targetCount} 篇文档？${activeProject === ALL_PROJECTS ? "包含本知识库内所有项目，不影响其他 Store。" : "不会删除其他项目或 Store 的文档。"}`)) return;
+    if (!window.confirm("请再次确认：全部文档、关联 Graph 与 RAG 数据将被清理，原文会移入回收站；同路径的旧回收副本将被覆盖。")) return;
     setDeleting(true);
     setError(null);
     try {
-      const result = await api.deleteAllDocuments();
-      await loadDocuments();
+      const result = await api.deleteAllDocuments(activeProject === ALL_PROJECTS ? undefined : activeProject);
+      setPage(1);
+      await loadDocuments(undefined, activeProject, 1, query);
       setNotice(`全部删除完成：成功 ${result.deleted} 篇，失败 ${result.failed} 篇。`);
       if (result.failed) setError(result.failures.map((item) => item.message).join("；"));
     } catch (caught) {
@@ -357,26 +408,27 @@ export function DocumentsPage() {
     <section className="documents-page page-stack">
       <PageIntro
         title="整理你的知识来源"
-        description="导入、预览并精确编辑 Markdown；内容变化后由你决定何时批量重建 Graph 与 RAG。"
+        description="按项目管理文档，支持重命名、移动和 Markdown 编辑；只有正文变化才需要手动重建索引。"
         actions={
           <>
             <input ref={inputRef} hidden multiple type="file" accept=".pdf,.docx,.pptx,.xlsx,.xlsm,.xls,.epub,.rtf,.md,.markdown,.txt,.log,.html,.htm,.rst,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.xml" onChange={(event) => void handleFiles(event.target.files)} />
-            <button className="button button--secondary" disabled={uploading || ingesting} onClick={() => inputRef.current?.click()}>
+            <div className="document-import-project"><span>导入到</span><ThemedSelect ariaLabel="导入目标项目" value={importProject} options={projects.map((item) => ({ value: item.name, label: item.name || "未分组" }))} onChange={setImportProject} disabled={uploading || ingesting} /></div>
+            <button className="button button--secondary" disabled={uploading || ingesting || isDirty} onClick={() => inputRef.current?.click()}>
               {uploading ? <RefreshCw className="spin" size={16} /> : <Upload size={16} />}
               {uploading ? "正在导入" : "导入文档"}
             </button>
-            <button className="button button--primary" disabled={ingesting || uploading || !rebuildDocuments.length} onClick={runIngest}>
+            <button className="button button--primary" disabled={ingesting || uploading || !rebuildCount} onClick={runIngest}>
               <RefreshCw className={ingesting ? "spin" : ""} size={16} />
-              {ingesting ? "正在重建" : `批量重建${rebuildDocuments.length ? ` (${rebuildDocuments.length})` : ""}`}
+              {ingesting ? "正在重建" : `批量重建${rebuildCount ? ` (${rebuildCount})` : ""}`}
             </button>
           </>
         }
       />
 
-      {rebuildDocuments.length ? (
+      {rebuildCount ? (
         <div className="document-rebuild-banner card">
           <span className="document-rebuild-banner__icon"><FilePenLine size={19} /></span>
-          <span><strong>{rebuildDocuments.length} 篇文档等待重建</strong><small>正文已保存，旧索引会保留到新 Graph/RAG 成功替换为止。</small></span>
+          <span><strong>{rebuildCount} 篇文档等待重建</strong><small>正文已保存，旧索引会保留到新 Graph/RAG 成功替换为止。</small></span>
           <button className="button button--primary" disabled={ingesting} onClick={runIngest}>立即批量重建</button>
         </div>
       ) : null}
@@ -399,33 +451,15 @@ export function DocumentsPage() {
         <aside className="document-browser card">
           <div className="panel-title-row">
             <div><p className="eyebrow">Library</p><h3>文档列表</h3></div>
-            <span className="count-chip">{visibleDocuments.length}</span>
+            <span className="count-chip">{pagination.total}</span>
           </div>
-          <label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件名…" /></label>
-          <div className="document-filters">
-            <div className="document-filter-control">
-              <span>Graph</span>
-              <ThemedSelect
-                ariaLabel="Graph 状态"
-                value={graphFilter}
-                options={STATUS_FILTER_OPTIONS}
-                onChange={(value) => setGraphFilter(value as StatusFilter)}
-              />
-            </div>
-            <div className="document-filter-control">
-              <span>RAG</span>
-              <ThemedSelect
-                ariaLabel="RAG 状态"
-                value={ragFilter}
-                options={STATUS_FILTER_OPTIONS}
-                onChange={(value) => setRagFilter(value as StatusFilter)}
-              />
-            </div>
-          </div>
+          <label className="search-field"><Search size={16} /><input aria-label="搜索文件名" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文件名…" /></label>
+          <ProjectFolders projects={projects} active={activeProject} disabled={organizationDisabled} onSelect={selectProject} onCreate={() => setOrganizationAction({ kind: "create" })} />
           <div className="document-bulk-actions">
             <span>已勾选 {checkedIds.size} 篇</span>
+            <button disabled={!checkedIds.size || organizationDisabled} onClick={() => setOrganizationAction({ kind: "move", sourceIds: [...checkedIds] })}><FolderInput size={14} />批量移动</button>
             <button disabled={!checkedIds.size || deleting} onClick={deleteChecked}><Trash2 size={14} />批量删除</button>
-            <button className="is-danger" disabled={!documents.length || deleting} onClick={deleteAll}>全部删除</button>
+            <button className="is-danger" disabled={!deleteScopeCount || deleting} onClick={deleteAll}>{activeProject === ALL_PROJECTS ? "全库删除" : "清空本项目"}</button>
           </div>
 
           <div className="document-list" aria-live="polite">
@@ -452,6 +486,8 @@ export function DocumentsPage() {
           <div className="preview-toolbar">
             <div><p className="eyebrow">Markdown Document</p><h3>{selected?.relative_path ?? "选择一份文档"}</h3></div>
             {selected ? <div className="preview-toolbar__actions">
+              <button className="button button--secondary" disabled={organizationDisabled || Boolean(selected.source_uri)} title={selected.source_uri ? "外部同步资料请在上游系统修改" : "修改文件名，不重建索引"} onClick={() => setOrganizationAction({ kind: "rename", document: selected })}><FilePenLine size={15} />重命名</button>
+              <button className="button button--secondary" disabled={organizationDisabled || Boolean(selected.source_uri)} onClick={() => setOrganizationAction({ kind: "move", sourceIds: [selected.source_id] })}><FolderInput size={15} />移动</button>
               <div className="document-mode-switch"><button className={detailMode === "preview" ? "is-active" : ""} onClick={() => { if (!isDirty || window.confirm("放弃尚未保存的修改？")) { setDraft(content); setDetailMode("preview"); } }}><Eye size={15} />预览</button><button className={detailMode === "edit" ? "is-active" : ""} onClick={() => setDetailMode("edit")}><Pencil size={15} />编辑</button></div>
               {detailMode === "edit" ? <><button className="button button--secondary" disabled={!isDirty || saving} onClick={() => setDraft(content)}><X size={15} />撤销</button><button className="button button--primary" disabled={!isDirty || saving} onClick={saveContent}>{saving ? <RefreshCw className="spin" size={15} /> : <Save size={15} />}{saving ? "保存中" : "保存"}</button></> : null}
               <button className="icon-button is-danger" disabled={deleting} title="精确删除当前文档" onClick={deleteOne}><Trash2 size={17} /></button>
@@ -465,6 +501,7 @@ export function DocumentsPage() {
           </div>
         </section>
       </div>
+      {organizationAction && <DocumentOrganizationDialog action={organizationAction} projects={projects} onClose={() => setOrganizationAction(null)} onComplete={finishOrganization} />}
     </section>
   );
 }
