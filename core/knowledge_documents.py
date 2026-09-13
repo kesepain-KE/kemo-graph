@@ -6,14 +6,13 @@ import json
 import hashlib
 import os
 import re
-import shutil
 import stat
 import tempfile
 import time
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 from uuid import uuid4
@@ -106,6 +105,79 @@ from .knowledge_support import (
 )
 
 
+_DOCUMENT_BUILD_STATUSES = ("pending", "processing", "ready", "failed")
+
+
+def _escape_like(value: str) -> str:
+    """Escape a user supplied literal for a SQLite LIKE expression."""
+
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _document_filters(
+    *,
+    status: str | None,
+    project: str | None,
+    search: str | None,
+    graph_status: str | None = None,
+    rag_status: str | None = None,
+) -> tuple[str, list[str]]:
+    """Build a parameterized source-list WHERE clause.
+
+    ``project=""`` means root-level (unfiled) Markdown, while a named
+    project includes that folder and all nested paths.  ``/`` is accepted as
+    the Web sentinel for all projects.
+    """
+
+    clauses: list[str] = []
+    parameters: list[str] = []
+    if status not in {None, "all", "active", "pending"}:
+        raise ValueError("status 必须是 active、pending 或 all")
+    if status == "pending":
+        clauses.append(
+            "exists_status = 'active' AND "
+            "(graph_status = 'pending' OR rag_status = 'pending')"
+        )
+    elif status == "active":
+        clauses.append("exists_status = 'active'")
+
+    if project is not None and project != "/":
+        if not isinstance(project, str):
+            raise ValueError("project 必须是字符串")
+        normalized_project = project.strip()
+        if any(part in normalized_project for part in ("/", "\\", "..")):
+            raise ValueError("project 不能包含路径分隔符或路径遍历")
+        if normalized_project:
+            clauses.append(
+                "(relative_path = ? OR relative_path LIKE ? ESCAPE '\\')"
+            )
+            parameters.extend(
+                [normalized_project, f"{_escape_like(normalized_project)}/%"]
+            )
+        else:
+            clauses.append("relative_path NOT LIKE '%/%'")
+
+    if search is not None and not isinstance(search, str):
+        raise ValueError("search 必须是字符串")
+    if search is not None and search.strip():
+        term = _escape_like(search.strip().casefold())
+        clauses.append("LOWER(relative_path) LIKE ? ESCAPE '\\'")
+        parameters.append(f"%{term}%")
+
+    for field, value, label in (
+        ("graph_status", graph_status, "graph_status"),
+        ("rag_status", rag_status, "rag_status"),
+    ):
+        if value in (None, "", "all"):
+            continue
+        if value not in _DOCUMENT_BUILD_STATUSES:
+            raise ValueError(f"{label} 必须是 pending、processing、ready、failed 或 all")
+        clauses.append(f"{field} = ?")
+        parameters.append(value)
+
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else "", parameters)
+
+
 class KnowledgeDocumentsMixin:
     """Internal knowledge documents domain implementation."""
 
@@ -114,8 +186,14 @@ class KnowledgeDocumentsMixin:
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        *,
+        project: str | None = None,
+        search: str | None = None,
+        graph_status: str | None = None,
+        rag_status: str | None = None,
+        include_summary: bool = False,
     ) -> dict[str, Any]:
-        """分页返回文档基本信息，并支持按活动或待处理状态筛选。"""
+        """分页返回文档基本信息，并支持服务端筛选与摘要统计。"""
 
         if isinstance(page, bool) or not isinstance(page, int) or page < 1:
             raise ValueError("page 必须是大于等于 1 的整数")
@@ -126,6 +204,70 @@ class KnowledgeDocumentsMixin:
         ):
             raise ValueError("page_size 必须是 1 到 100 之间的整数")
 
+        if not isinstance(include_summary, bool):
+            raise ValueError("include_summary 必须是布尔值")
+        # Validate filters before entering the read cache so malformed input
+        # never gets retained as a cache key.
+        _document_filters(
+            status=status,
+            project=project,
+            search=search,
+            graph_status=graph_status,
+            rag_status=rag_status,
+        )
+
+        from .read_cache import READ_CACHE, database_revision
+
+        cache_key = (
+            "document-page",
+            str(self.paths.sources_db.resolve()),
+            status,
+            page,
+            page_size,
+            project,
+            search,
+            graph_status,
+            rag_status,
+            include_summary,
+        )
+        if (
+            project is None
+            and search is None
+            and graph_status is None
+            and rag_status is None
+            and not include_summary
+        ):
+            loader = lambda: self._read_document_page(status, page, page_size)
+        else:
+            loader = lambda: self._read_document_page(
+                status,
+                page,
+                page_size,
+                project=project,
+                search=search,
+                graph_status=graph_status,
+                rag_status=rag_status,
+                include_summary=include_summary,
+            )
+
+        return READ_CACHE.get_or_load(
+            cache_key,
+            lambda: database_revision(self.paths.sources_db),
+            loader,
+        )
+
+    def _read_document_page(
+        self,
+        status,
+        page,
+        page_size,
+        *,
+        project: str | None = None,
+        search: str | None = None,
+        graph_status: str | None = None,
+        rag_status: str | None = None,
+        include_summary: bool = False,
+    ) -> dict[str, Any]:
         pagination = {
             "page": page,
             "page_size": page_size,
@@ -133,25 +275,28 @@ class KnowledgeDocumentsMixin:
             "total_pages": 0,
         }
         if not self.paths.sources_db.exists():
-            return {"documents": [], "pagination": pagination}
+            result = {"documents": [], "pagination": pagination}
+            if include_summary:
+                result["summary"] = self._empty_document_summary()
+            return result
 
-        where_sql = ""
+        where_sql, parameters = _document_filters(
+            status=status,
+            project=project,
+            search=search,
+            graph_status=graph_status,
+            rag_status=rag_status,
+        )
         order_sql = "ORDER BY exists_status, relative_path"
-        if status == "pending":
-            where_sql = (
-                "WHERE exists_status = 'active' "
-                "AND (graph_status = 'pending' OR rag_status = 'pending')"
-            )
-            order_sql = "ORDER BY relative_path"
-        elif status == "active":
-            where_sql = "WHERE exists_status = 'active'"
+        if status in {"active", "pending"} or project is not None or search:
             order_sql = "ORDER BY relative_path"
 
         connection = connect_sources(self.paths)
         try:
             total = int(
                 connection.execute(
-                    f"SELECT COUNT(*) FROM sources {where_sql}"
+                    f"SELECT COUNT(*) FROM sources {where_sql}",
+                    parameters,
                 ).fetchone()[0]
             )
             rows = connection.execute(
@@ -169,14 +314,24 @@ class KnowledgeDocumentsMixin:
                 {order_sql}
                 LIMIT ? OFFSET ?
                 """,
-                (page_size, (page - 1) * page_size),
+                (*parameters, page_size, (page - 1) * page_size),
             ).fetchall()
+            summary = (
+                self._read_document_summary(
+                    connection,
+                    status="active",
+                    project=None,
+                    search=None,
+                )
+                if include_summary
+                else None
+            )
         finally:
             connection.close()
 
         pagination["total"] = total
         pagination["total_pages"] = (total + page_size - 1) // page_size
-        return {
+        result = {
             "documents": [
                 {
                     "source_id": row["source_id"],
@@ -206,6 +361,72 @@ class KnowledgeDocumentsMixin:
                 for row in rows
             ],
             "pagination": pagination,
+        }
+        if summary is not None:
+            result["summary"] = summary
+        return result
+
+    @staticmethod
+    def _empty_document_summary() -> dict[str, Any]:
+        return {
+            "total_active": 0,
+            "pending_documents": 0,
+            "needs_rebuild_documents": 0,
+            "graph": {status: 0 for status in _DOCUMENT_BUILD_STATUSES},
+            "rag": {status: 0 for status in _DOCUMENT_BUILD_STATUSES},
+        }
+
+    def _read_document_summary(
+        self,
+        connection,
+        *,
+        status: str | None,
+        project: str | None,
+        search: str | None,
+    ) -> dict[str, Any]:
+        # Summary counts intentionally ignore the individual Graph/RAG status
+        # filters, so the two cards continue to explain the complete scope.
+        where_sql, parameters = _document_filters(
+            status=status,
+            project=project,
+            search=search,
+        )
+        row = connection.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_active,
+                SUM(CASE WHEN graph_status = 'pending' OR rag_status = 'pending' THEN 1 ELSE 0 END) AS pending_documents,
+                SUM(CASE WHEN graph_status IN ('pending', 'failed') OR rag_status IN ('pending', 'failed') THEN 1 ELSE 0 END) AS needs_rebuild_documents,
+                SUM(CASE WHEN graph_status = 'pending' THEN 1 ELSE 0 END) AS graph_pending,
+                SUM(CASE WHEN graph_status = 'processing' THEN 1 ELSE 0 END) AS graph_processing,
+                SUM(CASE WHEN graph_status = 'ready' THEN 1 ELSE 0 END) AS graph_ready,
+                SUM(CASE WHEN graph_status = 'failed' THEN 1 ELSE 0 END) AS graph_failed,
+                SUM(CASE WHEN rag_status = 'pending' THEN 1 ELSE 0 END) AS rag_pending,
+                SUM(CASE WHEN rag_status = 'processing' THEN 1 ELSE 0 END) AS rag_processing,
+                SUM(CASE WHEN rag_status = 'ready' THEN 1 ELSE 0 END) AS rag_ready,
+                SUM(CASE WHEN rag_status = 'failed' THEN 1 ELSE 0 END) AS rag_failed
+            FROM sources
+            {where_sql}
+            """,
+            parameters,
+        ).fetchone()
+        values = {key: int(row[key] or 0) for key in row.keys()}
+        return {
+            "total_active": values["total_active"],
+            "pending_documents": values["pending_documents"],
+            "needs_rebuild_documents": values["needs_rebuild_documents"],
+            "graph": {
+                "pending": values["graph_pending"],
+                "processing": values["graph_processing"],
+                "ready": values["graph_ready"],
+                "failed": values["graph_failed"],
+            },
+            "rag": {
+                "pending": values["rag_pending"],
+                "processing": values["rag_processing"],
+                "ready": values["rag_ready"],
+                "failed": values["rag_failed"],
+            },
         }
 
     def _get_document_content_impl(self, source_id: str) -> dict[str, Any]:
@@ -401,42 +622,10 @@ class KnowledgeDocumentsMixin:
         }
 
     def _move_source_to_recycle(self, relative_path: str) -> str | None:
-        """将 Markdown 文件移入回收站。回滚保证原子性。"""
-        source_path = (self.external_dir / relative_path).resolve()
-        try:
-            source_path.relative_to(self.external_dir)
-        except ValueError as exc:
-            raise IngestError(f"非法 Markdown 相对路径：{relative_path}") from exc
-        if not source_path.exists():
-            return None
+        """统一回收逻辑：同路径覆盖，并在文件或元数据写入失败时回滚。"""
+        from .ingestor._delete import _move_source_to_recycle
 
-        recycle_root = (self.external_dir.parent / "recycle").resolve()
-        destination = (recycle_root / relative_path).resolve()
-        try:
-            destination.relative_to(recycle_root)
-        except ValueError as exc:
-            raise IngestError(f"非法回收站相对路径：{relative_path}") from exc
-        meta_path = destination.with_name(destination.name + ".meta.json")
-        if destination.exists() or meta_path.exists():
-            return str(destination.relative_to(recycle_root.parent))
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
-        metadata = {
-            "original_path": relative_path,
-            "recycled_at": now.isoformat(),
-            "expires_at": (
-                now + timedelta(days=self.settings.recycle_life_days)
-            ).isoformat(),
-        }
-        shutil.move(str(source_path), str(destination))
-        try:
-            _write_json_atomic(meta_path, metadata)
-        except Exception:
-            source_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(destination), str(source_path))
-            raise
-        return destination.relative_to(recycle_root.parent).as_posix()
+        return _move_source_to_recycle(self, relative_path)
 
     def _cleanup_recycle_impl(self, *, force: bool = False) -> dict[str, Any]:
         """清理回收站文件；``force`` 为真时永久清空全部内容。"""
@@ -503,6 +692,7 @@ class KnowledgeDocumentsMixin:
         ingest_after_import: bool = True,
         expected_origin_hash: str | None = None,
         _original_identity: str | None = None,
+        project: str | None = None,
     ) -> dict[str, Any]:
         """安全转换任意受支持文件、注册来源，并可立即执行整理。"""
 
@@ -531,6 +721,8 @@ class KnowledgeDocumentsMixin:
         identity = _original_identity or str(source)
 
         with get_knowledge_base_lock(self.data_dir):
+            from .document_organization import project_directory
+            project_dir = project_directory(self, project) if project is not None else None
             ingestor = Ingestor(
                 data_dir=self.data_dir,
                 external_dir=self.external_dir,
@@ -543,6 +735,11 @@ class KnowledgeDocumentsMixin:
                     if existing_mapping is not None
                     else _stable_markdown_name(source.name, identity)
                 )
+                if project_dir is not None:
+                    if existing_mapping is None:
+                        markdown_relative_path = (project_dir / markdown_relative_path).relative_to(self.external_dir).as_posix()
+                    elif (self.external_dir / markdown_relative_path).parent != project_dir:
+                        raise DocumentContentConflictError("该来源已被移动到其他项目，请在当前位置重新导入或使用文档移动功能")
                 destination = _safe_markdown_destination(
                     self.external_dir,
                     markdown_relative_path,
@@ -750,12 +947,14 @@ class KnowledgeDocumentsMixin:
         self,
         paths: Sequence[Path | str] | None = None,
         mode: str = "both",
+        *,
+        retry_failed: bool = False,
     ) -> dict[str, Any]:
         return Ingestor(
             data_dir=self.data_dir,
             external_dir=self.external_dir,
             settings=self.settings,
-        ).ingest(paths=paths, mode=mode)
+        ).ingest(paths=paths, mode=mode, retry_failed=retry_failed)
 
     def _sync_sources_impl(
         self,
@@ -873,20 +1072,26 @@ class KnowledgeDocumentsMixin:
             "search_cache_deleted": cache_deleted,
         }
 
-    def _delete_all_documents_impl(self) -> dict[str, Any]:
+    def _delete_all_documents_impl(self, project: str | None = None) -> dict[str, Any]:
         """删除当前知识库内的全部活动文档，不跨越 Store 边界。"""
 
         self._require_initialized()
+        where_sql, parameters = _document_filters(
+            status="active",
+            project=project,
+            search=None,
+        )
         connection = connect_sources(self.paths)
         try:
             source_ids = [
                 str(row["source_id"])
                 for row in connection.execute(
-                    """
+                    f"""
                     SELECT source_id FROM sources
-                    WHERE exists_status = 'active'
+                    {where_sql}
                     ORDER BY relative_path, source_id
-                    """
+                    """,
+                    parameters,
                 ).fetchall()
             ]
         finally:
@@ -900,4 +1105,28 @@ class KnowledgeDocumentsMixin:
                 "failures": [],
                 "search_cache_deleted": 0,
             }
-        return self.delete_documents(source_ids)
+        if len(source_ids) <= 1000:
+            return self.delete_documents(source_ids)
+
+        # The public batch endpoint is deliberately bounded to 1000 IDs, but
+        # a library/project can contain up to max_documents.  Process the
+        # server-resolved scope in bounded batches and return the same aggregate
+        # response shape without asking the Web client to enumerate every ID.
+        aggregate = {
+            "requested": len(source_ids),
+            "deleted": 0,
+            "failed": 0,
+            "documents": [],
+            "failures": [],
+            "search_cache_deleted": 0,
+        }
+        for offset in range(0, len(source_ids), 1000):
+            result = self.delete_documents(source_ids[offset : offset + 1000])
+            aggregate["deleted"] += int(result["deleted"])
+            aggregate["failed"] += int(result["failed"])
+            aggregate["documents"].extend(result["documents"])
+            aggregate["failures"].extend(result["failures"])
+            aggregate["search_cache_deleted"] += int(
+                result.get("search_cache_deleted", 0)
+            )
+        return aggregate

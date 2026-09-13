@@ -131,8 +131,23 @@ class KnowledgeBaseService(KnowledgeDocumentsMixin, KnowledgeGraphMixin, Knowled
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        *,
+        project: str | None = None,
+        search: str | None = None,
+        graph_status: str | None = None,
+        rag_status: str | None = None,
+        include_summary: bool = False,
     ) -> dict[str, Any]:
-        return self.documents.list_documents(status, page, page_size)
+        return self.documents.list_documents(
+            status,
+            page,
+            page_size,
+            project=project,
+            search=search,
+            graph_status=graph_status,
+            rag_status=rag_status,
+            include_summary=include_summary,
+        )
 
     def get_document_content(self, source_id: str) -> dict[str, Any]:
         return self.documents.get_document_content(source_id)
@@ -157,12 +172,14 @@ class KnowledgeBaseService(KnowledgeDocumentsMixin, KnowledgeGraphMixin, Knowled
         ingest_after_import: bool = True,
         expected_origin_hash: str | None = None,
         _original_identity: str | None = None,
+        project: str | None = None,
     ) -> dict[str, Any]:
         return self.documents.import_document(
             source_path,
             ingest_after_import=ingest_after_import,
             expected_origin_hash=expected_origin_hash,
             _original_identity=_original_identity,
+            **({"project": project} if project is not None else {}),
         )
 
     def upload_file(self, content: str, filename: str) -> dict[str, Any]:
@@ -400,11 +417,20 @@ class KnowledgeBaseService(KnowledgeDocumentsMixin, KnowledgeGraphMixin, Knowled
     def delete_document(self, source_id: str) -> dict[str, Any]:
         return self.documents.delete_document(source_id)
 
+    def list_projects(self) -> dict[str, Any]:
+        return self.documents.list_projects()
+
+    def create_project(self, name: str) -> dict[str, Any]:
+        return self.documents.create_project(name)
+
+    def relocate_documents(self, changes: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.documents.relocate_documents(changes)
+
     def delete_documents(self, source_ids: Sequence[str]) -> dict[str, Any]:
         return self.documents.delete_documents(source_ids)
 
-    def delete_all_documents(self) -> dict[str, Any]:
-        return self.documents.delete_all_documents()
+    def delete_all_documents(self, project: str | None = None) -> dict[str, Any]:
+        return self.documents.delete_all_documents(project)
 
     def status(self) -> dict[str, Any]:
         return self.maintenance.status()

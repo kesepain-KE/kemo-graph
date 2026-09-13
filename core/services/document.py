@@ -19,13 +19,50 @@ class DocumentService:
     def __init__(self, owner: ServiceOwner) -> None:
         self.owner = owner
 
+    def list_projects(self) -> dict[str, Any]:
+        from ..document_organization import list_projects
+        return list_projects(self.owner)
+
+    def create_project(self, name: str) -> dict[str, Any]:
+        from ..document_organization import create_project
+        return create_project(self.owner, name)
+
+    def relocate_documents(self, changes: list[dict[str, Any]]) -> dict[str, Any]:
+        from ..document_organization import relocate_documents
+        return relocate_documents(self.owner, changes)
+
     def list_documents(
         self,
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        *,
+        project: str | None = None,
+        search: str | None = None,
+        graph_status: str | None = None,
+        rag_status: str | None = None,
+        include_summary: bool = False,
     ) -> dict[str, Any]:
-        return self.owner._list_documents_impl(status, page, page_size)
+        if (
+            project is None
+            and search is None
+            and graph_status is None
+            and rag_status is None
+            and not include_summary
+        ):
+            # Preserve the original three-argument call shape for embedders
+            # that provide a lightweight owner/mock implementation.
+            return self.owner._list_documents_impl(status, page, page_size)
+        return self.owner._list_documents_impl(
+            status,
+            page,
+            page_size,
+            project=project,
+            search=search,
+            graph_status=graph_status,
+            rag_status=rag_status,
+            include_summary=include_summary,
+        )
 
     def get_document_content(self, source_id: str) -> dict[str, Any]:
         return self.owner._get_document_content_impl(source_id)
@@ -50,12 +87,14 @@ class DocumentService:
         ingest_after_import: bool = True,
         expected_origin_hash: str | None = None,
         _original_identity: str | None = None,
+        project: str | None = None,
     ) -> dict[str, Any]:
         return self.owner._import_document_impl(
             source_path,
             ingest_after_import=ingest_after_import,
             expected_origin_hash=expected_origin_hash,
             _original_identity=_original_identity,
+            **({"project": project} if project is not None else {}),
         )
 
     def upload_file(self, content: str, filename: str) -> dict[str, Any]:
@@ -96,5 +135,7 @@ class DocumentService:
     def delete_documents(self, source_ids: Sequence[str]) -> dict[str, Any]:
         return self.owner._delete_documents_impl(source_ids)
 
-    def delete_all_documents(self) -> dict[str, Any]:
-        return self.owner._delete_all_documents_impl()
+    def delete_all_documents(self, project: str | None = None) -> dict[str, Any]:
+        if project is None:
+            return self.owner._delete_all_documents_impl()
+        return self.owner._delete_all_documents_impl(project=project)
