@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.0-00a98f" alt="version 1.5.0"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.1-00a98f" alt="version 1.5.1"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -53,7 +53,7 @@ It is not another agent that chats. It is the knowledge layer that lets agents u
 | Multiple retrieval modes | Graph, vector, hybrid, Q&A and global-topic search for different kinds of questions |
 | Tunable extraction and robust recall | Fine/standard/coarse graph extraction profiles, query expansion, multi-query FAISS fusion and exact-term fallback for both semantic and short-keyword hits |
 | Incremental maintenance | Only affected data is updated when files change, instead of rebuilding the whole knowledge base |
-| Project document management | Project-based uploads, Markdown preview/editing, renaming and individual or batch moves |
+| Project document management | Project-based uploads, Markdown preview/editing, renaming and individual or batch moves; available in both the default knowledge base and portable Stores |
 | Visible processing | Dedicated build status, real query-stage progress and terminal/query/internal log tabs |
 | Lower read overhead | Bounded memory caching for unchanged status, logs and knowledge-state fingerprints |
 | Safe deletion | Shared sources are checked before deletion to avoid harming knowledge supported by other documents |
@@ -150,6 +150,7 @@ The Documents page supports creating project folders, browsing by project and se
 - Source paths and `file_map.json` are updated together; cached results containing old paths become stale. Target/source-identity conflicts are rejected without overwriting other documents.
 - Clearing the selected project affects only its documents. Deleting the entire library from the All Documents view includes all projects in the current knowledge base.
 - Wait for background tasks before relocating documents. Externally synchronized records remain managed by their upstream system.
+- Portable Stores expose the same organization through the API: `POST /api/v1/stores/projects/list`, `POST /api/v1/stores/projects/create`, `POST /api/v1/stores/documents/location` and `POST /api/v1/stores/documents/move-batch`, with `store_root` in the request body. Project actions in the browser apply to the currently opened knowledge base.
 
 #### Query progress
 
@@ -283,7 +284,7 @@ An agent that truly accompanies a long-lived project should not only have a long
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
 
-The current release is **1.5.0**. This release focuses on the update entry point: `python update.py --dirty` (or `start.py update-changes`) lists uncommitted worktree changes before an update and separates blocking program files from user configuration that never blocks an update, while `python update.py --force` backs up uncommitted program changes to `update/runtime/dirty-backup/` and continues, restoring them if the update fails. When an update is refused, the error carries an actionable next step. Project folders, the build-status page, query progress and runtime logs are unchanged.
+The current release is **1.5.1**. This release adds document organization to portable Stores: external knowledge bases can now create project folders, rename documents, and move one or many documents just like the default knowledge base does, with `store_root` supplied in the request body. It also fixes two defects — the document import pipeline had lost its `DocumentImportError` import and degraded into `NameError`, and Kemo request identifiers had roughly a six-in-ten chance of starting with a digit and being rejected by the gateway with HTTP 400, which silently downgraded query planning to the raw query. On the web side, runtime logs became a terminal-style stream, the settings page gained version detection, and the log date filter now uses the in-house date picker. Project folders, the build-status page, query progress and the bounded read cache are unchanged.
 
 See [CHANGELOG.md](CHANGELOG.md) for the release summary, upgrade notes and verification commands. The root `version.json` is the application-version source; frontend and converter-package release metadata share the same version. The Kemo protocol remains 1.0 and HTTP routes remain under `/api/v1`.
 

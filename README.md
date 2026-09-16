@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.0-00a98f" alt="version 1.5.0"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.1-00a98f" alt="version 1.5.1"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -53,7 +53,7 @@
 | 多路检索 | 图谱、向量、混合、问答与全局主题五种方式，适合不同问题 |
 | 可调抽取与稳健召回 | 图谱抽取支持细/标准/粗颗粒度；检索结合查询扩展、FAISS 多路融合与精确词面兜底，兼顾语义与短词命中 |
 | 增量维护 | 文件变化后只更新受影响的数据，而不是反复重建整个知识库 |
-| 项目化文档管理 | 按项目归类上传，支持 Markdown 预览与编辑、重命名、单篇或批量移动 |
+| 项目化文档管理 | 按项目归类上传，支持 Markdown 预览与编辑、重命名、单篇或批量移动；默认知识库与独立 Store 均可整理 |
 | 过程可见 | 独立构建状态页、真实检索步骤进度，以及终端／查询／内部运行日志 |
 | 低开销读取 | 通过有界内存缓存复用未变化的状态、日志与知识库指纹，减轻重复磁盘读取 |
 | 安全删除 | 删除文档或节点时检查共享来源，尽量避免误伤其他资料支撑的知识 |
@@ -150,6 +150,7 @@ python start_web.py
 - 同步更新 `file_map.json` 和来源路径，旧路径的搜索缓存不再复用；同名目标、来源映射冲突会拒绝操作，不覆盖其他活动文档。
 - 项目视图中的“清空本项目”仅删除该项目文档；“全部文档”视图中的“全库删除”仍作用于当前知识库全部项目。
 - 有后台任务时请等待完成再改名或移动；外部智能体同步的资料仍应在上游系统中管理名称与位置。
+- 独立 Store（外部知识库）通过 API 提供同一套整理能力：`POST /api/v1/stores/projects/list`、`POST /api/v1/stores/projects/create`、`POST /api/v1/stores/documents/location` 与 `POST /api/v1/stores/documents/move-batch`，`store_root` 在请求体中指定；网页端的项目操作作用于当前打开的知识库。
 
 #### 检索进度
 
@@ -288,7 +289,7 @@ kemo-graph 不试图成为替代所有文件管理、所有数据库或所有搜
 
 核心闭环已经可以实际运行：统一导入、增量更新、图谱与向量检索、混合问答、安全删除、定时维护，以及本地 Web、CLI、HTTP API 三个入口和面向 kemo-agent 等智能体的外部知识服务接口。
 
-当前版本为 **1.5.0**。本次更新聚焦更新入口的可用性：`python update.py --dirty`（或 `start.py update-changes`）可以在更新前查看未提交的工作区更改，并区分会阻塞更新的程序文件与不影响更新的用户配置；`python update.py --force` 会在更新前把未提交的程序文件修改备份到 `update/runtime/dirty-backup/` 再继续安装，失败时自动放回原位置。更新被拒绝时，错误信息会附带可直接执行的下一步提示。此前的项目文件夹、构建状态页、检索进度与运行日志等能力保持不变。
+当前版本为 **1.5.1**。本次更新补齐了独立 Store 的文档组织能力：外部知识库现在与默认知识库一样可以创建项目文件夹、重命名、单篇移动与批量移动，`store_root` 在请求体中指定。同时修复了两处缺陷：文档导入的异常处理因缺少 `DocumentImportError` 导入而退化为 `NameError`，以及 Kemo 请求标识符约有六成概率以数字开头而被网关以 400 拒绝、使查询规划静默退化为原始查询。网页端运行日志改为终端流风格，系统配置页新增版本检测，运行日志的日期筛选改用站内自研选择器。此前的项目文件夹、构建状态页、检索进度与内存读取缓存等能力保持不变。
 
 完整更新摘要、升级注意事项与发布验证命令见 [CHANGELOG.md](CHANGELOG.md)。应用版本以根目录 `version.json` 为准，前端包和转换层包的发布元数据同步为同一版本；Kemo 协议仍为 1.0，HTTP 路径仍为 `/api/v1`。
 

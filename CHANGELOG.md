@@ -1,5 +1,43 @@
 # 更新记录 / Changelog
 
+## 1.5.1 — 2026-09-16
+
+### 本次更新
+
+- 独立 Store 补齐文档组织接口：新增 `POST /api/v1/stores/projects/list`、`POST /api/v1/stores/projects/create`、`POST /api/v1/stores/documents/location`、`POST /api/v1/stores/documents/move-batch`，使外部知识库与默认知识库一样可以创建项目文件夹、重命名、单篇移动与批量移动。此前这些能力只有默认知识库提供，独立 Store 只能按项目筛选、无法整理。
+- 批量移动限制 `source_ids` 非空、自动去重、拒绝空字符串、最多 1000 项，项目名最多 160 字符；单篇位置更新继续返回 Store 身份包络，整批检查、整批执行的既有语义不变。
+- 修复文档导入异常处理失效：`core/knowledge_support.py` 的导入列表漏掉 `DocumentImportError`，导致“读取期间超出体积上限”与“导入后未登记来源”两条异常分支在求值 `except` 元组时二次抛出 `NameError`，既掩盖原始错误，也跳过快照描述符清理。该缺陷由 2026-09-08 的知识库领域化拆分引入，与本次新增端点无关，现已补回导入并加回归测试。
+- 修复 Kemo 请求标识符不合规：`provider/__init__.py` 此前用裸 `uuid4()` 作为 `request_id`，而 Kemo 1.0 要求标识符首字符为字母，UUID 十六进制首位约有六成概率是数字，导致 LLM 调用被网关以 400 拒绝、查询规划静默退化为原始查询。现改为 `req-<hex>` 前缀形式；网关与 kemo-agent 的协议校验未做任何放宽，仍与协议定义逐字一致。
+- 网页运行日志改为终端流风格：终端启动日志、查询日志与内部运行日志统一为「时间 · 级别标签 · 正文」单行三列布局，使用等宽字体、按行悬停高亮、错误行整行标红，不再使用分隔线与两行卡片。
+- 系统配置页新增版本检测：显示当前版本与最新版本，可手动检查更新并直接看到结果；该区域仍不提供应用更新与服务重启以外的操作。
+- 运行日志的日期筛选改用站内自研日期选择器，与其他控件统一外观、键盘操作和视口避让行为；日期语义仍为 UTC。
+- 新增 OpenAPI 路径契约测试，固化公开端点数量与 `/api/v1/graph/full` 的隐藏兼容别名状态，端点增删会直接导致测试失败。
+
+### 升级说明
+
+- 应用版本统一为 1.5.1：`version.json`、前端包及锁文件、Python 转换层包元数据和说明文档同步。Kemo 1.0、`/api/v1` 与存储格式版本不随应用版本改号。
+- 更新源码、重新构建前端并重启服务后生效；不必仅为版本升级重建现有知识库。
+- 新增的四个端点只作用于独立 Store 的 `/stores/*` 路径；默认知识库既有的 `/projects` 与 `/documents/*` 端点行为不变。
+- 补回 `DocumentImportError` 后，超限与未登记来源恢复为原有语义的明确错误，不再表现为 `NameError`。普通导入路径不受影响。
+- 网页运行日志不再自动折行，超宽内容改为横向滚动，与终端行为一致。日期筛选、每 5 秒自动刷新与跟随最新等既有行为保持不变。
+- 本次仍不提供应用层 API 鉴权与独立 Store 的后台作业提交端点，网络部署仍须自行保护访问边界。
+
+### Release summary
+
+Portable Stores gain project folders, rename, single and batch move; the missing `DocumentImportError` import in the document import pipeline is restored; Kemo request identifiers now satisfy the letter-initial rule; the runtime log viewer becomes a terminal-style single-line stream; the settings page gains version detection; and an OpenAPI path contract test locks the public surface. Protocol and storage-format versions are unchanged.
+
+### 发布验证 / Release verification
+
+```bash
+python -m pytest tests/ -q
+python -m compileall -q core api provider markitdown update start.py start_web.py
+python start.py version
+cd web/frontend
+npm run typecheck
+npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
+npm run build
+```
+
 ## 1.5.0 — 2026-09-13
 
 ### 本次更新
