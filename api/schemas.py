@@ -213,6 +213,30 @@ class StoreRootRequest(StrictRequest):
         return normalized
 
 
+class StoreProjectCreateRequest(StoreRootRequest):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class StoreDocumentLocationRequest(StoreRootRequest):
+    source_id: str = Field(min_length=1)
+    filename: str | None = Field(default=None, min_length=1, max_length=160)
+    project: str | None = Field(default=None, max_length=160)
+    expected_relative_path: str | None = None
+
+
+class StoreDocumentMoveRequest(StoreRootRequest):
+    source_ids: list[str] = Field(min_length=1, max_length=1000)
+    project: str = Field(max_length=160)
+
+    @field_validator("source_ids")
+    @classmethod
+    def validate_source_ids(cls, value: list[str]) -> list[str]:
+        normalized = [source_id.strip() for source_id in value]
+        if any(not source_id for source_id in normalized):
+            raise ValueError("source_ids 中不能包含空值")
+        return list(dict.fromkeys(normalized))
+
+
 class StoreInitializeRequest(StoreRootRequest):
     scope: StoreScope
     owner_id: str | None = Field(default=None, max_length=255)

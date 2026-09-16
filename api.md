@@ -2,8 +2,8 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.5.0`
-> **实现来源**：`api/__init__.py`、`api/routes.py`、`api/schemas.py`。
+> **当前版本**：`1.5.1`
+> **实现来源**：`api/__init__.py`、`api/routes.py`、`api/store_routes.py`、`api/document_organization_routes.py`、`api/schemas.py`。
 
 ---
 
@@ -44,6 +44,17 @@ http://127.0.0.1:8000/api/v1
 - 图谱或 RAG 正在构建时，依赖该数据的一些读取/修改请求会返回 `409 PROCESSING`，调用方应等待后重试。
 - 删除操作具有副作用，智能体执行前应先查询、确认目标 ID 与影响范围。
 - 节点和关系删除均有公开 HTTP API；删除前应先调用详情端点核对来源和影响范围。
+
+### 1.4 部署形态差异
+
+- `uvicorn api:app` 启动纯 API 服务，不挂载网页前端，也不注册 `/api/v1/system/runtime` 与 `/api/v1/system/restart`。
+- `python start_web.py` 启动网页与同一组 API，并额外注册上述运行状态与底层重启端点。
+
+外部智能体若只依赖知识库 API，优先使用纯 API 形态；需要网页控制台、运行状态或网页重启能力时使用 `start_web.py`。
+
+### 1.5 端点可见性
+
+`GET /api/v1/graph/full` 是兼容旧调用方的别名，设置了 `include_in_schema=False`，因此不会出现在 OpenAPI `paths` 中。新调用方应使用 `GET /api/v1/graph`；不能仅根据 OpenAPI 缺少该兼容别名就判断服务端未实现完整图谱读取。
 
 ---
 
@@ -582,7 +593,18 @@ GET /api/v1/documents?status=active&page=1&page_size=6&project=研究资料&sear
 
 改名或移动保留 `source_id`、正文哈希、Graph/RAG 构建状态和向量 ID，不重建、不调用模型。更新文件路径、`path_hash`、`file_map.json`，路径参与检索缓存指纹以防旧结果引用旧位置。原始磁盘导入文件不被改名/搬运；浏览器上传的虚拟来源身份随项目更新，以便在目标项目再次上传同名原文件时更新原文档。
 
-后台任务排队/执行中、文档处于 processing、或记录包含外部同步 `source_uri` 时，位置更新返回 `409 CONTENT_CONFLICT`。外部同步资料应在上游修改。项目接口当前用于服务默认知识库，未新增 Store 专用 HTTP 端点；已有 Store 和 CLI 契约不变。
+后台任务排队/执行中、文档处于 processing、或记录包含外部同步 `source_uri` 时，位置更新返回 `409 CONTENT_CONFLICT`。外部同步资料应在上游修改。
+
+portable Store 使用相同的项目与位置整理能力，但遵循 Store API 的统一约定：全部使用 `POST`，并把 `store_root` 放在 JSON 请求体中：
+
+```text
+POST /api/v1/stores/projects/list
+POST /api/v1/stores/projects/create
+POST /api/v1/stores/documents/location
+POST /api/v1/stores/documents/move-batch
+```
+
+单篇位置响应仍保持 Store 包络，即 `data.store` 携带 Store 身份，`data.result` 是单篇位置结果；批量移动的 `data.result.documents` 为结果数组。经 `/stores/sources/sync` 写入、带 `source_uri` 的上游权威文档仍拒绝移动；经 `/stores/import-path`、`/stores/import` 或 `/stores/upload` 导入的普通文档可以整理。
 
 导入请求省略 `project` 时保持原有行为；提供空字符串表示导入根目录。同名原文件可分别上传到不同项目，获得独立来源身份。
 
@@ -1270,6 +1292,10 @@ POST /api/v1/stores/query/federated
 
 # 文档、节点、关系
 POST /api/v1/stores/documents/list
+POST /api/v1/stores/projects/list
+POST /api/v1/stores/projects/create
+POST /api/v1/stores/documents/location
+POST /api/v1/stores/documents/move-batch
 POST /api/v1/stores/documents/content
 POST /api/v1/stores/documents/update
 POST /api/v1/stores/documents/delete

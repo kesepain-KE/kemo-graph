@@ -48,9 +48,11 @@ from .schemas import (
     StoreCacheKeyRequest,
     StoreCacheListRequest,
     StoreCleanupRecycleRequest,
+    StoreDocumentLocationRequest,
     StoreDocumentListRequest,
     StoreDocumentBatchDeleteRequest,
     StoreDocumentContentUpdateRequest,
+    StoreDocumentMoveRequest,
     StoreDeleteAllDocumentsRequest,
     StoreEdgeRequest,
     StoreFederatedQueryRequest,
@@ -66,6 +68,7 @@ from .schemas import (
     StoreNeighborhoodRequest,
     StoreNodeRequest,
     StoreOrganizeGraphRequest,
+    StoreProjectCreateRequest,
     StoreRAGQueryRequest,
     StoreRootRequest,
     StoreSourceRequest,
@@ -300,6 +303,76 @@ def post_store_documents_list(
                 graph_status=payload.graph_status,
                 rag_status=payload.rag_status,
                 include_summary=payload.include_summary,
+            ),
+        )
+    )
+
+
+@router.post("/stores/projects/list", response_model=APIResponse)
+def post_store_projects_list(
+    payload: StoreRootRequest,
+    context: Context,
+) -> dict:
+    return success_response(
+        _store_operation(
+            payload.store_root,
+            context,
+            lambda service: service.list_projects(),
+        )
+    )
+
+
+@router.post("/stores/projects/create", response_model=APIResponse)
+def post_store_projects_create(
+    payload: StoreProjectCreateRequest,
+    context: Context,
+) -> dict:
+    return success_response(
+        _store_operation(
+            payload.store_root,
+            context,
+            lambda service: service.create_project(payload.name),
+        )
+    )
+
+
+@router.post("/stores/documents/location", response_model=APIResponse)
+def post_store_document_location(
+    payload: StoreDocumentLocationRequest,
+    context: Context,
+) -> dict:
+    if payload.filename is None and payload.project is None:
+        raise ValueError("至少提供 filename 或 project")
+    change = {
+        "source_id": payload.source_id,
+        "filename": payload.filename,
+        "project": payload.project,
+        "expected_relative_path": payload.expected_relative_path,
+    }
+    outcome = _store_operation(
+        payload.store_root,
+        context,
+        lambda service: service.relocate_documents([change]),
+    )
+    return success_response(
+        {**outcome, "result": outcome["result"]["documents"][0]}
+    )
+
+
+@router.post("/stores/documents/move-batch", response_model=APIResponse)
+def post_store_documents_move_batch(
+    payload: StoreDocumentMoveRequest,
+    context: Context,
+) -> dict:
+    return success_response(
+        _store_operation(
+            payload.store_root,
+            context,
+            lambda service: service.relocate_documents(
+                [
+                    {"source_id": source_id, "project": payload.project}
+                    for source_id in payload.source_ids
+                ]
             ),
         )
     )
