@@ -1,6 +1,7 @@
 import { Activity, FileSearch, RefreshCw, Terminal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/api";
+import { ThemedDatePicker } from "./ThemedDatePicker";
 import type { LogCategory, RuntimeLogs } from "../types/api";
 
 const tabs = [
@@ -51,7 +52,7 @@ export function RuntimeLogPanel() {
     <header className="runtime-log-panel__header">
       <div><p className="eyebrow">Runtime logs</p><h3>运行日志</h3></div>
       <div className="runtime-log-panel__controls">
-        <label>日期（UTC）<input aria-label="日志日期（UTC）" type="date" value={date} onChange={(event) => { setDate(event.target.value); setError(null); setFollow(true); }} /></label>
+        <label>日期（UTC）<ThemedDatePicker ariaLabel="日志日期（UTC）" value={date} onChange={(next) => { setDate(next); setError(null); setFollow(true); }} /></label>
         <label><input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />自动刷新</label>
         <label><input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} />跟随最新</label>
         <button className="button button--secondary" type="button" disabled={loading || !date} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={15} className={loading ? "spin" : ""} />刷新日志</button>
@@ -71,10 +72,17 @@ export function RuntimeLogPanel() {
     {error && <p className="runtime-log-error" role="alert">{error} {visibleData ? "下方保留上次成功读取的内容。" : ""}</p>}
     <div className="runtime-log-content" ref={viewport} role="tabpanel" id="runtime-log-content" aria-labelledby={`runtime-log-tab-${category}`} tabIndex={0}
       onScroll={(event) => { const el = event.currentTarget; setFollow(el.scrollHeight - el.clientHeight - el.scrollTop < 32); }}>
-      {visibleData?.entries.map((entry) => <article className={`runtime-log-entry is-${entry.level.toLowerCase()}`} key={entry.id}>
-        <div><time>{entry.time}</time><strong>{entry.level}</strong><span>{entry.module} / {entry.action}</span>{entry.elapsed_ms !== "-" && <small>{entry.elapsed_ms} ms</small>}</div>
-        <pre>{entry.detail}</pre>
-      </article>)}
+      {visibleData?.entries.map((entry) => {
+        const level = entry.level.toLowerCase();
+        const tone = level.startsWith("err") ? "is-error" : level.startsWith("warn") ? "is-warning" : "is-info";
+        const tag = tone === "is-error" ? "ERR" : tone === "is-warning" ? "WRN" : "OUT";
+        return <div className={`runtime-log-line ${tone}`} key={entry.id}>
+          <time>{entry.time}</time>
+          <span className="runtime-log-line__tag">{tag}</span>
+          <code className="runtime-log-line__body" title={`${entry.module} / ${entry.action}`}>{entry.detail}</code>
+          {entry.elapsed_ms !== "-" && <small className="runtime-log-line__elapsed">{entry.elapsed_ms} ms</small>}
+        </div>;
+      })}
       {!visibleData?.entries.length && <div className="empty-compact"><selected.icon size={25} /><strong>{loading ? "正在读取日志…" : "暂无此类日志"}</strong><span>{!date ? "请选择日志日期。" : error ? "读取失败，请检查服务连接后重试。" : "可切换日期或等待新的运行事件；历史终端输出无法回补。"}</span></div>}
     </div>
     <footer className="runtime-log-footer" role="status"><span>{visibleData?.entries.length ?? 0} 条 · 最多展示最近 200 条 · 日志时间为 UTC</span><span>{loading ? "刷新中…" : updatedAt ? `上次读取 ${updatedAt}` : "尚未读取"}{autoRefresh ? " · 每 5 秒刷新" : " · 自动刷新已暂停"}</span></footer>
