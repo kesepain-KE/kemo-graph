@@ -2,13 +2,16 @@ import {
   CheckCircle2,
   ChevronRight,
   Database,
+  Download,
   History,
   KeyRound,
   Network,
   Power,
+  RefreshCw,
   RotateCcw,
   Save,
   ServerCog,
+  Tag,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,7 +20,7 @@ import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
 import { PageIntro } from "../components/PageIntro";
 import { ThemedSelect } from "../components/ThemedSelect";
-import type { ConfigData } from "../types/api";
+import type { ConfigData, UpdateStatusData } from "../types/api";
 
 type FieldKind = "boolean" | "number" | "password" | "select" | "text" | "time";
 
@@ -296,6 +299,9 @@ export function SettingsPage() {
   const [emptyingRecycle, setEmptyingRecycle] = useState(false);
   const [clearingCache, setClearingCache] = useState<"all" | "stale" | null>(null);
   const [restartingService, setRestartingService] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusData | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -447,6 +453,50 @@ export function SettingsPage() {
     }
   };
 
+  const loadUpdateStatus = useCallback(async () => {
+    try {
+      setUpdateStatus(await api.getUpdateStatus());
+    } catch {
+      setUpdateStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeGroupId === "system") void loadUpdateStatus();
+  }, [activeGroupId, loadUpdateStatus]);
+
+  const runUpdateCheck = async () => {
+    setCheckingUpdate(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await api.checkUpdate();
+      setUpdateStatus(result);
+      setChecked(true);
+      setNotice(result.update_available ? "发现可用新版本。" : "当前已是最新版本。");
+    } catch (caught) {
+      setChecked(false);
+      setError(caught instanceof Error ? caught.message : "检查更新失败");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  let updateButtonClass = "button button--secondary";
+  let updateButtonLabel = "检查更新";
+  let updateButtonIcon = <RefreshCw size={15} />;
+  if (checkingUpdate) {
+    updateButtonLabel = "检测中";
+    updateButtonIcon = <RefreshCw className="spin" size={15} />;
+  } else if (checked && updateStatus?.update_available) {
+    updateButtonClass = "button button--primary";
+    updateButtonLabel = `发现新版本 ${updateStatus.latest_version ?? ""}`.trim();
+    updateButtonIcon = <Download size={15} />;
+  } else if (checked) {
+    updateButtonLabel = "已是最新";
+    updateButtonIcon = <CheckCircle2 size={15} />;
+  }
+
   return (
     <section className="settings-page page-stack">
       <PageIntro
@@ -554,6 +604,30 @@ export function SettingsPage() {
               ))}
               {activeGroup.id === "system" ? (
                 <>
+                  <div className="settings-update-zone settings-version-zone">
+                    <span className="settings-update-zone__icon"><Tag size={18} /></span>
+                    <span className="settings-update-zone__content">
+                      <strong>版本检测</strong>
+                      <span className="settings-version-zone__versions">
+                        <span className="settings-version-zone__label">当前</span>
+                        <code className="settings-version-zone__value">{updateStatus?.current_version ?? "—"}</code>
+                        <span className="settings-version-zone__arrow">→</span>
+                        <span className="settings-version-zone__label">最新</span>
+                        <code className={`settings-version-zone__value${updateStatus?.update_available ? " is-latest" : ""}`}>
+                          {updateStatus?.latest_version ?? "未检测"}
+                        </code>
+                      </span>
+                    </span>
+                    <button
+                      className={updateButtonClass}
+                      disabled={checkingUpdate}
+                      onClick={() => void runUpdateCheck()}
+                      type="button"
+                    >
+                      {updateButtonIcon}
+                      {updateButtonLabel}
+                    </button>
+                  </div>
                   <div className="settings-update-zone settings-restart-zone">
                     <span className="settings-update-zone__icon"><Power size={18} /></span>
                     <span className="settings-update-zone__content">
