@@ -66,6 +66,7 @@ from .knowledge_models import (
     MAX_IMPORT_BYTES,
     SUPPORTED_IMPORT_SUFFIXES,
     DocumentImportConflictError,
+    DocumentImportError,
     DocumentImportPathError,
     DocumentTooLargeError,
     _ImportSnapshot,
