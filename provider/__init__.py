@@ -61,7 +61,7 @@ def kemo_headers(api_key: str) -> dict[str, str]:
 
     if not isinstance(api_key, str) or not api_key.strip():
         raise ProviderConfigurationError("kemo API 密钥不能为空", provider="kemo")
-    request_id = str(uuid4())
+    request_id = f"req-{uuid4().hex}"
     return {
         "Authorization": f"Bearer {api_key.strip()}",
         "X-Kemo-Protocol-Version": KEMO_PROTOCOL_VERSION,
