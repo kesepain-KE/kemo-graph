@@ -68,7 +68,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.kemo.api_key, "")
             self.assertEqual(settings.graph_tool_max_iterations, 40)
             self.assertEqual(settings.log_level, "INFO")
-            self.assertEqual(settings.kemo.protocol_version, "1.0")
+            self.assertEqual(settings.kemo.protocol_version, "2.0")
             self.assertEqual(settings.kemo.request_timeout, 900)
 
     def test_legacy_provider_sections_are_migrated_without_being_exported(self) -> None:

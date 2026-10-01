@@ -50,7 +50,7 @@ def _settings(dimensions: int = 3) -> AppConfig:
         kemo={
             "base_url": "https://gateway.test",
             "api_key_env": "TEST_KEMO_API_KEY",
-            "protocol_version": "1.0",
+            "protocol_version": "2.0",
             "request_timeout": 123,
         },
         models={
@@ -101,6 +101,38 @@ class ProviderErrorTests(unittest.TestCase):
                     client=client,
                 )
 
+    def test_kemo_v2_error_envelope_is_preserved(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                502,
+                json={
+                    "protocol_version": "2.0",
+                    "request_id": "req_gateway",
+                    "error": {
+                        "type": "provider",
+                        "code": "PROVIDER_UNAVAILABLE",
+                        "message": "上游暂时不可用",
+                        "retryable": True,
+                        "provider_status": 503,
+                    },
+                },
+                request=request,
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            with self.assertRaises(ProviderResponseError) as context:
+                request_json(
+                    "POST",
+                    "https://example.test/model/responses",
+                    provider="kemo",
+                    client=client,
+                )
+        error = context.exception
+        self.assertEqual(error.provider_code, "PROVIDER_UNAVAILABLE")
+        self.assertTrue(error.retryable)
+        self.assertEqual(error.provider_status, 503)
+        self.assertEqual(error.status_code, 502)
+
 
 class ProviderFunctionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -110,7 +142,8 @@ class ProviderFunctionTests(unittest.TestCase):
         headers = kemo_headers(" secret ")
 
         self.assertEqual(headers["Authorization"], "Bearer secret")
-        self.assertEqual(headers["X-Kemo-Protocol-Version"], "1.0")
+        self.assertEqual(headers["X-Kemo-Protocol-Version"], "2.0")
+        self.assertTrue(headers["X-Request-ID"].startswith("req_"))
         self.assertEqual(headers["X-Request-ID"], headers["Idempotency-Key"])
 
     def test_chat_builds_kemo_request(self) -> None:
@@ -140,13 +173,14 @@ class ProviderFunctionTests(unittest.TestCase):
         payload = request.call_args.kwargs["payload"]
         headers = request.call_args.kwargs["headers"]
         self.assertEqual(payload["model"], "override")
-        self.assertEqual(payload["protocol_version"], "1.0")
+        self.assertEqual(payload["protocol_version"], "2.0")
         self.assertEqual(payload["request_id"], headers["X-Request-ID"])
         self.assertEqual(payload["request_id"], headers["Idempotency-Key"])
         self.assertEqual(payload["attempt"], 1)
         self.assertIs(payload["stream"], False)
         self.assertEqual(payload["system_prompt"], "rules")
-        self.assertEqual(payload["generation"], {"parallel_tool_calls": False})
+        self.assertEqual(payload["generation"], {})
+        self.assertIs(payload["parallel_tool_calls"], False)
         self.assertEqual(payload["output"], {"modalities": ["text"]})
         self.assertEqual(payload["tools"], [])
         self.assertEqual(payload["provider_options"], {})
@@ -171,7 +205,7 @@ class ProviderFunctionTests(unittest.TestCase):
     def test_chat_with_tools_replays_history_and_isolates_tool_errors(self) -> None:
         responses = [
             {
-                "request_id": "request-first",
+                "request_id": "req_first",
                 "status": "requires_action",
                 "output": [
                     {
@@ -237,24 +271,34 @@ class ProviderFunctionTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual(
             request.call_args_list[0].kwargs["payload"]["generation"],
-            {"parallel_tool_calls": False},
+            {},
+        )
+        self.assertIs(
+            request.call_args_list[0].kwargs["payload"]["parallel_tool_calls"],
+            False,
         )
         self.assertEqual(
             request.call_args_list[1].kwargs["payload"]["generation"],
-            {"parallel_tool_calls": False},
+            {},
+        )
+        self.assertIs(
+            request.call_args_list[1].kwargs["payload"]["parallel_tool_calls"],
+            False,
         )
         second_payload = request.call_args_list[1].kwargs["payload"]
         replayed = second_payload["input"]
         self.assertEqual(len(replayed), 5)
-        self.assertEqual(second_payload["parent_request_id"], "request-first")
+        self.assertEqual(second_payload["parent_request_id"], "req_first")
         self.assertEqual(replayed[0]["role"], "user")
         self.assertEqual(replayed[1]["type"], "tool_call")
         self.assertEqual(replayed[2]["type"], "tool_call")
         self.assertEqual(replayed[3]["type"], "tool_result")
-        self.assertEqual(replayed[3]["call_id"], "call-ok")
+        self.assertTrue(replayed[3]["call_id"].startswith("callid_"))
+        self.assertEqual(replayed[3]["name"], "search_entities")
         self.assertIs(replayed[3]["is_error"], False)
         self.assertIn('"ok": true', replayed[3]["content"][0]["text"])
-        self.assertEqual(replayed[4]["call_id"], "call-fail")
+        self.assertTrue(replayed[4]["call_id"].startswith("callid_"))
+        self.assertEqual(replayed[4]["name"], "broken_tool")
         self.assertIs(replayed[4]["is_error"], True)
         self.assertIn('"ok": false', replayed[4]["content"][0]["text"])
         self.assertIn("tool failed", replayed[4]["content"][0]["text"])
@@ -325,6 +369,14 @@ class ProviderFunctionTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual(request.call_args_list[0].kwargs["payload"]["attempt"], 1)
         self.assertEqual(request.call_args_list[1].kwargs["payload"]["attempt"], 2)
+        self.assertEqual(
+            request.call_args_list[0].kwargs["payload"]["request_id"],
+            request.call_args_list[1].kwargs["payload"]["request_id"],
+        )
+        self.assertEqual(
+            request.call_args_list[0].kwargs["headers"]["Idempotency-Key"],
+            request.call_args_list[1].kwargs["headers"]["Idempotency-Key"],
+        )
 
     def test_failed_response_retry_metadata_is_preserved(self) -> None:
         response = {

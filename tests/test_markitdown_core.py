@@ -16,6 +16,7 @@ from markitdown import (
     UnsafeInputError,
 )
 from markitdown._stream_info import StreamInfo
+from markitdown._utils import sanitize_knowledge_markdown
 
 
 class MarkItDownCoreTests(unittest.TestCase):
@@ -95,6 +96,42 @@ class MarkItDownCoreTests(unittest.TestCase):
             result = converter.convert(source)
             self.assertEqual(result.converter, "CustomConverter")
             self.assertEqual(result.text_content, "# Custom\n")
+
+    def test_media_and_base64_payloads_are_removed_without_losing_text(self) -> None:
+        raw = (
+            "# 标题\n\n"
+            "![封面](data:image/png;base64," + "A" * 100_000 + ")\n\n"
+            "<img alt=\"流程图\" src=\"data:image/png;base64,AAAA\">\n\n"
+            "正文\n"
+        )
+        cleaned = sanitize_knowledge_markdown(raw)
+        self.assertIn("标题", cleaned)
+        self.assertIn("正文", cleaned)
+        self.assertIn("封面", cleaned)
+        self.assertIn("流程图", cleaned)
+        self.assertNotIn("data:image", cleaned)
+        self.assertNotIn("base64", cleaned.casefold())
+        self.assertLess(len(cleaned), 1_000)
+        self.assertEqual(cleaned, sanitize_knowledge_markdown(cleaned))
+
+    def test_markitdown_entry_sanitizes_custom_converter_output(self) -> None:
+        class DirtyConverter(DocumentConverter):
+            extensions = frozenset({".dirty"})
+
+            def convert(self, source: Path, info: StreamInfo) -> DocumentConverterResult:
+                return DocumentConverterResult(
+                    title="dirty",
+                    text_content="正文\n![图](data:image/jpeg;base64," + "A" * 10_000 + ")",
+                    converter="DirtyConverter",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            source = Path(temporary_dir) / "sample.dirty"
+            source.write_text("payload", encoding="utf-8")
+            result = MarkItDown(converters=[DirtyConverter()]).convert(source)
+            self.assertIn("正文", result.text_content)
+            self.assertNotIn("base64", result.text_content.casefold())
+            self.assertEqual(result.markdown, result.text_content)
 
     def test_binary_stream_uses_same_dispatcher(self) -> None:
         result = MarkItDown().convert_stream(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import threading
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -100,14 +101,14 @@ class StructuredProviderTests(unittest.TestCase):
         payload = _draft()
         response = {
             "status": "completed",
-            "request_id": "request-1",
+            "request_id": "req_1",
             "output": [
                 {
-                    "id": "tool-1",
-                    "type": "tool_call",
-                    "call_id": "call-1",
-                    "name": "submit_structured_output",
-                    "arguments": payload,
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{"type": "text", "text": json.dumps(payload)}],
                 }
             ],
         }
@@ -121,32 +122,36 @@ class StructuredProviderTests(unittest.TestCase):
         self.assertEqual(result, payload)
         self.assertEqual(request.call_count, 1)
         request_payload = request.call_args.kwargs["payload"]
-        self.assertEqual(len(request_payload["tools"]), 1)
-        self.assertEqual(request_payload["tools"][0]["name"], "submit_structured_output")
+        self.assertEqual(request_payload["tools"], [])
+        self.assertEqual(
+            request_payload["structured_output"]["type"],
+            "json_schema",
+        )
+        self.assertEqual(
+            request_payload["structured_output"]["schema_name"],
+            "submit_structured_output",
+        )
+        self.assertTrue(request_payload["structured_output"]["strict"])
 
     def test_chat_structured_rejects_multiple_or_wrong_calls(self) -> None:
-        base_call = {
-            "id": "tool-1",
-            "type": "tool_call",
-            "call_id": "call-1",
-            "name": "submit_structured_output",
-            "arguments": {"value": 1},
-        }
         with tempfile.TemporaryDirectory() as temporary_dir:
             settings = _settings(Path(temporary_dir))
             schema = {"type": "object", "properties": {}}
             with patch(
                 "provider.engine.request_json",
-                return_value={"status": "completed", "output": [base_call, base_call]},
+                return_value={
+                    "status": "completed",
+                    "output": [
+                        {
+                            "id": "msg_1",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "not-json"}],
+                        }
+                    ],
+                },
             ):
-                with self.assertRaisesRegex(ProviderResponseError, "只能返回一个"):
-                    chat_structured("system", "user", schema, settings=settings)
-            wrong = {**base_call, "name": "other"}
-            with patch(
-                "provider.engine.request_json",
-                return_value={"status": "completed", "output": [wrong]},
-            ):
-                with self.assertRaisesRegex(ProviderResponseError, "工具名错误"):
+                with self.assertRaisesRegex(ProviderResponseError, "不是合法 JSON"):
                     chat_structured("system", "user", schema, settings=settings)
 
 
