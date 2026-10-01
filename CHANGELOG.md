@@ -1,4 +1,46 @@
+## 1.6.0 — 2026-10-01
+
+- 知识图谱版本定档为 1.6.0；与 kemo-agent 1.4.0、kemo-adapter-api 1.0.0 的 Kemo 2.0 协议合同完成对齐。
+- 请求/响应、工具调用、结构化输出、Embedding、Rerank 与能力发现继续使用统一协议基线。
+
 # 更新记录 / Changelog
+
+## 1.5.2 — 2026-10-01
+
+### 本次更新
+
+- 文档归一化层新增统一知识文本净化：移除 DOCX/HTML 等转换结果中的图片 Data URI、Base64 二进制、媒体标签、脚本、样式和 HTML 注释，并保留图片说明等可读文本。
+- MarkItDown 单一入口和 Graph/RAG Markdown 读取入口增加第二、第三层防御，历史脏 Markdown 不会继续膨胀图谱片段或向量碎片。
+- 增加 Base64 图片、HTML 媒体、自定义 Converter 脏输出和净化幂等性的回归测试；全量后端测试通过。
+
+### 网关兼容性审查
+
+- 已完成 Kemo 1.0 → Kemo 2.0 Provider 适配：请求头和请求体使用 `2.0`，请求 ID 使用网关要求的 `req_` 前缀。
+- LLM 请求已适配 Kemo 2.0 的顶层 `parallel_tool_calls`、严格消息/工具项 ID、原生 `structured_output` 和工具结果 `name` 字段。
+- Embedding/Rerank 请求继续使用同一端点，但已按 Kemo 2.0 严格契约发送 `truncate`、`request_id` 和新响应字段；HTTP 错误包络会提取 `code`、`retryable` 和 `provider_status`。
+- 当前本地 `kemo-adapter-api` 0.8.2 的 Kemo 2.0 模型契约已通过本地请求模型校验；真实模型可达性仍取决于网关密钥、模型注册和上游 Provider 状态。
+
+### 升级说明
+
+- 应用版本统一为 1.5.2：`version.json`、前端包、Python 转换层包元数据和说明文档同步。
+- 原始文档哈希和文件身份不变；净化只作用于转换结果、预览、Graph 和 RAG 输入，不会改写用户原始 DOCX。
+- 已有成功文档不会因为本次版本升级自动全部重建；需要清理历史脏 Markdown 或重新建立向量时，请通过网页端批量重建或 CLI 重建。
+
+### Release summary
+
+Version 1.5.2 adds a shared knowledge-text sanitizer for converter output and Graph/RAG input, removing embedded media and Base64 binary residue while preserving readable descriptions. It also completes the Kemo 1.0 → 2.0 Provider adaptation: strict request IDs, native structured output, tool-history replay, embedding/rerank fields, and Kemo 2.0 error metadata are aligned with the local kemo-adapter-api 0.8.2 contract.
+
+### 发布验证 / Release verification
+
+```bash
+python -m pytest tests/ -q
+python -m compileall -q core api provider markitdown update start.py start_web.py
+python start.py version
+cd web/frontend
+npm run typecheck
+npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
+npm run build
+```
 
 ## 1.5.1 — 2026-09-16
 

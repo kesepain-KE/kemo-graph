@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.1-00a98f" alt="version 1.5.1"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.6.0-00a98f" alt="version 1.6.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -284,9 +284,9 @@ An agent that truly accompanies a long-lived project should not only have a long
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
 
-The current release is **1.5.1**. This release adds document organization to portable Stores: external knowledge bases can now create project folders, rename documents, and move one or many documents just like the default knowledge base does, with `store_root` supplied in the request body. It also fixes two defects — the document import pipeline had lost its `DocumentImportError` import and degraded into `NameError`, and Kemo request identifiers had roughly a six-in-ten chance of starting with a digit and being rejected by the gateway with HTTP 400, which silently downgraded query planning to the raw query. On the web side, runtime logs became a terminal-style stream, the settings page gained version detection, and the log date filter now uses the in-house date picker. Project folders, the build-status page, query progress and the bounded read cache are unchanged.
+The current release is **1.6.0**. This release adds a unified knowledge-text sanitizer to the document normalization layer: images, Data URIs, Base64 binary payloads, scripts, and styles produced by DOCX, HTML, and other converters no longer enter graph or vector processing, while readable image descriptions are preserved. The Graph/RAG source-reading boundary also defensively cleans legacy Markdown containing binary residue. The portable-Store organization, import-error fix, Kemo request-ID fix, terminal-style runtime logs, and version detection from 1.5.1 remain unchanged.
 
-See [CHANGELOG.md](CHANGELOG.md) for the release summary, upgrade notes and verification commands. The root `version.json` is the application-version source; frontend and converter-package release metadata share the same version. The Kemo protocol remains 1.0 and HTTP routes remain under `/api/v1`.
+See [CHANGELOG.md](CHANGELOG.md) for the release summary, upgrade notes and verification commands. The root `version.json` is the application-version source; frontend and converter-package release metadata share the same version. This release includes the Kemo 2.0 Provider adaptation and keeps kemo-graph's own HTTP routes under `/api/v1`.
 
 Still being polished: conversion quality for complex document layouts, storage and index strategy for large knowledge bases and high concurrency, built-in authentication and permission tiers for the external API, and richer manual graph correction and provenance review interfaces.
 

@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.5.1-00a98f" alt="version 1.5.1"></a>
+  <a href="version.json"><img src="https://img.shields.io/badge/version-1.6.0-00a98f" alt="version 1.6.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -289,9 +289,9 @@ kemo-graph 不试图成为替代所有文件管理、所有数据库或所有搜
 
 核心闭环已经可以实际运行：统一导入、增量更新、图谱与向量检索、混合问答、安全删除、定时维护，以及本地 Web、CLI、HTTP API 三个入口和面向 kemo-agent 等智能体的外部知识服务接口。
 
-当前版本为 **1.5.1**。本次更新补齐了独立 Store 的文档组织能力：外部知识库现在与默认知识库一样可以创建项目文件夹、重命名、单篇移动与批量移动，`store_root` 在请求体中指定。同时修复了两处缺陷：文档导入的异常处理因缺少 `DocumentImportError` 导入而退化为 `NameError`，以及 Kemo 请求标识符约有六成概率以数字开头而被网关以 400 拒绝、使查询规划静默退化为原始查询。网页端运行日志改为终端流风格，系统配置页新增版本检测，运行日志的日期筛选改用站内自研选择器。此前的项目文件夹、构建状态页、检索进度与内存读取缓存等能力保持不变。
+当前版本为 **1.6.0**。本次更新在文档归一化层增加统一的知识文本净化：DOCX、HTML 及其他格式转换结果中的图片、Data URI、Base64 二进制、脚本和样式不会再进入图谱与向量化流程，同时保留图片说明等可读文本；Graph/RAG 读取入口也增加了历史脏 Markdown 的防御性清理。此前 1.5.1 的独立 Store 文档组织、导入异常修复、Kemo 请求标识符修复、网页运行日志和版本检测能力保持不变。
 
-完整更新摘要、升级注意事项与发布验证命令见 [CHANGELOG.md](CHANGELOG.md)。应用版本以根目录 `version.json` 为准，前端包和转换层包的发布元数据同步为同一版本；Kemo 协议仍为 1.0，HTTP 路径仍为 `/api/v1`。
+完整更新摘要、升级注意事项与发布验证命令见 [CHANGELOG.md](CHANGELOG.md)。应用版本以根目录 `version.json` 为准，前端包和转换层包的发布元数据同步为同一版本；本版本已完成 Kemo 2.0 Provider 适配，继续使用 `/api/v1` 的项目 HTTP API 路径。
 
 仍在持续打磨：复杂文档版式的转换质量、大知识库与高并发下的存储与索引策略、外部 API 的内建鉴权与权限分层、更丰富的图谱人工校正与来源审查界面。
 
