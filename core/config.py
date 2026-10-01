@@ -57,7 +57,7 @@ class KemoConfig(BaseModel):
     base_url: str = "http://127.0.0.1:7531"
     api_key: str = Field(default="", repr=False)
     api_key_env: str = "KEMO_API_KEY"
-    protocol_version: str = "1.0"
+    protocol_version: str = "2.0"
     request_timeout: int = Field(default=900, ge=60, le=3600)
 
     @field_validator("api_key")
@@ -68,9 +68,11 @@ class KemoConfig(BaseModel):
     @field_validator("protocol_version")
     @classmethod
     def validate_protocol_version(cls, value: str) -> str:
-        if value != "1.0":
-            raise ValueError("kemo.protocol_version 仅支持 1.0")
-        return value
+        # Existing 1.0 config files are upgraded in memory.  The provider
+        # always emits the current Kemo 2.0 wire contract after migration.
+        if value not in {"1.0", "2.0"}:
+            raise ValueError("kemo.protocol_version 仅支持 2.0")
+        return "2.0"
 
 
 class ModelSelectionConfig(BaseModel):
