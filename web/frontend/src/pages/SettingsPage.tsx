@@ -162,7 +162,7 @@ const groups: ConfigGroup[] = [
           { path: "kemo.api_key", label: "API Key", description: "显式密钥优先使用；已配置时显示掩码，清空并保存可回退到环境变量。", kind: "password", optional: true, placeholder: "未设置显式密钥" },
           { path: "kemo.api_key_env", label: "API Key 环境变量", description: "显式密钥为空时，从此环境变量读取密钥。", kind: "text" },
           { path: "kemo.api_key_source", label: "当前密钥来源", description: "由服务端根据实际可用密钥计算，只读显示。", kind: "text", readOnly: true },
-          { path: "kemo.protocol_version", label: "协议版本", description: "当前网关严格使用 Kemo 1.0 协议，只读显示。", kind: "text", readOnly: true },
+          { path: "kemo.protocol_version", label: "协议版本", description: "当前网关严格使用 Kemo 2.0 协议，只读显示。", kind: "text", readOnly: true },
           { path: "kemo.request_timeout", label: "请求超时", description: "单次 Kemo 模型请求的最长等待时间。", kind: "number", min: 1, step: 1, suffix: "秒" },
         ],
       },
