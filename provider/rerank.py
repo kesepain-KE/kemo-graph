@@ -1,4 +1,4 @@
-"""Rerank API 兼容层和七天本地缓存。"""
+"""Kemo 2.0 Rerank API 兼容层和七天本地缓存。"""
 
 from __future__ import annotations
 

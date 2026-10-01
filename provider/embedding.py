@@ -1,4 +1,4 @@
-"""kemo Embedding 协议适配和向量完整性校验。"""
+"""Kemo 2.0 Embedding 协议适配和向量完整性校验。"""
 
 from __future__ import annotations
 
@@ -87,6 +87,7 @@ def embed(
             ],
             "dimensions": active_settings.models.embedding_dimensions,
             "normalize": True,
+            "truncate": "none",
         }
         response = request_json(
             "POST",

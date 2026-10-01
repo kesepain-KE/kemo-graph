@@ -1,4 +1,4 @@
-"""基于 kemo 1.0 协议的 LLM 与工具调用入口。"""
+"""基于 Kemo 2.0 协议的 LLM、结构化输出与工具调用入口。"""
 
 from __future__ import annotations
 
@@ -115,6 +115,7 @@ def chat_with_tools(
     input_items: list[dict[str, Any]] = [_user_message_item(user)]
     parent_request_id: str | None = None
     for _ in range(iteration_limit):
+        request_id = f"req_{uuid4().hex}"
         request_attempt = 1
         while True:
             try:
@@ -125,6 +126,7 @@ def chat_with_tools(
                     tools=tools,
                     parent_request_id=parent_request_id,
                     parallel_tool_calls=parallel_tool_calls,
+                    request_id=request_id,
                     attempt=request_attempt,
                 )
                 tool_calls = _extract_tool_calls(response, provider)
@@ -161,10 +163,7 @@ def chat_structured(
     settings: AppConfig | None = None,
     tool_name: str = "submit_structured_output",
 ) -> dict[str, Any]:
-    """用 Kemo 内部结构化输出工具执行一次请求并返回参数对象。
-
-    该工具只承载最终结果，不执行工具、不追加 tool_result，也不产生第二轮模型请求。
-    """
+    """使用 Kemo 2.0 ``structured_output`` 返回一个 JSON 对象。"""
 
     _validate_messages(system, user)
     if not isinstance(schema, dict) or schema.get("type") != "object":
@@ -172,41 +171,37 @@ def chat_structured(
     if not isinstance(tool_name, str) or not tool_name.strip():
         raise ValueError("tool_name 不能为空")
     active_settings = settings or load_config()
-    tool = {
-        "type": "function",
-        "name": tool_name.strip(),
-        "description": "提交符合输出 Schema 的最终结构化结果。",
-        "parameters": deepcopy(schema),
-        "strict": True,
-        "permission": "write",
-        "metadata": {"purpose": "structured_output"},
-        "extensions": {},
-    }
     response = _send_response_request(
         system_prompt=system,
         input_items=[_user_message_item(user)],
         settings=active_settings,
         model=model,
-        tools=[tool],
+        structured_output={
+            "type": "json_schema",
+            "schema_name": tool_name.strip(),
+            "schema": deepcopy(schema),
+            "strict": True,
+        },
     )
-    calls = _extract_tool_calls(response, "kemo")
-    if len(calls) != 1:
+    content = _extract_text(response, "kemo")
+    normalized_content = content.strip()
+    if normalized_content.startswith("```") and normalized_content.endswith("```"):
+        normalized_content = normalized_content[3:-3].strip()
+        if normalized_content.casefold().startswith("json"):
+            normalized_content = normalized_content[4:].lstrip()
+    try:
+        parsed = json.loads(normalized_content)
+    except json.JSONDecodeError as exc:
         raise ProviderResponseError(
-            "kemo 结构化输出必须且只能返回一个工具调用",
+            "kemo 结构化输出不是合法 JSON",
+            provider="kemo",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ProviderResponseError(
+            "kemo 结构化输出必须是 JSON 对象",
             provider="kemo",
         )
-    call = calls[0]
-    if call.name != tool_name:
-        raise ProviderResponseError(
-            f"kemo 结构化输出工具名错误：期望 {tool_name}，实际 {call.name}",
-            provider="kemo",
-        )
-    if not call.arguments:
-        raise ProviderResponseError(
-            "kemo 结构化输出参数不能为空",
-            provider="kemo",
-        )
-    return call.arguments
+    return parsed
 
 
 def supports_structured_output(
@@ -242,10 +237,19 @@ def supports_structured_output(
             "kemo 模型能力响应必须是对象",
             provider="kemo",
         )
-    supported = response.get("structured_output") is True
-    tools = response.get("tools")
-    if isinstance(tools, dict):
-        supported = supported and tools.get("function_calling") is True
+    structured = response.get("structured_output")
+    if isinstance(structured, dict):
+        supported = (
+            structured.get("supported") is True
+            and structured.get("strict") is True
+        )
+    else:
+        # Keep accepting the legacy boolean shape while a mixed gateway fleet
+        # is being drained; outgoing requests are always Kemo 2.0.
+        supported = structured is True
+    # Structured output is a distinct Kemo 2.0 capability.  Function calling
+    # alone is not enough because ``chat_structured`` now uses the native
+    # structured_output field instead of a synthetic tool.
     with _CAPABILITY_CACHE_LOCK:
         _CAPABILITY_CACHE[cache_key] = (
             supported,
@@ -268,14 +272,16 @@ def _send_response_request(
     settings: AppConfig,
     model: str | None = None,
     tools: list[dict[str, Any]] | None = None,
+    structured_output: dict[str, Any] | None = None,
     parent_request_id: str | None = None,
     parallel_tool_calls: bool = False,
+    request_id: str | None = None,
     attempt: int = 1,
 ) -> Any:
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         raise ValueError("attempt 必须是大于等于 1 的整数")
     api_key = get_api_key(settings.kemo)
-    headers = kemo_headers(api_key)
+    headers = kemo_headers(api_key, request_id=request_id)
     payload: dict[str, Any] = {
         "protocol_version": settings.kemo.protocol_version,
         "request_id": headers["X-Request-ID"],
@@ -283,8 +289,9 @@ def _send_response_request(
         "model": model or settings.models.llm,
         "stream": False,
         "system_prompt": system_prompt,
+        "parallel_tool_calls": parallel_tool_calls,
         "reasoning": None,
-        "generation": {"parallel_tool_calls": parallel_tool_calls},
+        "generation": {},
         "output": {"modalities": ["text"]},
         "tools": tools or [],
         "input": input_items,
@@ -292,6 +299,8 @@ def _send_response_request(
         "metadata": {"capability": "conversation"},
         "extensions": {},
     }
+    if structured_output is not None:
+        payload["structured_output"] = structured_output
     if parent_request_id:
         payload["parent_request_id"] = parent_request_id
     return request_json(
@@ -334,13 +343,11 @@ def _is_retryable_provider_error(error: ProviderError) -> bool:
 
 def _user_message_item(user: str) -> dict[str, Any]:
     return {
-        "id": f"user-{uuid4().hex}",
+        "id": f"msg_{uuid4().hex}",
         "type": "message",
         "role": "user",
         "status": "completed",
         "content": [{"type": "text", "text": user}],
-        "metadata": {},
-        "extensions": {},
     }
 
 
@@ -349,15 +356,13 @@ def _tool_result_item(
     execution: _ToolExecution,
 ) -> dict[str, Any]:
     return {
-        "id": f"result-{uuid4().hex}",
+        "id": f"result_{uuid4().hex}",
         "type": "tool_result",
         "status": "completed",
         "call_id": call.call_id,
         "name": call.name,
         "is_error": execution.is_error,
         "content": [{"type": "text", "text": execution.content}],
-        "metadata": {},
-        "extensions": {},
     }
 
 
@@ -369,6 +374,7 @@ def _response_input_items(response: Any, provider: str) -> list[dict[str, Any]]:
         )
     items: list[dict[str, Any]] = []
     id_map: dict[str, str] = {}
+    call_id_map: dict[str, str] = {}
     for item in response["output"]:
         if not isinstance(item, dict):
             raise ProviderResponseError(
@@ -382,9 +388,26 @@ def _response_input_items(response: Any, provider: str) -> list[dict[str, Any]]:
                 f"{provider} LLM output 项缺少 id",
                 provider=provider,
             )
-        new_id = f"history-{uuid4().hex}"
+        item_type = copied.get("type")
+        id_prefix = {
+            "message": "msg_",
+            "reasoning": "rs_",
+            "tool_call": "call_",
+            "tool_result": "result_",
+        }.get(item_type, "item_")
+        new_id = f"{id_prefix}{uuid4().hex}"
         id_map[old_id] = new_id
         copied["id"] = new_id
+        if item_type in {"tool_call", "tool_result"}:
+            old_call_id = copied.get("call_id")
+            if isinstance(old_call_id, str) and old_call_id.strip():
+                new_call_id = call_id_map.setdefault(
+                    old_call_id,
+                    old_call_id
+                    if old_call_id.startswith("callid_")
+                    else f"callid_{uuid4().hex}",
+                )
+                copied["call_id"] = new_call_id
         items.append(copied)
     for item in items:
         _remap_reference_targets(item, id_map)
@@ -460,6 +483,8 @@ def _parse_tool_call(item: Any, provider: str) -> _ToolCall:
             f"{provider} LLM 工具调用缺少 call_id",
             provider=provider,
         )
+    if not call_id.startswith("callid_"):
+        call_id = f"callid_{uuid4().hex}"
     if not isinstance(name, str) or not name.strip():
         raise ProviderResponseError(
             f"{provider} LLM 工具调用缺少 name",
