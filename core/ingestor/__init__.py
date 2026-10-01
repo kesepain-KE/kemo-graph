@@ -12,6 +12,7 @@ import numpy as np
 
 from provider.embedding import EmbeddingResult, embed
 from provider.engine import chat_structured, chat_with_tools, supports_structured_output
+from markitdown._utils import sanitize_knowledge_markdown
 
 from ..config import AppConfig, PROJECT_ROOT, load_config
 from ..db import (
@@ -361,7 +362,7 @@ class Ingestor:
             raise SourceChangedDuringIngest(
                 f"文档在扫描后再次变化，已保持 pending：{record.relative_path}"
             )
-        return text
+        return sanitize_knowledge_markdown(text)
 
     def _register_concurrent_change(self, source_id: str, content_hash: str) -> None:
         connection = connect_sources(self.paths)

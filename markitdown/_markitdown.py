@@ -10,7 +10,7 @@ from typing import BinaryIO, Iterable
 from ._base_converter import DocumentConverter, DocumentConverterResult
 from ._exceptions import DocumentTooLargeError, UnsupportedFormatError
 from ._stream_info import StreamInfo
-from ._utils import validate_local_path
+from ._utils import sanitize_knowledge_markdown, validate_local_path
 from .converters import default_converters
 
 
@@ -74,20 +74,21 @@ class MarkItDown:
         for converter in candidates:
             try:
                 result = converter.convert(source, info)
-                if not result.text_content.strip():
+                clean_text = sanitize_knowledge_markdown(
+                    result.text_content or result.markdown or ""
+                )
+                result.text_content = clean_text
+                result.markdown = clean_text
+                if not clean_text.strip():
                     raise ValueError("转换结果为空")
                 if (
                     self.max_output_chars > 0
-                    and len(result.text_content) > self.max_output_chars
+                    and len(clean_text) > self.max_output_chars
                 ):
                     raise DocumentTooLargeError(
-                        f"转换结果超过大小上限：{len(result.text_content)} 字符 > "
+                        f"转换结果超过大小上限：{len(clean_text)} 字符 > "
                         f"{self.max_output_chars} 字符：{source}"
                     )
-                if result.markdown is None:
-                    result.markdown = result.text_content
-                if not result.text_content:
-                    result.text_content = result.markdown
                 return result
             except Exception as exc:
                 last_error = exc

@@ -16,6 +16,7 @@ from ._exceptions import (
     MissingOptionalDependencyError,
     UnsafeInputError,
 )
+from ._sanitizer import sanitize_knowledge_markdown
 
 
 def optional_import(module: str, package: str, format_name: str):
@@ -241,6 +242,7 @@ def finalize_markdown(markdown: str, source: Path) -> str:
     text = "".join(
         char for char in text if unicodedata.category(char) != "Cc" or char in "\n\t"
     )
+    text = sanitize_knowledge_markdown(text)
     lines = [line.rstrip() for line in text.split("\n")]
     text = "\n".join(lines)
     text = re.sub(r"\n{4,}", "\n\n\n", text).strip()
@@ -330,6 +332,7 @@ __all__ = [
     "optional_import",
     "read_text",
     "repeated_pdf_edge_lines",
+    "sanitize_knowledge_markdown",
     "spreadsheet_value",
     "title_from_path",
     "trim_trailing_empty",
