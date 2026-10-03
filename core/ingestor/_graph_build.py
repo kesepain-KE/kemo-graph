@@ -346,6 +346,11 @@ def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
                         tool_handler=tool_handler,
                         settings=self.settings,
                         max_iterations=self.settings.graph_tool_max_iterations,
+                        # Graph extraction uses the Kemo model's parallel tool
+                        # contract.  The handler still applies each returned
+                        # call in order so budget checks and SQLite writes
+                        # remain deterministic within the transaction.
+                        parallel_tool_calls=True,
                     )
                 except Exception:
                     self._log_event(

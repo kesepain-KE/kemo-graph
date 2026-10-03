@@ -115,6 +115,12 @@ class GraphExtractionGranularityTests(unittest.TestCase):
                     for call in chat.call_args_list
                 )
             )
+            self.assertTrue(
+                all(
+                    call.kwargs["parallel_tool_calls"] is True
+                    for call in chat.call_args_list
+                )
+            )
 
     def test_structured_mode_receives_coarse_budget_schema_and_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
