@@ -12,7 +12,7 @@ export function PageIntro({
   return (
     <div className="page-intro">
       <div>
-        <h2>{title}</h2>
+        <h1>{title}</h1>
         {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}

@@ -7,6 +7,8 @@ import {
   History,
   LoaderCircle,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings2,
   XCircle,
@@ -14,6 +16,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
+import { version } from "../../package.json";
 import { api } from "../api/api";
 import { useRuntimeTasks, type RuntimeTask } from "../context/RuntimeTasksContext";
 import { useSearchSession } from "../context/SearchSessionContext";
@@ -27,13 +30,13 @@ const navItems = [
   { to: "/status", label: "运行状态", icon: Activity },
 ];
 
-const pageMeta: Record<string, { title: string; eyebrow: string }> = {
-  "/documents": { title: "文档管理", eyebrow: "Sources / Ingest" },
-  "/build-status": { title: "构建状态", eyebrow: "Build / Graph / RAG" },
-  "/graph": { title: "知识图谱", eyebrow: "Explore / Visualize" },
-  "/search": { title: "知识检索", eyebrow: "Graph / RAG / Hybrid" },
-  "/settings": { title: "系统配置", eyebrow: "Runtime / Providers" },
-  "/status": { title: "运行状态", eyebrow: "Health / Metrics" },
+const pageMeta: Record<string, { title: string }> = {
+  "/documents": { title: "文档管理" },
+  "/build-status": { title: "构建状态" },
+  "/graph": { title: "知识图谱" },
+  "/search": { title: "知识检索" },
+  "/settings": { title: "系统配置" },
+  "/status": { title: "运行状态" },
 };
 
 function BrandMark() {
@@ -81,6 +84,7 @@ export function AppShell() {
     "checking",
   );
   const [taskPanelOpen, setTaskPanelOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const taskCenterRef = useRef<HTMLDivElement>(null);
   const { tasks, activeTasks, clearFinished } = useRuntimeTasks();
   const { loading: searchLoading, query: searchQuery, error: searchError } = useSearchSession();
@@ -119,23 +123,33 @@ export function AppShell() {
   }, [taskPanelOpen]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
       <aside className="nav-rail">
-        <NavLink className="brand" to="/graph" aria-label="kemo-graph 首页">
-          <BrandMark />
-          <span className="brand-name">
-            <strong>kemo-graph</strong>
-            <small>Knowledge Base</small>
-          </span>
-        </NavLink>
+        <div className="sidebar-header">
+          <NavLink className="brand" to="/graph" aria-label="kemo-graph 首页">
+            <BrandMark />
+            <span className="brand-name">
+              <strong>Kemo Graph</strong>
+              <small>v{version} · Kemo 2.0</small>
+            </span>
+          </NavLink>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+            aria-expanded={!sidebarCollapsed}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
+        </div>
 
         <nav className="nav-links" aria-label="主导航">
-          <span className="nav-heading">Navigation</span>
           {navItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
-              className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""}`}
+              className={({ isActive }) => `nav-link ${isActive ? "is-active" : ""} ${to === "/settings" ? "nav-link--separated" : ""}`}
               aria-label={label}
               title={label}
             >
@@ -144,15 +158,14 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
-
+        <div className="sidebar-footer"><Network size={15} /><span>本地知识工作台</span></div>
       </aside>
 
-      <div className={`app-workspace ${location.pathname === "/settings" ? "is-settings" : ""} ${location.pathname === "/documents" ? "is-documents" : ""}`}>
+      <div className={`app-workspace ${location.pathname === "/settings" ? "is-settings" : ""} ${location.pathname === "/documents" ? "is-documents" : ""} ${location.pathname === "/graph" ? "is-graph" : ""}`}>
         <header className="topbar">
-          <div>
-            <p className="eyebrow">{meta.eyebrow}</p>
-            <h1>{meta.title}</h1>
-          </div>
+          <nav className="breadcrumb" aria-label="当前位置">
+            <span>Kemo Graph</span><span aria-hidden="true">/</span><strong>{meta.title}</strong>
+          </nav>
           <div className="topbar-actions">
             <div className="runtime-task-center" ref={taskCenterRef}>
               <button

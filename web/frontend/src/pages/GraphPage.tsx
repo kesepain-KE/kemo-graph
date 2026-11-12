@@ -868,7 +868,7 @@ export function GraphPage() {
   return (
     <section className="graph-page page-stack">
       <PageIntro
-        title="探索知识之间的连接"
+        title="知识图谱"
         actions={
           <>
             <button className="button button--secondary" type="button" onClick={loadGraph} disabled={loading}>

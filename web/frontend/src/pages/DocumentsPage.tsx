@@ -407,8 +407,8 @@ export function DocumentsPage() {
   return (
     <section className="documents-page page-stack">
       <PageIntro
-        title="整理你的知识来源"
-        description="按项目管理文档，支持重命名、移动和 Markdown 编辑；只有正文变化才需要手动重建索引。"
+        title="文档管理"
+        description="管理知识来源与 Markdown 文档，正文修改后可手动重建索引。"
         actions={
           <>
             <input ref={inputRef} hidden multiple type="file" accept=".pdf,.docx,.pptx,.xlsx,.xlsm,.xls,.epub,.rtf,.md,.markdown,.txt,.log,.html,.htm,.rst,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.xml" onChange={(event) => void handleFiles(event.target.files)} />
@@ -469,7 +469,7 @@ export function DocumentsPage() {
               <article className={`document-card ${selectedId === document.source_id ? "is-active" : ""}`} key={document.source_id}>
                 <label className="document-card__check" title="勾选文档"><input type="checkbox" checked={checkedIds.has(document.source_id)} onChange={() => toggleChecked(document.source_id)} /><span /></label>
                 <button className="document-card__select" onClick={() => selectDocument(document.source_id)}>
-                  <span className="document-icon">MD</span>
+                  <span className="document-icon" aria-hidden="true"><FileText size={21} /></span>
                   <span className="document-card__body"><strong title={document.relative_path}>{document.relative_path}</strong><small>{document.updated_at ? new Date(document.updated_at).toLocaleString() : "更新时间未知"}</small><span className="document-row__statuses"><StatusBadge status={document.graph_status} label={`Graph · ${statusText(document.graph_status)}`} /><StatusBadge status={document.rag_status} label={`RAG · ${statusText(document.rag_status)}`} /></span></span>
                 </button>
               </article>

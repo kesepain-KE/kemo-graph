@@ -509,10 +509,8 @@ export function SearchPage() {
   return (
     <section className="search-page page-stack">
       <div className="search-hero">
-        <div className="search-orbit" aria-hidden="true"><Sparkles size={22} /></div>
-        <p className="eyebrow">Local-first knowledge retrieval</p>
-        <h2>从你的知识网络中找到答案</h2>
-        <p>用自然语言提问，查找文档依据与知识关系。想直接获得回答，可使用默认的 LLM 回答模式。</p>
+        <h1>知识检索</h1>
+        <p>用自然语言查找原文、探索知识关系，或基于检索证据生成回答。</p>
 
         <form className="hero-search" onSubmit={(event) => void runSearch(event)}>
           <Search size={21} />

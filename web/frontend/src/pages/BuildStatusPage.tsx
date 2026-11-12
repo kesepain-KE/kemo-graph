@@ -67,7 +67,7 @@ export function BuildStatusPage() {
   useEffect(() => setPage((value) => Math.min(value, totalPages)), [totalPages]);
 
   return <section className="build-status-page page-stack">
-    <PageIntro title="图谱与向量构建状态" description="集中查看各文档的 Graph / RAG 构建结果。筛选不会启动或中断构建；上传、编辑及手动重建仍在文档管理中操作。"
+    <PageIntro title="构建状态" description="查看文档的 Graph 与 RAG 构建结果；筛选不会启动或中断构建。"
       actions={<><Link className="button button--secondary" to="/documents"><FileText size={16} />文档管理</Link><button type="button" className="button button--secondary" disabled={loading} onClick={() => setRevision((value) => value + 1)}><RefreshCw size={16} className={loading ? "spin" : ""} />刷新状态</button></>} />
     {error && <ErrorNotice message={`${error}${updatedAt ? "；保留上次成功读取的状态。" : ""}`} />}
     <div className="build-status-summaries">
@@ -91,7 +91,7 @@ export function BuildStatusPage() {
         {loading && !updatedAt ? <LoadingState label="正在读取构建状态…" /> : null}
         {!loading && !visible.length ? <div className="empty-compact"><FileText size={26} /><strong>{error ? "暂时无法读取状态" : "没有匹配的文档"}</strong><span>{error ? "请检查服务连接后刷新。" : "可调整文件名和状态筛选，或前往文档管理导入资料。"}</span></div> : null}
         {pageDocuments.map((item) => <article className="build-status-row" key={item.source_id}>
-          <span className="document-icon">MD</span><div><strong title={item.relative_path}>{item.relative_path}</strong><small>{item.updated_at ? `更新于 ${new Date(item.updated_at).toLocaleString()}` : "更新时间未知"}</small></div>
+          <span className="document-icon" aria-hidden="true"><FileText size={21} /></span><div><strong title={item.relative_path}>{item.relative_path}</strong><small>{item.updated_at ? `更新于 ${new Date(item.updated_at).toLocaleString()}` : "更新时间未知"}</small></div>
           <div className="document-row__statuses"><span className={`status-badge is-${item.graph_status}`}>Graph · {BUILD_STATUS_LABELS[item.graph_status]}</span><span className={`status-badge is-${item.rag_status}`}>RAG · {BUILD_STATUS_LABELS[item.rag_status]}</span></div>
         </article>)}
       </div>

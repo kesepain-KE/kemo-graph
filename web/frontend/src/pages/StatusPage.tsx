@@ -84,7 +84,7 @@ export function StatusPage() {
   return (
     <section className="status-page page-stack">
       <PageIntro
-        title="知识库运行概览"
+        title="运行状态"
         description="检查知识库健康与整理记录，按标签查看终端启动、查询和内部运行日志。"
         actions={<button className="button button--secondary" onClick={load} disabled={loading}><RefreshCw className={loading ? "spin" : ""} size={16} />刷新状态</button>}
       />

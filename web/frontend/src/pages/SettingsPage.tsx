@@ -500,7 +500,7 @@ export function SettingsPage() {
   return (
     <section className="settings-page page-stack">
       <PageIntro
-        title="配置"
+        title="系统配置"
         description="通过结构化字段管理图谱、RAG、Kemo 网关、模型与系统维护参数。"
         actions={
           <button className="button button--secondary" disabled={loading || saving} onClick={() => void loadConfig()}>
