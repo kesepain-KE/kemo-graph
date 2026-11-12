@@ -8,7 +8,6 @@ import {
   LoaderCircle,
   Network,
   PanelLeftClose,
-  PanelLeftOpen,
   Search,
   Settings2,
   XCircle,
@@ -22,7 +21,7 @@ import { useRuntimeTasks, type RuntimeTask } from "../context/RuntimeTasksContex
 import { useSearchSession } from "../context/SearchSessionContext";
 
 const navItems = [
-  { to: "/documents", label: "文档管理", icon: FileText },
+  { to: "/documents", label: "知识库", icon: FileText },
   { to: "/build-status", label: "构建状态", icon: ListChecks },
   { to: "/graph", label: "知识图谱", icon: Network },
   { to: "/search", label: "知识检索", icon: Search },
@@ -31,7 +30,7 @@ const navItems = [
 ];
 
 const pageMeta: Record<string, { title: string }> = {
-  "/documents": { title: "文档管理" },
+  "/documents": { title: "知识库" },
   "/build-status": { title: "构建状态" },
   "/graph": { title: "知识图谱" },
   "/search": { title: "知识检索" },
@@ -126,22 +125,25 @@ export function AppShell() {
     <div className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
       <aside className="nav-rail">
         <div className="sidebar-header">
+          {sidebarCollapsed ? <button className="brand brand--expand" type="button"
+            aria-label="展开侧边栏" aria-expanded={false} title="展开侧边栏"
+            onClick={() => setSidebarCollapsed(false)}><BrandMark /></button> :
           <NavLink className="brand" to="/graph" aria-label="kemo-graph 首页">
             <BrandMark />
             <span className="brand-name">
               <strong>Kemo Graph</strong>
               <small>v{version} · Kemo 2.0</small>
             </span>
-          </NavLink>
-          <button
+          </NavLink>}
+          {!sidebarCollapsed && <button
             className="sidebar-toggle"
             type="button"
-            aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            aria-expanded={!sidebarCollapsed}
-            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            aria-label="收起侧边栏"
+            aria-expanded={true}
+            onClick={() => setSidebarCollapsed(true)}
           >
-            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-          </button>
+            <PanelLeftClose size={17} />
+          </button>}
         </div>
 
         <nav className="nav-links" aria-label="主导航">

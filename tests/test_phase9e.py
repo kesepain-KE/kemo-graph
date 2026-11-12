@@ -169,7 +169,8 @@ class DocumentImportTests(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(mapping["mappings"][0]["original_path"], str(source.resolve()))
+            self.assertEqual(mapping["mappings"][0]["original_path"], imported["original_path"])
+            self.assertEqual(Path(imported["original_path"]).read_bytes(), original)
 
     def test_subjectless_eml_keeps_original_filename_as_fallback_title(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -416,6 +417,7 @@ class DocumentImportTests(unittest.TestCase):
                 ingest_mock.assert_not_called()
             self.assertEqual(pending["ingest_status"], "pending")
 
+            source = Path(pending["original_path"])
             source.write_text("# Document updated", encoding="utf-8")
             with patch(
                 "core.knowledge_base.Ingestor.ingest",

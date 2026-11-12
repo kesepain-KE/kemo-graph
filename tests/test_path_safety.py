@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.config import AppConfig
-from core.document_organization import project_directory
+from core.library import create_entry, original_root, resolve_path, relocate_entry
 from core.ingestor import IngestError
 from core.ingestor._delete import _move_source_to_recycle
 from core.knowledge_base import DocumentContentConflictError, KnowledgeBaseService
@@ -53,33 +53,31 @@ def recycle(request, tmp_path: Path):
     return lambda name: request.param(owner, name)
 
 
-def test_project_directory_accepts_plain_directories(service: KnowledgeBaseService) -> None:
-    service.create_project("plain")
-    assert project_directory(service, "plain") == service.external_dir.resolve() / "plain"
-    assert project_directory(service, "") == service.external_dir.resolve()
+def test_resolve_path_accepts_plain_directories(service: KnowledgeBaseService) -> None:
+    create_entry(service, "", "plain", "directory")
+    assert resolve_path(service, "plain") == original_root(service) / "plain"
+    assert resolve_path(service, "") == original_root(service)
 
 
-def test_project_directory_rejects_symlinked_project(service: KnowledgeBaseService, tmp_path: Path) -> None:
+def test_resolve_path_rejects_symlinked_project(service: KnowledgeBaseService, tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "doc.md").write_text("outside the knowledge base", encoding="utf-8")
-    service.external_dir.mkdir(parents=True, exist_ok=True)
-    _symlink(service.external_dir / "linked", outside, directory=True)
+    original_root(service).mkdir(parents=True, exist_ok=True)
+    _symlink(original_root(service) / "linked", outside, directory=True)
 
-    with pytest.raises(ValueError, match="不安全"):
-        project_directory(service, "linked")
+    with pytest.raises(ValueError):
+        resolve_path(service, "linked")
 
 
 def test_relocate_refuses_symlinked_target_file(service: KnowledgeBaseService, tmp_path: Path) -> None:
     document = _imported(service, tmp_path)
     outside = tmp_path / "outside.md"
     outside.write_text("protected content", encoding="utf-8")
-    _symlink(service.external_dir / "linked.md", outside)
+    _symlink(original_root(service) / "linked.md", outside)
 
-    with pytest.raises(DocumentContentConflictError):
-        service.relocate_documents(
-            [{"source_id": document["source_id"], "filename": "linked.md"}]
-        )
+    with pytest.raises((ValueError, DocumentContentConflictError)):
+        relocate_entry(service, document["source_path"], "linked.md")
 
     # 外部目标未被跟随写入，原文档也仍在原处。
     assert outside.read_text(encoding="utf-8") == "protected content"
@@ -90,13 +88,11 @@ def test_relocate_refuses_symlinked_project_target(service: KnowledgeBaseService
     document = _imported(service, tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
-    service.external_dir.mkdir(parents=True, exist_ok=True)
-    _symlink(service.external_dir / "linked", outside, directory=True)
+    original_root(service).mkdir(parents=True, exist_ok=True)
+    _symlink(original_root(service) / "linked", outside, directory=True)
 
-    with pytest.raises(ValueError, match="不安全"):
-        service.relocate_documents(
-            [{"source_id": document["source_id"], "project": "linked"}]
-        )
+    with pytest.raises(ValueError):
+        relocate_entry(service, document["source_path"], "linked/doc.txt")
 
     assert list(outside.iterdir()) == []
     assert (service.external_dir / document["markdown_relative_path"]).is_file()

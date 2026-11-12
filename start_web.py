@@ -155,9 +155,9 @@ def _mount_frontend(
             requested_path.relative_to(frontend_dist.resolve())
         except ValueError:
             requested_path = index_path
-        if requested_path.is_file():
+        if requested_path.is_file() and requested_path != index_path.resolve():
             return FileResponse(requested_path)
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
 
 
 def create_app(

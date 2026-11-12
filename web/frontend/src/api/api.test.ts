@@ -40,20 +40,19 @@ describe("management API", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/system/logs?category=query&date=2026-09-13&limit=200");
     expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
   });
-  it("creates projects, relocates documents and imports to an encoded project", async () => {
+  it("browses real directories, moves originals and imports into an encoded directory", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => response({}));
     vi.stubGlobal("fetch", fetchMock);
-    await api.getDocumentProjects();
-    await api.createDocumentProject("研究资料");
-    await api.renameDocument("s/1", "新名称.md", "old.md");
-    await api.moveDocuments(["s1", "s2"], "");
+    await api.getLibrary("研究资料/论文", "图谱");
+    await api.createLibraryEntry("研究资料", "论文", "directory");
+    await api.moveLibraryEntry("研究资料/old.docx", "研究资料/论文/new.docx");
     await api.importFile(new File(["text"], "a.txt"), false, "研究资料");
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "/api/v1/projects", "/api/v1/projects", "/api/v1/documents/s%2F1/location",
-      "/api/v1/documents/move-batch", `/api/v1/import?ingest=false&project=${encodeURIComponent("研究资料")}`,
+      `/api/v1/library?${new URLSearchParams({ directory: "研究资料/论文", search: "图谱" })}`,
+      "/api/v1/library/entries", "/api/v1/library/entries",
+      `/api/v1/import?ingest=false&directory=${encodeURIComponent("研究资料")}`,
     ]);
-    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ filename: "新名称.md", expected_relative_path: "old.md" });
-    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({ source_ids: ["s1", "s2"], project: "" });
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ path: "研究资料/old.docx", destination: "研究资料/论文/new.docx" });
   });
   it("loads documents and document content from the real endpoints", async () => {
     const fetchMock = vi
@@ -78,7 +77,7 @@ describe("management API", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("/api/v1/documents/s%2F1/content");
   });
 
-  it("sends document pagination, server filters and project-scoped deletion", async () => {
+  it("sends document pagination, server filters and directory-scoped deletion", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response({
@@ -96,7 +95,7 @@ describe("management API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.getDocuments(2, 6, "active", undefined, {
-      project: "研究资料",
+      directory: "研究资料",
       search: "画布 设计",
       graphStatus: "ready",
       ragStatus: "failed",
@@ -109,7 +108,7 @@ describe("management API", () => {
         page: "2",
         page_size: "6",
         status: "active",
-        project: "研究资料",
+        directory: "研究资料",
         search: "画布 设计",
         graph_status: "ready",
         rag_status: "failed",
@@ -117,7 +116,7 @@ describe("management API", () => {
       }).toString()}`,
     );
     expect(fetchMock.mock.calls[1][0]).toBe(
-      `/api/v1/documents?confirm=delete-all&project=${encodeURIComponent("研究资料")}`,
+      `/api/v1/documents?confirm=delete-all&directory=${encodeURIComponent("研究资料")}`,
     );
   });
 
@@ -196,7 +195,7 @@ describe("management API", () => {
     await api.importFile(file);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/api/v1/import?ingest=true");
+    expect(url).toBe("/api/v1/import?ingest=true&directory=");
     expect(init.body).toBeInstanceOf(FormData);
     expect(new Headers(init.headers).has("Content-Type")).toBe(false);
   });

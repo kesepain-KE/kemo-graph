@@ -16,6 +16,7 @@ SOURCES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
     source_id TEXT PRIMARY KEY,
     original_path TEXT NOT NULL,
+    library_path TEXT,
     relative_path TEXT NOT NULL,
     path_hash TEXT NOT NULL,
     content_hash TEXT NOT NULL,
@@ -372,12 +373,17 @@ def _ensure_source_origin_columns(path: Path) -> None:
             "origin_hash": "TEXT",
             "origin_size": "INTEGER",
             "origin_modified_at": "TEXT",
+            "library_path": "TEXT",
         }
         for name, declaration in additions.items():
             if name not in columns:
                 connection.execute(
                     f"ALTER TABLE sources ADD COLUMN {name} {declaration}"
                 )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_library_path "
+            "ON sources(library_path) WHERE library_path IS NOT NULL"
+        )
         connection.commit()
     except Exception:
         connection.rollback()

@@ -5,12 +5,23 @@ from api import app
 
 EXPECTED_OPENAPI_PATHS = {
     "/api/v1/config",
+    "/api/v1/library",
+    "/api/v1/library/entries",
+    "/api/v1/library/build",
+    "/api/v1/library/refresh",
+    "/api/v1/library/preview",
+    "/api/v1/library/original",
+    "/api/v1/documents/{source_id}/original",
+    "/api/v1/documents/{source_id}/source",
+    "/api/v1/stores/library/list",
+    "/api/v1/stores/library/create",
+    "/api/v1/stores/library/move",
+    "/api/v1/stores/library/delete",
+    "/api/v1/stores/library/refresh",
     "/api/v1/documents",
     "/api/v1/documents/delete-batch",
-    "/api/v1/documents/move-batch",
     "/api/v1/documents/{source_id}",
     "/api/v1/documents/{source_id}/content",
-    "/api/v1/documents/{source_id}/location",
     "/api/v1/graph",
     "/api/v1/graph/neighborhood/{node_id}",
     "/api/v1/graph/visualization/edges",
@@ -29,7 +40,6 @@ EXPECTED_OPENAPI_PATHS = {
     "/api/v1/maintenance/recycle",
     "/api/v1/maintenance/summarize",
     "/api/v1/nodes/{node_id}",
-    "/api/v1/projects",
     "/api/v1/query/answer",
     "/api/v1/query/global",
     "/api/v1/query/graph",
@@ -48,8 +58,6 @@ EXPECTED_OPENAPI_PATHS = {
     "/api/v1/stores/documents/delete-all",
     "/api/v1/stores/documents/delete-batch",
     "/api/v1/stores/documents/list",
-    "/api/v1/stores/documents/location",
-    "/api/v1/stores/documents/move-batch",
     "/api/v1/stores/documents/update",
     "/api/v1/stores/graph/full",
     "/api/v1/stores/graph/neighborhood",
@@ -70,8 +78,6 @@ EXPECTED_OPENAPI_PATHS = {
     "/api/v1/stores/maintenance/summarize",
     "/api/v1/stores/nodes/delete",
     "/api/v1/stores/nodes/get",
-    "/api/v1/stores/projects/create",
-    "/api/v1/stores/projects/list",
     "/api/v1/stores/query/answer",
     "/api/v1/stores/query/federated",
     "/api/v1/stores/query/global",
@@ -98,12 +104,9 @@ def test_openapi_path_count_and_key_paths() -> None:
     assert paths == EXPECTED_OPENAPI_PATHS
 
 
-def test_portable_document_organization_is_exposed() -> None:
+def test_old_project_organization_is_removed() -> None:
     paths = set(app.openapi()["paths"])
-    assert "/api/v1/stores/projects/list" in paths
-    assert "/api/v1/stores/projects/create" in paths
-    assert "/api/v1/stores/documents/location" in paths
-    assert "/api/v1/stores/documents/move-batch" in paths
+    assert not any("/projects" in path or "move-batch" in path for path in paths)
 
 
 def test_graph_full_is_compatibility_alias_only() -> None:

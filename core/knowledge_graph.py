@@ -692,6 +692,8 @@ class KnowledgeGraphMixin:
     ) -> dict[str, Any]:
         """重读新增、变化、删除和失败文档；未变化文档保持跳过。"""
 
+        from .library import build_paths
+        build_paths(self, "")
         return KnowledgeBaseRebuilder(
             self.data_dir,
             self.external_dir,
@@ -705,6 +707,8 @@ class KnowledgeGraphMixin:
     ) -> dict[str, Any]:
         """在影子目录重建 Graph、RAG、FAISS，验证后切换正式目录。"""
 
+        from .library import build_paths
+        build_paths(self, "")
         return KnowledgeBaseRebuilder(
             self.data_dir,
             self.external_dir,

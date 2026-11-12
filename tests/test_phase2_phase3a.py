@@ -928,7 +928,8 @@ class RAGEngineTests(unittest.TestCase):
             self.assertEqual(result["results"][0]["chunk_id"], "chunk-2")
             self.assertEqual(
                 result["results"][0]["source"],
-                {"source_id": "source-1", "relative_path": "notes.md"},
+                {"source_id": "source-1", "relative_path": "C:/docs/notes.md",
+                 "original_path": "C:/docs/notes.md", "source_path": None, "source_uri": None},
             )
             self.assertEqual(read_rag_meta(paths, settings)["total_vectors"], 2)
             self.assertEqual(

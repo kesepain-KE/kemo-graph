@@ -99,6 +99,7 @@ describe("GraphDataLoader", () => {
         documents: [{
           source_id: "source-2",
           relative_path: "markdown/two.md",
+          source_path: "notes/two.docx",
           graph_status: "ready",
           rag_status: "ready",
         }],
@@ -107,7 +108,7 @@ describe("GraphDataLoader", () => {
 
     await expect(loadGraphSourceLabels()).resolves.toEqual(new Map([
       ["source-1", "notes/one.pdf"],
-      ["source-2", "markdown/two.md"],
+      ["source-2", "notes/two.docx"],
     ]));
   });
 });

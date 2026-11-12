@@ -117,17 +117,12 @@ def _escape_like(value: str) -> str:
 def _document_filters(
     *,
     status: str | None,
-    project: str | None,
+    directory: str | None,
     search: str | None,
     graph_status: str | None = None,
     rag_status: str | None = None,
 ) -> tuple[str, list[str]]:
-    """Build a parameterized source-list WHERE clause.
-
-    ``project=""`` means root-level (unfiled) Markdown, while a named
-    project includes that folder and all nested paths.  ``/`` is accepted as
-    the Web sentinel for all projects.
-    """
+    """Filter source records by original-file directory and build status."""
 
     clauses: list[str] = []
     parameters: list[str] = []
@@ -141,27 +136,20 @@ def _document_filters(
     elif status == "active":
         clauses.append("exists_status = 'active'")
 
-    if project is not None and project != "/":
-        if not isinstance(project, str):
-            raise ValueError("project 必须是字符串")
-        normalized_project = project.strip()
-        if any(part in normalized_project for part in ("/", "\\", "..")):
-            raise ValueError("project 不能包含路径分隔符或路径遍历")
-        if normalized_project:
-            clauses.append(
-                "(relative_path = ? OR relative_path LIKE ? ESCAPE '\\')"
-            )
-            parameters.extend(
-                [normalized_project, f"{_escape_like(normalized_project)}/%"]
-            )
+    if directory is not None:
+        if not isinstance(directory, str) or "\\" in directory or ".." in Path(directory).parts:
+            raise ValueError("directory 必须是库内相对目录")
+        if directory:
+            clauses.append("library_path LIKE ? ESCAPE '\\'")
+            parameters.append(f"{_escape_like(directory.rstrip('/'))}/%")
         else:
-            clauses.append("relative_path NOT LIKE '%/%'")
+            clauses.append("library_path NOT LIKE '%/%'")
 
     if search is not None and not isinstance(search, str):
         raise ValueError("search 必须是字符串")
     if search is not None and search.strip():
         term = _escape_like(search.strip().casefold())
-        clauses.append("LOWER(relative_path) LIKE ? ESCAPE '\\'")
+        clauses.append("LOWER(COALESCE(library_path, original_path)) LIKE ? ESCAPE '\\'")
         parameters.append(f"%{term}%")
 
     for field, value, label in (
@@ -187,7 +175,7 @@ class KnowledgeDocumentsMixin:
         page: int = 1,
         page_size: int = 20,
         *,
-        project: str | None = None,
+        directory: str | None = None,
         search: str | None = None,
         graph_status: str | None = None,
         rag_status: str | None = None,
@@ -210,7 +198,7 @@ class KnowledgeDocumentsMixin:
         # never gets retained as a cache key.
         _document_filters(
             status=status,
-            project=project,
+            directory=directory,
             search=search,
             graph_status=graph_status,
             rag_status=rag_status,
@@ -224,14 +212,14 @@ class KnowledgeDocumentsMixin:
             status,
             page,
             page_size,
-            project,
+            directory,
             search,
             graph_status,
             rag_status,
             include_summary,
         )
         if (
-            project is None
+            directory is None
             and search is None
             and graph_status is None
             and rag_status is None
@@ -243,7 +231,7 @@ class KnowledgeDocumentsMixin:
                 status,
                 page,
                 page_size,
-                project=project,
+                directory=directory,
                 search=search,
                 graph_status=graph_status,
                 rag_status=rag_status,
@@ -262,7 +250,7 @@ class KnowledgeDocumentsMixin:
         page,
         page_size,
         *,
-        project: str | None = None,
+        directory: str | None = None,
         search: str | None = None,
         graph_status: str | None = None,
         rag_status: str | None = None,
@@ -282,13 +270,13 @@ class KnowledgeDocumentsMixin:
 
         where_sql, parameters = _document_filters(
             status=status,
-            project=project,
+            directory=directory,
             search=search,
             graph_status=graph_status,
             rag_status=rag_status,
         )
         order_sql = "ORDER BY exists_status, relative_path"
-        if status in {"active", "pending"} or project is not None or search:
+        if status in {"active", "pending"} or directory is not None or search:
             order_sql = "ORDER BY relative_path"
 
         connection = connect_sources(self.paths)
@@ -301,7 +289,7 @@ class KnowledgeDocumentsMixin:
             )
             rows = connection.execute(
                 f"""
-                SELECT source_id, relative_path, original_path,
+                SELECT source_id, relative_path, original_path, library_path,
                        content_hash, graph_hash, rag_hash,
                        origin_hash, origin_size, origin_modified_at,
                        source_uri, source_type, source_revision,
@@ -320,7 +308,7 @@ class KnowledgeDocumentsMixin:
                 self._read_document_summary(
                     connection,
                     status="active",
-                    project=None,
+                    directory=None,
                     search=None,
                 )
                 if include_summary
@@ -337,6 +325,7 @@ class KnowledgeDocumentsMixin:
                     "source_id": row["source_id"],
                     "relative_path": row["relative_path"],
                     "original_path": row["original_path"],
+                    "source_path": row["library_path"],
                     "content_hash": row["content_hash"],
                     "graph_hash": row["graph_hash"],
                     "rag_hash": row["rag_hash"],
@@ -381,14 +370,14 @@ class KnowledgeDocumentsMixin:
         connection,
         *,
         status: str | None,
-        project: str | None,
+        directory: str | None,
         search: str | None,
     ) -> dict[str, Any]:
         # Summary counts intentionally ignore the individual Graph/RAG status
         # filters, so the two cards continue to explain the complete scope.
         where_sql, parameters = _document_filters(
             status=status,
-            project=project,
+            directory=directory,
             search=search,
         )
         row = connection.execute(
@@ -430,196 +419,14 @@ class KnowledgeDocumentsMixin:
         }
 
     def _get_document_content_impl(self, source_id: str) -> dict[str, Any]:
-        """返回指定文档的 Markdown 文本内容。"""
-        self._require_initialized()
-        connection = connect_sources(self.paths)
-        try:
-            row = connection.execute(
-                """
-                SELECT source_id, original_path, relative_path, content_hash,
-                       graph_hash, rag_hash, origin_hash, origin_size,
-                       origin_modified_at, source_uri, source_type,
-                       source_revision, source_updated_at, source_metadata_json,
-                       external_content_hash, last_synced_at,
-                       graph_status, rag_status, exists_status
-                FROM sources WHERE source_id = ?
-                """,
-                (source_id,),
-            ).fetchone()
-        finally:
-            connection.close()
-        if row is None:
-            raise DocumentNotFoundError(f"文档不存在：{source_id}")
-        if row["exists_status"] != "active":
-            raise DocumentNotFoundError(f"文档已删除：{source_id}")
-
-        file_path = self.external_dir / row["relative_path"]
-        if not file_path.exists():
-            raise DocumentNotFoundError(f"文档文件缺失：{row['relative_path']}")
-
-        try:
-            content = file_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise DocumentNotFoundError(
-                f"无法读取文档：{row['relative_path']}: {exc}"
-            ) from exc
-
-        return {
-            "source_id": row["source_id"],
-            "original_path": row["original_path"],
-            "relative_path": row["relative_path"],
-            "content_hash": row["content_hash"],
-            "graph_hash": row["graph_hash"],
-            "rag_hash": row["rag_hash"],
-            "origin_hash": row["origin_hash"],
-            "origin_size": row["origin_size"],
-            "origin_modified_at": row["origin_modified_at"],
-            "source_uri": row["source_uri"],
-            "source_type": row["source_type"],
-            "source_revision": row["source_revision"],
-            "source_updated_at": row["source_updated_at"],
-            "source_metadata": _load_source_metadata(row["source_metadata_json"]),
-            "external_content_hash": row["external_content_hash"],
-            "last_synced_at": row["last_synced_at"],
-            "graph_status": row["graph_status"],
-            "rag_status": row["rag_status"],
-            "exists_status": row["exists_status"],
-            "content": content,
-        }
+        from .library import read_content
+        return read_content(self, source_id)
 
     def _update_document_content_impl(
-        self,
-        source_id: str,
-        content: str,
-        *,
-        expected_content_hash: str | None = None,
+        self, source_id: str, content: str, *, expected_content_hash: str | None = None,
     ) -> dict[str, Any]:
-        """原子保存 Markdown，并仅将派生 Graph/RAG 标记为待重建。"""
-
-        self._require_initialized()
-        normalized_source_id = str(source_id).strip()
-        if not normalized_source_id:
-            raise ValueError("source_id 必须是非空字符串")
-        if not isinstance(content, str):
-            raise TypeError("content 必须是字符串")
-        encoded = content.encode("utf-8")
-        if len(encoded) > MAX_IMPORT_BYTES:
-            raise DocumentTooLargeError(
-                f"Markdown 内容超过 {MAX_IMPORT_BYTES // (1024 * 1024)} MB 上限"
-            )
-        expected_hash = (
-            str(expected_content_hash).strip().casefold()
-            if expected_content_hash is not None
-            else None
-        )
-        if expected_hash is not None and (
-            len(expected_hash) != 64
-            or any(character not in "0123456789abcdef" for character in expected_hash)
-        ):
-            raise ValueError("expected_content_hash 必须是 64 位 SHA-256")
-
-        ingestor = Ingestor(
-            data_dir=self.data_dir,
-            external_dir=self.external_dir,
-            settings=self.settings,
-        )
-        with ingestor._write_lock:
-            connection = connect_sources(self.paths)
-            try:
-                row = connection.execute(
-                    """
-                    SELECT source_id, relative_path, content_hash,
-                           graph_hash, rag_hash, graph_status, rag_status,
-                           exists_status
-                    FROM sources WHERE source_id = ?
-                    """,
-                    (normalized_source_id,),
-                ).fetchone()
-            finally:
-                connection.close()
-            if row is None or row["exists_status"] != "active":
-                raise DocumentNotFoundError(
-                    f"活动文档不存在：{normalized_source_id}"
-                )
-
-            current_hash = str(row["content_hash"])
-            if expected_hash is not None and expected_hash != current_hash.casefold():
-                raise DocumentContentConflictError(
-                    "文档已被其他操作更新，请重新加载后再编辑"
-                )
-            destination = _safe_markdown_destination(
-                self.external_dir,
-                str(row["relative_path"]),
-            )
-            if not destination.is_file():
-                raise DocumentNotFoundError(
-                    f"文档文件缺失：{row['relative_path']}"
-                )
-            try:
-                previous_bytes = destination.read_bytes()
-            except OSError as exc:
-                raise DocumentNotFoundError(
-                    f"无法读取文档：{row['relative_path']}"
-                ) from exc
-            disk_hash = hashlib.sha256(previous_bytes).hexdigest()
-            if disk_hash != current_hash:
-                raise DocumentContentConflictError(
-                    "磁盘文档已在数据库外发生变化，请刷新文档列表后再编辑"
-                )
-
-            new_hash = hashlib.sha256(encoded).hexdigest()
-            if new_hash == current_hash:
-                return {
-                    "source_id": normalized_source_id,
-                    "relative_path": str(row["relative_path"]),
-                    "changed": False,
-                    "previous_content_hash": current_hash,
-                    "content_hash": current_hash,
-                    "graph_status": str(row["graph_status"]),
-                    "rag_status": str(row["rag_status"]),
-                }
-
-            _write_bytes_atomic(destination, encoded)
-            now = _now_iso()
-            connection = connect_sources(self.paths)
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                cursor = connection.execute(
-                    """
-                    UPDATE sources
-                    SET content_hash = ?, graph_status = 'pending',
-                        rag_status = 'pending', updated_at = ?
-                    WHERE source_id = ? AND exists_status = 'active'
-                      AND content_hash = ?
-                    """,
-                    (new_hash, now, normalized_source_id, current_hash),
-                )
-                if cursor.rowcount != 1:
-                    raise DocumentContentConflictError(
-                        "文档状态已变化，请重新加载后再编辑"
-                    )
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                _write_bytes_atomic(destination, previous_bytes)
-                raise
-            finally:
-                connection.close()
-
-        self._log_event(
-            "document_content_update",
-            f"source_id={normalized_source_id}, path={row['relative_path']}",
-        )
-        return {
-            "source_id": normalized_source_id,
-            "relative_path": str(row["relative_path"]),
-            "changed": True,
-            "previous_content_hash": current_hash,
-            "content_hash": new_hash,
-            "graph_status": "pending",
-            "rag_status": "pending",
-            "updated_at": now,
-        }
+        from .library import update_content
+        return update_content(self, source_id, content, expected_content_hash)
 
     def _move_source_to_recycle(self, relative_path: str) -> str | None:
         """统一回收逻辑：同路径覆盖，并在文件或元数据写入失败时回滚。"""
@@ -671,11 +478,17 @@ class KnowledgeDocumentsMixin:
             if expires_at > now:
                 continue
 
-            base = meta_path.with_name(meta_path.name.replace(".meta.json", ""))
-            meta_path.unlink(missing_ok=True)
+            base = meta_path.with_name(meta_path.name.removesuffix(".meta.json"))
+            if not base.resolve().is_relative_to(recycle_root):
+                raise IngestError("回收站条目路径不安全")
             if base.exists():
-                base.unlink()
-                deleted += 1
+                if base.is_dir():
+                    deleted += _clear_directory_contents(base)
+                    base.rmdir()
+                else:
+                    base.unlink()
+                    deleted += 1
+            meta_path.unlink(missing_ok=True)
 
         result = {"deleted": deleted, "forced": False}
         self._log_event(
@@ -691,8 +504,7 @@ class KnowledgeDocumentsMixin:
         *,
         ingest_after_import: bool = True,
         expected_origin_hash: str | None = None,
-        _original_identity: str | None = None,
-        project: str | None = None,
+        directory: str | None = None,
     ) -> dict[str, Any]:
         """安全转换任意受支持文件、注册来源，并可立即执行整理。"""
 
@@ -718,11 +530,20 @@ class KnowledgeDocumentsMixin:
             raise UnsupportedDocumentFormatError(
                 f"不支持的文档格式：{suffix or '<无扩展名>'}"
             )
-        identity = _original_identity or str(source)
-
+        from .library import original_root, resolve_path, validate_name
         with get_knowledge_base_lock(self.data_dir):
-            from .document_organization import project_directory
-            project_dir = project_directory(self, project) if project is not None else None
+            root = original_root(self)
+            root.mkdir(parents=True, exist_ok=True)
+            if source.is_relative_to(root):
+                original = resolve_path(self, source.relative_to(root).as_posix())
+            else:
+                parent = resolve_path(self, directory or "")
+                if not parent.is_dir():
+                    raise ValueError("导入目标不是目录")
+                original = parent / validate_name(source.name)
+            identity = str(original)
+
+            original_previous = original.read_bytes() if original.exists() else None
             ingestor = Ingestor(
                 data_dir=self.data_dir,
                 external_dir=self.external_dir,
@@ -735,11 +556,6 @@ class KnowledgeDocumentsMixin:
                     if existing_mapping is not None
                     else _stable_markdown_name(source.name, identity)
                 )
-                if project_dir is not None:
-                    if existing_mapping is None:
-                        markdown_relative_path = (project_dir / markdown_relative_path).relative_to(self.external_dir).as_posix()
-                    elif (self.external_dir / markdown_relative_path).parent != project_dir:
-                        raise DocumentContentConflictError("该来源已被移动到其他项目，请在当前位置重新导入或使用文档移动功能")
                 destination = _safe_markdown_destination(
                     self.external_dir,
                     markdown_relative_path,
@@ -763,6 +579,10 @@ class KnowledgeDocumentsMixin:
                                 f"format={suffix.removeprefix('.')}, size={size}"
                             ),
                         )
+                        if source != original:
+                            if original_previous is not None and hashlib.sha256(original_previous).hexdigest() != origin_hash:
+                                raise DocumentContentConflictError("同名原文件已存在，请重命名后导入")
+                            _write_bytes_atomic(original, snapshot.path.read_bytes())
                         conversion = _public_convert_document(
                             snapshot.path,
                             self.external_dir,
@@ -782,6 +602,8 @@ class KnowledgeDocumentsMixin:
                     ingestor.scan_sources()
                 except Exception:
                     _restore_import_destination(destination, previous_bytes)
+                    if original_previous is not None and source != original:
+                        _write_bytes_atomic(original, original_previous)
                     _write_bytes_atomic(
                         ingestor.file_map.file_path,
                         file_map_previous,
@@ -852,7 +674,9 @@ class KnowledgeDocumentsMixin:
 
         result: dict[str, Any] = {
             "source_id": source_id,
-            "original_filename": source.name,
+            "original_filename": original.name,
+            "original_path": str(original),
+            "source_path": original.relative_to(root).as_posix(),
             "detected_format": _detected_format(suffix),
             "markdown_relative_path": markdown_relative_path,
             "conversion_status": "completed",
@@ -875,73 +699,15 @@ class KnowledgeDocumentsMixin:
         return result
 
     def _upload_file_impl(self, content: str, filename: str) -> dict[str, Any]:
-        """将文本内容保存为 Markdown 文件，并注册到 sources。"""
-        safe_filename = filename.strip()
-        if not safe_filename.endswith(".md"):
-            safe_filename += ".md"
-        safe_filename = safe_filename.replace("\\", "/").split("/")[-1]
-
-        ingestor = Ingestor(
-            data_dir=self.data_dir,
-            external_dir=self.external_dir,
-            settings=self.settings,
-        )
-        dest_path = self.external_dir / safe_filename
-        with ingestor._write_lock:
-            if dest_path.exists():
-                raise RecycleConflictError(f"文件已存在：{safe_filename}")
-            dest_path.write_text(content, encoding="utf-8")
-            try:
-                ingestor.scan_sources()
-            except Exception:
-                dest_path.unlink(missing_ok=True)
-                raise
-
-        connection = connect_sources(self.paths)
-        try:
-            row = connection.execute(
-                "SELECT source_id, content_hash FROM sources WHERE relative_path = ?",
-                (safe_filename,),
-            ).fetchone()
-            if row is not None:
-                encoded = content.encode("utf-8")
-                origin_hash = hashlib.sha256(encoded).hexdigest()
-                origin_modified_at = _now_iso()
-                connection.execute(
-                    """
-                    UPDATE sources
-                    SET origin_hash = ?, origin_size = ?, origin_modified_at = ?,
-                        updated_at = ?
-                    WHERE source_id = ?
-                    """,
-                    (
-                        origin_hash,
-                        len(encoded),
-                        origin_modified_at,
-                        origin_modified_at,
-                        row["source_id"],
-                    ),
-                )
-                connection.commit()
-            else:
-                origin_hash = None
-                origin_modified_at = None
-        finally:
-            connection.close()
-        result = {
-            "source_id": row["source_id"] if row is not None else None,
-            "filename": safe_filename,
-            "path": dest_path.relative_to(self.external_dir).as_posix(),
-            "size": len(content),
-            "origin_hash": origin_hash,
-            "content_hash": row["content_hash"] if row is not None else None,
-            "origin_modified_at": origin_modified_at,
-        }
-        self._log_event(
-            "document_import_done",
-            f"file={safe_filename}, source_id={result['source_id']}, ingest=pending",
-        )
-        return result
+        from .library import validate_name
+        name = validate_name(filename)
+        if not Path(name).suffix:
+            name += ".md"
+        with tempfile.TemporaryDirectory(prefix="kemo-graph-create-") as temporary_dir:
+            source = Path(temporary_dir) / name
+            source.write_bytes(content.encode("utf-8"))
+            result = self.import_document(source, ingest_after_import=False)
+        return {**result, "filename": name, "path": result["source_path"]}
 
     def ingest(
         self,
@@ -950,6 +716,19 @@ class KnowledgeDocumentsMixin:
         *,
         retry_failed: bool = False,
     ) -> dict[str, Any]:
+        from .library import build_paths
+        if paths is None:
+            build_paths(self, "")
+        else:
+            normalized = []
+            for path in paths:
+                path = str(path)
+                original = self.external_dir.parent / "originals" / path
+                if original.exists():
+                    normalized.extend(build_paths(self, path))
+                else:
+                    normalized.append(path)
+            paths = normalized
         return Ingestor(
             data_dir=self.data_dir,
             external_dir=self.external_dir,
@@ -1072,13 +851,13 @@ class KnowledgeDocumentsMixin:
             "search_cache_deleted": cache_deleted,
         }
 
-    def _delete_all_documents_impl(self, project: str | None = None) -> dict[str, Any]:
+    def _delete_all_documents_impl(self, directory: str | None = None) -> dict[str, Any]:
         """删除当前知识库内的全部活动文档，不跨越 Store 边界。"""
 
         self._require_initialized()
         where_sql, parameters = _document_filters(
             status="active",
-            project=project,
+            directory=directory,
             search=None,
         )
         connection = connect_sources(self.paths)
@@ -1109,7 +888,7 @@ class KnowledgeDocumentsMixin:
             return self.delete_documents(source_ids)
 
         # The public batch endpoint is deliberately bounded to 1000 IDs, but
-        # a library/project can contain up to max_documents.  Process the
+        # a library/directory can contain up to max_documents.  Process the
         # server-resolved scope in bounded batches and return the same aggregate
         # response shape without asking the Web client to enumerate every ID.
         aggregate = {

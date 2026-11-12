@@ -134,6 +134,7 @@ def initialize_store(
         if normalized_owner is not None and manifest.owner_id != normalized_owner:
             raise PortableStoreError("知识位置 owner_id 与现有清单不一致")
         paths.external_dir.mkdir(parents=True, exist_ok=True)
+        (paths.external_dir.parent / "originals").mkdir(parents=True, exist_ok=True)
         paths.recycle_dir.mkdir(parents=True, exist_ok=True)
         initialize_databases(paths.storage_root, active_settings)
         return describe_store(
@@ -150,6 +151,7 @@ def initialize_store(
         )
 
     paths.external_dir.mkdir(parents=True, exist_ok=True)
+    (paths.external_dir.parent / "originals").mkdir(parents=True, exist_ok=True)
     paths.recycle_dir.mkdir(parents=True, exist_ok=True)
     initialize_databases(paths.storage_root, active_settings)
     now = _now_iso()
@@ -288,6 +290,7 @@ def describe_store(
         "storage_root": str(paths.storage_root),
         "data_dir": str(paths.storage_root),
         "external_dir": str(paths.external_dir),
+        "originals_dir": str(paths.external_dir.parent / "originals"),
         "initialized_now": initialized_now,
         "status": status,
     }

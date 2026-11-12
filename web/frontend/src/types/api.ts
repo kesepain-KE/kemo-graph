@@ -151,6 +151,8 @@ export type RagResult = {
   source: {
     source_id: string;
     relative_path: string | null;
+    source_path?: string | null;
+    original_path?: string | null;
   };
 };
 
@@ -262,6 +264,7 @@ export type DocumentRecord = {
   source_uri?: string | null;
   relative_path: string;
   original_path?: string;
+  source_path?: string | null;
   content_hash?: string;
   graph_hash?: string | null;
   rag_hash?: string | null;
@@ -416,8 +419,31 @@ export type MaintenanceJobListData = { jobs: MaintenanceJob[] };
 export type IngestMode = "graph" | "rag" | "both";
 export type SearchMode = SearchCacheMode;
 
-export type DocumentProject = { name: string; document_count: number };
+export type LibraryEntry = {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  size: number | null;
+  modified_at: number;
+  source_id: string | null;
+  supported: boolean;
+  children?: LibraryEntry[];
+};
+export type LibraryData = {
+  root: string;
+  directory: string;
+  tree: LibraryEntry[];
+  entries: LibraryEntry[];
+};
+export type OriginalPreview = {
+  name: string;
+  size: number;
+  editable: boolean;
+  mode: "markdown" | "text" | "html" | "pdf" | "image" | "download";
+  content?: string;
+  content_hash?: string;
+  html?: string;
+};
 export type LogCategory = "terminal" | "query" | "internal";
 export type RuntimeLogEntry = { id: string; time: string; level: string; module: string; action: string; detail: string; elapsed_ms: string };
 export type RuntimeLogs = { category: LogCategory; date: string; timezone: string; entries: RuntimeLogEntry[]; truncated: boolean; available: boolean; limit: number };
-export type DocumentLocation = { source_id: string; previous_relative_path: string; relative_path: string; changed: boolean };

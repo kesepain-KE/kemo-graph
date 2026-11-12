@@ -53,7 +53,7 @@ It is not another agent that chats. It is the knowledge layer that lets agents u
 | Multiple retrieval modes | Graph, vector, hybrid, Q&A and global-topic search for different kinds of questions |
 | Tunable extraction and robust recall | Fine/standard/coarse graph extraction profiles, query expansion, multi-query FAISS fusion and exact-term fallback for both semantic and short-keyword hits |
 | Incremental maintenance | Only affected data is updated when files change, instead of rebuilding the whole knowledge base |
-| Project document management | Project-based uploads, Markdown preview/editing, renaming and individual or batch moves; available in both the default knowledge base and portable Stores |
+| Original-file library | Three resizable panes for real directories, original previews, text editing and moves; processed Markdown lives separately and maps back to each source |
 | Visible processing | Dedicated build status, real query-stage progress and terminal/query/internal log tabs |
 | Lower read overhead | Bounded memory caching for unchanged status, logs and knowledge-state fingerprints |
 | Safe deletion | Shared sources are checked before deletion to avoid harming knowledge supported by other documents |
@@ -131,7 +131,7 @@ python start_web.py
 
 ### Web
 
-The browser provides project-based document management, Markdown preview and editing, dedicated build status, graph exploration, five retrieval modes, recycle-bin management, background task tracking, query-stage progress and runtime logs.
+The browser provides original-file directory management, multi-format previews, text editing, dedicated build status, graph exploration, five retrieval modes, recycle-bin management, background task tracking, query-stage progress and runtime logs.
 
 <p align="center">
   <img src="kemo-graph-web.png" alt="kemo-graph web knowledge retrieval interface" width="100%">
@@ -141,16 +141,18 @@ The browser provides project-based document management, Markdown preview and edi
   <sub>A local-first knowledge retrieval workspace combining graph, vector, hybrid retrieval and LLM answers.</sub>
 </p>
 
-#### Project folders and document management
+#### Original directories and processing mappings
 
-The Documents page supports creating project folders, browsing by project and selecting an upload destination. Existing root-level files appear under **Ungrouped**. Projects are real first-level folders under the current knowledge base's normalized Markdown directory, **not separate databases or retrieval boundaries**.
+The library has three resizable panes: the original-file directory tree, immediate children of the current directory with a relative breadcrumb, and the selected file's name, size, path and full preview. The page header contains search and refresh. The directory pane's `+` menu creates nested folders or documents and imports files into the selected directory. There are no built-in shared, user or project groups.
 
-- Use **Rename** and **Move** in the document toolbar, or select documents for a batch move.
-- Renaming/moving preserves the source ID, content hash and existing Graph/RAG indexes, with no model calls. Content edits still require a manual rebuild.
-- Source paths and `file_map.json` are updated together; cached results containing old paths become stale. Target/source-identity conflicts are rejected without overwriting other documents.
-- Clearing the selected project affects only its documents. Deleting the entire library from the All Documents view includes all projects in the current knowledge base.
-- Wait for background tasks before relocating documents. Externally synchronized records remain managed by their upstream system.
-- Portable Stores expose the same organization through the API: `POST /api/v1/stores/projects/list`, `POST /api/v1/stores/projects/create`, `POST /api/v1/stores/documents/location` and `POST /api/v1/stores/documents/move-batch`, with `store_root` in the request body. Project actions in the browser apply to the currently opened knowledge base.
+- Originals live in `external/originals/`; processed Markdown lives in `external/markdown/`. Custom Markdown directories use a sibling `originals/` directory.
+- `sources.library_path` and `file_map.json` map each original to its processed artifact. Graph/RAG reads processed Markdown; retrieval and graph source links open the original.
+- File menus rename, move, build or delete entries. Moves preserve source IDs, processed paths and existing indexes while updating source mappings, with no model calls. Importing different content under an occupied name returns a conflict.
+- Refresh discovers additions, changes and deletions on disk. Refreshing and editing update processed artifacts without calling models; build a selected file or directory afterward.
+- Deletion recycles originals and processed files and removes corresponding Graph/RAG data. Wait for background builds before relocating files.
+- Portable Stores use `content/originals/` and `content/markdown/`, with `/api/v1/stores/library/{list,create,move,delete,refresh}` and `store_root` in the JSON body.
+
+Files retained only as processed Markdown by older versions are not presented as originals. Reimport the original materials for native-format previews; existing indexes and processed files remain on disk. The previous project-organization API has been removed.
 
 #### Query progress
 
@@ -160,7 +162,7 @@ Document chunking and document embedding belong to ingestion. Retrieval processe
 
 #### Build status
 
-The filename search appears directly below the document-list heading, above project folders. Graph / RAG status filters now live on the sidebar's dedicated **Build Status** page, alongside pending, processing, ready and failed counts for each pipeline. Combine filename and status filters, browse up to six documents per page, and scroll inside the list. Refresh manually or every five seconds; leaving the page stops polling without interrupting background builds. Uploading, editing and manual batch rebuilding remain in Document Management.
+Name/path search is at the top right of the library. Graph / RAG filters live on the sidebar's **Build Status** page, alongside pending, processing, ready and failed counts. Combine filename and status filters, browse up to six documents per page, and scroll inside the list. Refresh manually or every five seconds; leaving the page stops polling without interrupting builds. Import, edit and file/directory build actions are in the library.
 
 #### Runtime status and logs
 
@@ -180,7 +182,9 @@ Long-running Web/API processes share a bounded read-through cache for knowledge-
 
 #### Knowledge-document preview and rendering
 
-The Web preview renders the normalized Markdown that is actually used by Graph/RAG, rather than sending PDF, Office or other binary files directly to the browser. It uses `react-markdown`, GFM, KaTeX and a Mermaid renderer loaded on demand. Supported features include:
+The preview reads originals directly: browser PDF viewing and images; DOCX text, tables and images; every XLS/XLSX/XLSM sheet; text, images and tables from every PPTX slide in order; and EPUB, RTF, EML and HTML. Office previews preserve content without guaranteeing desktop Office pagination, fonts or animations. Binary files can be downloaded for local editing. HTML is displayed in a restricted sandbox.
+
+Markdown preview reads the original `.md` / `.markdown` file. It uses `react-markdown`, GFM, KaTeX and a Mermaid renderer loaded on demand. Supported features include:
 
 - headings, bold, italic, strikethrough, nested lists, task lists, block quotes, thematic breaks, tables, footnotes, links, images and fenced code;
 - inline math such as `$a^2+b^2=c^2$` and display math with `$$...$$`;
@@ -262,7 +266,7 @@ The full request fields, response envelope and error codes are defined in [api.m
 
 ## Data and privacy
 
-- Converted Markdown, graph and index data all live in your local working directory; Markdown is the source of truth, everything else can be rebuilt at any time.
+- Originals, processed Markdown, graphs and indexes stay in your local working directory. Local materials use originals as their source; Graph/RAG reads separate processing artifacts. Externally synchronized records retain their upstream authority.
 - Graph building, Embedding and Rerank call models through the Kemo gateway; before processing sensitive materials, review your gateway, model and network boundaries.
 - Application query-lifecycle logs do not additionally retain question bodies or model answers. The viewer redacts known secrets and common authentication fields; third-party Python logs can still contain business information, so protect log and service access.
 

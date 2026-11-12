@@ -213,30 +213,6 @@ class StoreRootRequest(StrictRequest):
         return normalized
 
 
-class StoreProjectCreateRequest(StoreRootRequest):
-    name: str = Field(min_length=1, max_length=160)
-
-
-class StoreDocumentLocationRequest(StoreRootRequest):
-    source_id: str = Field(min_length=1)
-    filename: str | None = Field(default=None, min_length=1, max_length=160)
-    project: str | None = Field(default=None, max_length=160)
-    expected_relative_path: str | None = None
-
-
-class StoreDocumentMoveRequest(StoreRootRequest):
-    source_ids: list[str] = Field(min_length=1, max_length=1000)
-    project: str = Field(max_length=160)
-
-    @field_validator("source_ids")
-    @classmethod
-    def validate_source_ids(cls, value: list[str]) -> list[str]:
-        normalized = [source_id.strip() for source_id in value]
-        if any(not source_id for source_id in normalized):
-            raise ValueError("source_ids 中不能包含空值")
-        return list(dict.fromkeys(normalized))
-
-
 class StoreInitializeRequest(StoreRootRequest):
     scope: StoreScope
     owner_id: str | None = Field(default=None, max_length=255)
@@ -244,6 +220,7 @@ class StoreInitializeRequest(StoreRootRequest):
 
 
 class StoreImportPathRequest(StoreRootRequest):
+    directory: str = Field(default="", max_length=2048)
     path: str = Field(min_length=1)
     ingest_after_import: bool = True
     expected_origin_hash: str | None = Field(
@@ -439,7 +416,7 @@ class StoreDocumentListRequest(StoreRootRequest):
     status: Literal["active", "pending", "all"] | None = None
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
-    project: str | None = Field(default=None, max_length=160)
+    directory: str | None = Field(default=None, max_length=2048)
     search: str | None = Field(default=None, max_length=200)
     graph_status: str | None = Field(default=None, max_length=20)
     rag_status: str | None = Field(default=None, max_length=20)

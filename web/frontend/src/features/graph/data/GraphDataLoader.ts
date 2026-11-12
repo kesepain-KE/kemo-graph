@@ -113,7 +113,7 @@ export async function loadGraphSourceLabels(): Promise<Map<string, string>> {
       .flatMap((page) => page.documents)
       .map((document) => [
         document.source_id,
-        document.original_path || document.relative_path || document.source_id,
+        document.source_path || document.original_path || document.source_id,
       ]),
   );
 }

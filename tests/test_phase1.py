@@ -159,6 +159,7 @@ class DatabaseTests(unittest.TestCase):
                 {
                     "source_id",
                     "original_path",
+                    "library_path",
                     "relative_path",
                     "path_hash",
                     "content_hash",
@@ -215,6 +216,7 @@ class DatabaseTests(unittest.TestCase):
                     "idx_sources_rag_status",
                     "idx_sources_source_uri",
                     "idx_sources_source_type",
+                    "idx_sources_library_path",
                     "idx_maintenance_jobs_updated",
                     "idx_maintenance_job_events_job",
                 },

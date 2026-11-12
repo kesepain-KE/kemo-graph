@@ -39,10 +39,11 @@ class FrontendMountTests(unittest.TestCase):
                 )
             client = TestClient(app)
 
-            for path in ("/", "/documents", "/graph", "/settings/deep-link"):
+            for path in ("/", "/index.html", "/documents", "/graph", "/settings/deep-link"):
                 response = client.get(path)
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("phase-8-spa", response.text)
+                self.assertEqual(response.headers["cache-control"], "no-cache")
                 self.assertTrue(
                     response.headers["content-type"].startswith("text/html")
                 )
@@ -218,7 +219,8 @@ class ManagementAPITests(unittest.TestCase):
             documents = document_page["documents"]
             self.assertEqual(document_page["pagination"]["total"], 1)
             self.assertEqual(len(documents), 1)
-            self.assertEqual(documents[0]["relative_path"], "new-document.md")
+            self.assertEqual(documents[0]["source_path"], "new-document.md")
+            self.assertTrue((service.external_dir / documents[0]["relative_path"]).is_file())
             content = service.get_document_content(documents[0]["source_id"])
             self.assertEqual(content["content"], "# 新文档\n\n正文")
 

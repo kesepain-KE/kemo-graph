@@ -3,7 +3,7 @@
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
 > **当前版本**：`1.6.0`
-> **实现来源**：`api/__init__.py`、`api/routes.py`、`api/store_routes.py`、`api/document_organization_routes.py`、`api/schemas.py`。
+> **实现来源**：`api/__init__.py`、`api/routes.py`、`api/store_routes.py`、`api/library_routes.py`、`api/schemas.py`。
 
 ---
 
@@ -515,7 +515,7 @@ GET /api/v1/documents?status=active
 GET /api/v1/documents?status=pending
 GET /api/v1/documents?status=all
 GET /api/v1/documents?status=active&page=1&page_size=20
-GET /api/v1/documents?status=active&page=1&page_size=6&project=研究资料&search=画布&graph_status=ready&rag_status=ready&include_summary=true
+GET /api/v1/documents?status=active&page=1&page_size=6&directory=研究资料&search=画布&graph_status=ready&rag_status=ready&include_summary=true
 ```
 
 返回：
@@ -527,7 +527,9 @@ GET /api/v1/documents?status=active&page=1&page_size=6&project=研究资料&sear
     "documents": [
       {
         "source_id": "source-uuid",
-        "relative_path": "markdown/example-a1b2c3.md",
+        "relative_path": "example-a1b2c3.md",
+        "source_path": "研究资料/example.pdf",
+        "original_path": "E:/kemo-graph/external/originals/研究资料/example.pdf",
         "content_hash": "sha256…",
         "graph_status": "ready",
         "rag_status": "ready",
@@ -558,67 +560,70 @@ GET /api/v1/documents?status=active&page=1&page_size=6&project=研究资料&sear
 
 可选筛选参数：
 
-- `project`：项目名；空字符串表示根目录“未分组”，`/` 表示全部项目；命名项目包含其嵌套路径；
-- `search`：按 `relative_path` 做不区分大小写的字面子串搜索，`%` 和 `_` 不作为通配符；
+- `directory`：原文件相对目录；空字符串表示根目录中的文件，非空目录包含其子目录，省略表示全库；
+- `search`：按原文件路径做不区分大小写的字面子串搜索，`%` 和 `_` 不作为通配符；
 - `graph_status` / `rag_status`：`pending`、`processing`、`ready`、`failed`；
 - `include_summary=true`：附加当前活动知识库的 Graph/RAG 汇总统计，不改变 `documents` 分页内容。
 
 `summary.needs_rebuild_documents` 表示 Graph 或 RAG 为 `pending/failed` 的活动文档数，可用于显示批量重建提示。默认不返回 `summary`，以保持旧客户端响应大小和兼容性。
 
-### 5.1.1 项目文件夹、重命名与移动
+### 5.1.1 原文件目录、重命名与移动
 
-项目对应当前知识库规范 Markdown 根目录下的真实一级文件夹。`project=""` 表示根目录（网页显示“未分组”）；项目不隔离检索、图谱或向量数据。列表中的 `relative_path` 包含项目目录，原有 `GET /documents` 分页契约保持不变。
+原文件保存在 Markdown 根目录同级的 `originals/` 中，默认是 `external/originals/`。知识库目录直接映射这里的实际文件与文件夹，无共享、用户或项目分类。规范 Markdown 单独保存在 `external/markdown/`，通过 `sources.library_path`、稳定的 `source_id` 与 `file_map.json` 关联。文档列表的 `source_path` 是原文件相对路径，`relative_path` 是处理产物相对路径。
 
 | 方法与端点 | 用途 | 请求体 / 参数 |
 | --- | --- | --- |
-| `GET /api/v1/projects` | 列出项目，包含空项目和未分组 | 无 |
-| `POST /api/v1/projects` | 新建一级项目文件夹 | `{"name":"研究资料"}` |
-| `PATCH /api/v1/documents/{source_id}/location` | 重命名、移动，或同时执行 | `{"filename":"设计说明.md","project":"研究资料","expected_relative_path":"old.md"}` |
-| `POST /api/v1/documents/move-batch` | 将多篇文档移入项目 | `{"source_ids":["source-a","source-b"],"project":"研究资料"}` |
-| `POST /api/v1/import?ingest=false&project=研究资料` | multipart 上传到指定项目 | `file` 文件字段；项目需先创建，查询参数按 URL 编码 |
+| `GET /api/v1/library` | 目录树与当前目录第一层内容 | 查询参数 `directory`、`search`，均默认为空 |
+| `POST /api/v1/library/entries` | 在已有目录新建文件夹或文档 | `{"directory":"研究资料","name":"笔记.md","kind":"file"}`；文件夹用 `kind:"directory"` |
+| `PATCH /api/v1/library/entries` | 移动或重命名实际文件/文件夹 | `{"path":"研究资料/笔记.md","destination":"归档/笔记.md"}` |
+| `DELETE /api/v1/library/entries` | 回收实际文件/文件夹并清理关联索引 | `{"path":"归档/笔记.md"}` |
+| `POST /api/v1/library/refresh` | 扫描实际目录并更新变化的处理产物 | `{"path":""}`；可指定单个文件或目录 |
+| `POST /api/v1/library/build` | 通过映射构建指定文件或目录 | `{"path":"研究资料"}`；返回后台任务 |
+| `POST /api/v1/import?ingest=false&directory=研究资料` | 保存原文件并转换到独立处理目录 | multipart `file` 字段；目标目录需已存在 |
 
-`GET /projects` 的 `data` 示例：
-
-```json
-{"projects":[{"name":"","document_count":2},{"name":"研究资料","document_count":6}]}
-```
-
-位置更新中的 `filename`、`project` 至少提供一个。未提供 `filename` 时保留文件名；未提供 `project` 时保留当前目录；`filename` 未带 `.md` 会自动补全。`expected_relative_path` 可选，用于拒绝客户端基于旧路径提交的修改。成功后 `data` 返回：
+`GET /library` 的 `data` 包含 `root`（原文件根目录绝对路径）、`directory`（当前相对目录）、`tree`（完整递归树）和 `entries`（当前目录第一层；搜索时为全库名称/路径匹配结果）。单个条目示例：
 
 ```json
-{"source_id":"source-a","previous_relative_path":"old.md","relative_path":"研究资料/设计说明.md","changed":true}
+{"name":"笔记.md","path":"研究资料/笔记.md","kind":"file","size":128,"modified_at":1794499200,"source_id":"source-a","supported":true}
 ```
 
-批量移动最多 1000 篇，返回 `data.documents`（同上结构的数组）。整批先检查冲突，再执行；普通文件/映射/数据库写入错误会尝试回滚，不按部分成功提交。名称禁止路径分隔符、`..`、控制字符及跨平台保留名称。目标文件或历史来源记录占用目标路径时返回冲突，不覆盖活动文档。
+目录条目附带 `children`、`size:null`。未建立处理映射的文件 `source_id:null`，也会按实际路径显示。新建文档支持 `.md`、`.markdown` 和 `.txt`；新建目录可逐层嵌套。路径统一使用 `/`，禁止越界、隐藏目录、符号链接和目录联接；移动需保留文件扩展名，且目标父目录必须存在。
 
-改名或移动保留 `source_id`、正文哈希、Graph/RAG 构建状态和向量 ID，不重建、不调用模型。更新文件路径、`path_hash`、`file_map.json`，路径参与检索缓存指纹以防旧结果引用旧位置。原始磁盘导入文件不被改名/搬运；浏览器上传的虚拟来源身份随项目更新，以便在目标项目再次上传同名原文件时更新原文档。
+改名和移动保留 `source_id`、处理产物路径、内容哈希及 Graph/RAG 索引，更新原文件路径与映射并清理搜索缓存，不调用模型。后台任务排队或执行中拒绝移动。目标已存在时返回冲突，不覆盖文件。
 
-后台任务排队/执行中、文档处于 processing、或记录包含外部同步 `source_uri` 时，位置更新返回 `409 CONTENT_CONFLICT`。外部同步资料应在上游修改。
+刷新直接发现磁盘中的新增、修改与删除，重新转换变化的受支持原文件；原文件缺失时清理关联来源与索引。返回 `updated`、`deleted` 和 `errors`，逐项报告转换失败。刷新不调用模型，构建通过映射后的 Markdown 路径调用 Graph/RAG。
 
-portable Store 使用相同的项目与位置整理能力，但遵循 Store API 的统一约定：全部使用 `POST`，并把 `store_root` 放在 JSON 请求体中：
+旧版仅保留处理后 Markdown 的来源不会自动变成原文件。旧索引仍保留；需要原格式预览时重新导入原始资料。旧项目组织端点与 `project` 参数已移除。
+
+Portable Store 使用 `content/originals/` 与 `content/markdown/`，同样按实际目录操作；全部使用 `POST`，并把 `store_root` 和对应参数放在 JSON 请求体中：
 
 ```text
-POST /api/v1/stores/projects/list
-POST /api/v1/stores/projects/create
-POST /api/v1/stores/documents/location
-POST /api/v1/stores/documents/move-batch
+POST /api/v1/stores/library/list
+POST /api/v1/stores/library/create
+POST /api/v1/stores/library/move
+POST /api/v1/stores/library/delete
+POST /api/v1/stores/library/refresh
 ```
 
-单篇位置响应仍保持 Store 包络，即 `data.store` 携带 Store 身份，`data.result` 是单篇位置结果；批量移动的 `data.result.documents` 为结果数组。经 `/stores/sources/sync` 写入、带 `source_uri` 的上游权威文档仍拒绝移动；经 `/stores/import-path`、`/stores/import` 或 `/stores/upload` 导入的普通文档可以整理。
-
-导入请求省略 `project` 时保持原有行为；提供空字符串表示导入根目录。同名原文件可分别上传到不同项目，获得独立来源身份。
+响应的 `data.store` 携带 Store 身份，`data.result` 是对应操作结果。外部同步记录仍在上游管理，不伪造本地原文件。
 
 ---
 
-### 5.2 读取转换后的 Markdown 内容
+### 5.2 读取原文件内容与位置
 
 ```http
 GET /api/v1/documents/{source_id}/content
+GET /api/v1/documents/{source_id}/source
+GET /api/v1/documents/{source_id}/original
+GET /api/v1/library/original?path=研究资料/example.pdf&download=false
+GET /api/v1/library/preview?path=研究资料/example.pdf
 ```
 
-返回 `source_id`、`relative_path`、`content_hash`、Graph/RAG 状态与 `content`。内容是知识库实际使用的 Markdown，而不是原始 PDF/DOCX 二进制文件。
+`content` 读取原始文本文件，返回 `source_id`、原文件相对 `relative_path`、`original_path`、原始字节的 `content_hash`、`content`，以及 `processed_content_hash`、`graph_hash`、`rag_hash` 与构建状态。二进制文档使用预览或原文件下载端点。原文件不可用时返回 `404`，请重新导入原始资料。
 
-### 5.2.1 精确编辑 Markdown
+`source` 返回 `{"path":"研究资料/example.pdf"}`，供检索或图谱来源跳转。`original` 返回原始字节；PDF/常见图片可内联显示，其他格式以附件下载，`download=true` 强制附件。按路径与按 `source_id` 读取遵循同一规则。
+
+### 5.2.1 编辑原始文本
 
 ```http
 PUT /api/v1/documents/{source_id}/content
@@ -634,11 +639,13 @@ Content-Type: application/json
 
 `expected_content_hash` 用于防止多个客户端互相覆盖。若文档在读取后已被其他操作更新，返回 HTTP 409 / `CONTENT_CONFLICT`。
 
-保存成功后只原子替换 Markdown、重算 `content_hash`，并把 `graph_status` 与 `rag_status` 设为 `pending`。旧 `graph_hash`、`rag_hash`、图谱和向量继续保留，直到调用 `/jobs/ingest` 或 `/ingest` 成功完成先准备后替换。保存本身不调用模型。
+保存成功后原子替换原始文本，并重新转换独立处理产物；内容变化时 Graph/RAG 标记为 `pending`。转换失败恢复原文件。旧 `graph_hash`、`rag_hash`、图谱和向量保留至手动构建替换。保存不调用模型。
 
 ### 5.2.2 网页预览的知识文档渲染范围
 
-`content` 字段始终返回规范 Markdown 原文；HTTP API 不把它转换成 HTML。网页端在本地完成安全渲染，当前支持：
+`/library/preview` 读取原文件，返回 `mode`（`markdown`、`text`、`html`、`pdf`、`image`、`download`）、`editable`、名称与大小，以及对应 `content` / `html`。PDF/图片使用原文件 URL；DOCX、所有工作表、PPTX 全部幻灯片、EPUB 与邮件等直接从原文件生成展示内容，不读取图谱处理产物。Office 展示覆盖文本、图片和表格，不保证桌面 Office 的分页、字体、动画完全一致；二进制格式下载后本地编辑。
+
+原始 Markdown 的网页渲染支持：
 
 - CommonMark 与 GFM：标题、列表、任务列表、引用、水平分隔线、表格、脚注、删除线、链接、图片和代码块；
 - KaTeX 数学公式：`$...$`、`$$...$$`、`\(...\)`、`\[...\]`，以及 `aligned`、`cases`、矩阵、分数、积分、求和、极限和 `\xrightarrow{}` 等常见结构；
@@ -663,6 +670,7 @@ Content-Type: multipart/form-data
 |---|---|:---:|---|
 | `file` | binary | 是 | 单个本地文档 |
 | `ingest` | query bool | 否，默认 `true` | 是否转换后立即构建图谱和 RAG |
+| `directory` | query string | 否，默认根目录 | 已存在的原文件相对目录 |
 
 支持扩展名：
 
@@ -714,6 +722,8 @@ Invoke-RestMethod `
   "data": {
     "source_id": "source-uuid",
     "original_filename": "example.pdf",
+    "source_path": "example.pdf",
+    "original_path": "E:/kemo-graph/external/originals/example.pdf",
     "detected_format": "pdf",
     "markdown_relative_path": "markdown/example-a1b2c3d4.md",
     "conversion_status": "completed",
@@ -736,9 +746,11 @@ failed     # Markdown 已保留，但整理失败；可稍后重试
 
 `failed` 的成功导入响应会携带 `ingest_error` 和可选的 `ingest` 摘要；调用方可随后调用 [5.5 整理文档](#55-整理文档)。
 
+导入先保留原文件，再生成独立 Markdown。同目录同名文件仅允许相同字节重复导入；不同内容返回 `409 CONTENT_CONFLICT`。修改已管理文件请使用原文件编辑接口或直接修改磁盘原文件后刷新。转换失败时原文件仍保留，错误会报告给调用方。
+
 ---
 
-### 5.4 兼容的纯 Markdown 文本上传
+### 5.4 原始文本上传
 
 ```http
 POST /api/v1/upload
@@ -754,7 +766,7 @@ Content-Type: application/json
 }
 ```
 
-该端点只适合智能体已有 Markdown 正文时使用：写入并注册为待整理文档，不会在此请求中调用模型。文件名不能含 `/`、`\\` 或 `..`。
+该端点将已有文本按 UTF-8 字节保存在原文件根目录，再转换并注册为待构建文档，不调用模型。文件名不能包含路径分隔符或越界路径。
 
 对于 PDF、Office、EPUB、RTF 等二进制文件，必须使用 `/import`。
 
@@ -780,7 +792,7 @@ Content-Type: application/json
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|:---:|---|
-| `paths` | string[] / null | 否 | 要整理的 Markdown 相对路径；`null` 表示扫描所有待处理文档 |
+| `paths` | string[] / null | 否 | 原文件/目录相对路径或处理产物相对路径；原文件先刷新并映射到处理路径，`null` 表示刷新原文件并扫描所有待处理文档 |
 | `mode` | string | 否，默认 `both` | `graph`、`rag`、`both` |
 
 返回包括：
@@ -812,7 +824,8 @@ DELETE /api/v1/documents/{source_id}
 内部结果：
 
 ```text
-Markdown → external/recycle/
+原文件 → external/recycle/originals/唯一回收目录/
+处理 Markdown → external/recycle/
 sources.exists_status → deleted
 删除该 source 的 node_sources / edge_sources / chunks / embeddings / chunk_nodes
 同步删除 FAISS 向量
@@ -836,7 +849,7 @@ rag_deleted
 ```http
 POST   /api/v1/documents/delete-batch
 DELETE /api/v1/documents?confirm=delete-all
-DELETE /api/v1/documents?confirm=delete-all&project=研究资料
+DELETE /api/v1/documents?confirm=delete-all&directory=研究资料
 ```
 
 批量请求体：
@@ -845,7 +858,7 @@ DELETE /api/v1/documents?confirm=delete-all&project=研究资料
 {"source_ids": ["source-uuid-1", "source-uuid-2"]}
 ```
 
-两者都只作用于当前 API 实例绑定的知识库，不会跨 Portable Store。返回 `requested / deleted / failed / documents / failures`；批量操作逐篇报告失败，已成功项不会因另一篇失败而伪装成未执行。调用方必须在执行前向用户显示影响数量并二次确认；清空端点还要求固定确认参数 `confirm=delete-all`。提供 `project` 时仅清空该一级项目及其嵌套文档；空字符串表示未分组，省略时清空当前知识库全部项目。项目清空由服务端直接解析并分批处理，不要求客户端先枚举全部 `source_id`。
+两者只作用于当前 API 实例，不跨 Portable Store。返回 `requested / deleted / failed / documents / failures`，批量操作逐篇报告失败。调用方执行前确认目标和数量，清空端点要求 `confirm=delete-all`。`directory` 非空时清理该目录及子目录的已索引文档，空字符串限定根目录，省略表示全库。实际文件夹及未索引文件的删除使用 `/library/entries`。
 
 ---
 
@@ -1292,10 +1305,11 @@ POST /api/v1/stores/query/federated
 
 # 文档、节点、关系
 POST /api/v1/stores/documents/list
-POST /api/v1/stores/projects/list
-POST /api/v1/stores/projects/create
-POST /api/v1/stores/documents/location
-POST /api/v1/stores/documents/move-batch
+POST /api/v1/stores/library/list
+POST /api/v1/stores/library/create
+POST /api/v1/stores/library/move
+POST /api/v1/stores/library/delete
+POST /api/v1/stores/library/refresh
 POST /api/v1/stores/documents/content
 POST /api/v1/stores/documents/update
 POST /api/v1/stores/documents/delete

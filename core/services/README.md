@@ -6,7 +6,7 @@
 
 | 服务 | 负责入口 | 当前实现策略 |
 | --- | --- | --- |
-| `DocumentService` | 文档列表、项目文件夹、重命名/移动、内容读写、导入、上传、外部来源同步、精确/批量删除 | 项目组织由 `core/document_organization.py` 承载；其余复杂写事务暂由门面中的 `*_impl` 承载 |
+| `DocumentService` | 文档列表、原文件内容读写、导入、上传、外部来源同步、精确/批量删除 | `core/library.py` 管理原文件目录与路径映射，`core/document_preview.py` 提供原格式预览；导入事务由门面中的 `*_impl` 承载 |
 | `GraphService` | 节点、关系、全量图、可视化分页与局部邻域 | 可视化分页/邻域直接在服务中调用图谱数据层；节点/关系写操作暂由 `*_impl` 承载 |
 | `RetrievalService` | Graph、RAG、Hybrid、Answer、Global 检索与搜索缓存 | 查询门面委托；缓存状态指纹、锁、读写和降级逻辑已迁入服务 |
 | `MaintenanceService` | 状态/配置、图谱整理、节点群总结、知识库重建、任务与回收站 | 入口已按域集中；重建与总结事务暂由 `*_impl` 承载 |

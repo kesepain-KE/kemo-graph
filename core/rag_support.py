@@ -276,7 +276,7 @@ def _rag_result_item(
     candidate: _Candidate,
     score: float,
     hierarchy: Mapping[str, _ChunkContext],
-    source_paths: Mapping[str, str | None],
+    source_paths: Mapping[str, dict[str, str | None]],
 ) -> dict[str, Any]:
     parent = (
         hierarchy.get(candidate.parent_chunk_id)
@@ -300,7 +300,7 @@ def _rag_result_item(
         ),
         "source": {
             "source_id": candidate.source_id,
-            "relative_path": source_paths.get(candidate.source_id),
+            **source_paths[candidate.source_id],
         },
     }
 

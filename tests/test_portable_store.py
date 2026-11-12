@@ -208,7 +208,9 @@ def test_absolute_import_records_both_hashes_and_keeps_stores_isolated(
             (first["source_id"],),
         ).fetchone()
     assert row is not None
-    assert row[0] == str(source.resolve())
+    assert row[0] == first["original_path"]
+    assert Path(row[0]).read_bytes() == source.read_bytes()
+    assert Path(row[0]).is_relative_to(first_paths.external_dir.parent / "originals")
     assert row[1] == origin_hash
     assert row[2] == source.stat().st_size
     assert row[3]

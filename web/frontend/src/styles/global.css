@@ -253,6 +253,8 @@ a {
   gap: 10px;
 }
 
+.brand--expand { padding: 0; border: 0; background: transparent; cursor: pointer; }
+
 .brand-name {
   min-width: 0;
   display: grid;
@@ -359,7 +361,7 @@ a {
 }
 
 .app-shell.is-sidebar-collapsed { grid-template-columns: 64px minmax(0, 1fr); }
-.is-sidebar-collapsed .sidebar-header { padding: 14px 0; flex-direction: column; gap: 12px; }
+.is-sidebar-collapsed .sidebar-header { padding: 0; justify-content: center; }
 .is-sidebar-collapsed .brand { flex: none; }
 .is-sidebar-collapsed .brand-name,
 .is-sidebar-collapsed .nav-link > span,

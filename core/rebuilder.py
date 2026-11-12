@@ -196,8 +196,8 @@ def _seed_shadow_sources(
                     source_id, original_path, relative_path, path_hash,
                     content_hash, graph_hash, rag_hash, graph_status, rag_status,
                     exists_status, origin_hash, origin_size, origin_modified_at,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, library_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["source_id"],
@@ -215,6 +215,7 @@ def _seed_shadow_sources(
                     row["origin_modified_at"],
                     row["created_at"],
                     row["updated_at"],
+                    row["library_path"],
                 ),
             )
         target.commit()

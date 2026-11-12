@@ -19,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/api";
 import { ErrorNotice, LoadingState } from "../components/Feedback";
@@ -297,8 +297,12 @@ function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: Se
               </details>
             ) : null}
             <footer>
-              <FileBadge />
-              <span>{result.source.relative_path ?? result.source.source_id}</span>
+              <FileText size={14} />
+              {result.source.source_path ? (
+                <Link to={`/documents?path=${encodeURIComponent(result.source.source_path)}`}>
+                  {result.source.source_path}
+                </Link>
+              ) : <span>{result.source.original_path ?? result.source.relative_path ?? result.source.source_id}</span>}
             </footer>
           </article>
           );
@@ -307,10 +311,6 @@ function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: Se
       </div>
     </section>
   );
-}
-
-function FileBadge() {
-  return <span className="mini-file-badge">MD</span>;
 }
 
 function GlobalResults({ data, displayMode }: { data: GlobalQueryData; displayMode: SearchResultDisplayMode }) {

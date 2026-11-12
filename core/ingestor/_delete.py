@@ -8,6 +8,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 
@@ -39,7 +40,7 @@ def delete_document(self, source_id: str) -> dict[str, Any]:
         try:
             row = connection.execute(
                 """
-                    SELECT source_id, relative_path
+                    SELECT source_id, relative_path, library_path
                     FROM sources
                     WHERE source_id = ? AND exists_status = 'active'
                     """,
@@ -51,7 +52,28 @@ def delete_document(self, source_id: str) -> dict[str, Any]:
             raise DocumentNotFoundError(f"活动文档不存在：{source_id}")
 
         relative_path = row["relative_path"]
-        recycled_path = self._move_source_to_recycle(relative_path)
+        original = raw_recycle = None
+        if row["library_path"] is not None:
+            from ..library import resolve_path
+            original = resolve_path(self, row["library_path"], must_exist=False)
+            if original.is_file():
+                raw_recycle = self.external_dir.parent / "recycle" / "originals" / uuid4().hex / row["library_path"]
+                raw_recycle.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(original), str(raw_recycle))
+        try:
+            if raw_recycle is not None:
+                now = datetime.now(timezone.utc)
+                _write_json_atomic(raw_recycle.with_name(raw_recycle.name + ".meta.json"), {
+                    "original_path": row["library_path"],
+                    "recycled_at": now.isoformat(),
+                    "expires_at": (now + timedelta(days=self.settings.recycle_life_days)).isoformat(),
+                })
+            recycled_path = self._move_source_to_recycle(relative_path)
+        except Exception:
+            if raw_recycle is not None:
+                shutil.move(str(raw_recycle), str(original))
+                raw_recycle.with_name(raw_recycle.name + ".meta.json").unlink(missing_ok=True)
+            raise
         connection = connect_sources(self.paths)
         try:
             connection.execute("BEGIN IMMEDIATE")

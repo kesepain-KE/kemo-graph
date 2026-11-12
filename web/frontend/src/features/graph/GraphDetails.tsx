@@ -88,10 +88,12 @@ export function GraphDetails({
         <span>{selected.source_ids.length} 个文档 · {selected.group_ids.length} 个真实群组</span>
         <div className="graph-source-list">
           {selected.source_ids.slice(0, 5).map((sourceId) => (
-            <small key={sourceId}>{sourceLabels.get(sourceId) ?? sourceId}</small>
+            <Link key={sourceId} to={`/documents?source=${encodeURIComponent(sourceId)}`}>
+              {sourceLabels.get(sourceId) ?? sourceId}
+            </Link>
           ))}
         </div>
-        <Link className="text-link" to="/documents">前往文档管理</Link>
+        <Link className="text-link" to="/documents">前往知识库</Link>
       </div>
     </div>
   );

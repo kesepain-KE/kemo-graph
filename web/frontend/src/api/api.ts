@@ -8,8 +8,9 @@ import type {
   DocumentContentData,
   DocumentContentUpdateData,
   DocumentListData,
-  DocumentProject,
-  DocumentLocation,
+  LibraryData,
+  LibraryEntry,
+  OriginalPreview,
   LogCategory,
   RuntimeLogs,
   FullGraphData,
@@ -326,14 +327,26 @@ export const api = {
     request<DeleteDocumentData>(`/documents/${encodeURIComponent(sourceId)}`, {
       method: "DELETE",
     }),
-  getDocumentProjects: () => request<{ projects: DocumentProject[] }>("/projects"),
-  createDocumentProject: (name: string) => request<DocumentProject>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
-  renameDocument: (sourceId: string, filename: string, expectedRelativePath: string) =>
-    request<DocumentLocation>(`/documents/${encodeURIComponent(sourceId)}/location`, {
-      method: "PATCH", body: JSON.stringify({ filename, expected_relative_path: expectedRelativePath }),
+  getLibrary: (directory = "", search = "", signal?: AbortSignal) =>
+    request<LibraryData>(`/library?${new URLSearchParams({ directory, search })}`, { signal }),
+  refreshLibrary: () =>
+    request<{ updated: string[]; deleted: string[]; errors: Array<{ path: string; message: string }> }>("/library/refresh", {
+      method: "POST", body: JSON.stringify({}), timeoutMs: null,
     }),
-  moveDocuments: (sourceIds: string[], project: string) =>
-    request<{ documents: DocumentLocation[] }>("/documents/move-batch", { method: "POST", body: JSON.stringify({ source_ids: sourceIds, project }) }),
+  createLibraryEntry: (directory: string, name: string, kind: "file" | "directory") =>
+    request<LibraryEntry>("/library/entries", { method: "POST", body: JSON.stringify({ directory, name, kind }) }),
+  moveLibraryEntry: (path: string, destination: string) =>
+    request<{ path: string }>("/library/entries", { method: "PATCH", body: JSON.stringify({ path, destination }) }),
+  deleteLibraryEntry: (path: string) =>
+    request<{ deleted: string }>("/library/entries", { method: "DELETE", body: JSON.stringify({ path }), timeoutMs: null }),
+  buildLibraryEntry: (path: string) =>
+    request<MaintenanceJob>("/library/build", { method: "POST", body: JSON.stringify({ path }), timeoutMs: null }),
+  previewOriginal: (path: string, signal?: AbortSignal) =>
+    request<OriginalPreview>(`/library/preview?${new URLSearchParams({ path })}`, { signal }),
+  originalUrl: (path: string, download = false) =>
+    `${API_BASE}/library/original?${new URLSearchParams({ path, download: String(download) })}`,
+  sourceLocation: (sourceId: string) =>
+    request<{ path: string }>(`/documents/${encodeURIComponent(sourceId)}/source`),
   emptyRecycle: () =>
     request<RecycleCleanupData>("/maintenance/recycle", {
       method: "DELETE",
@@ -344,7 +357,7 @@ export const api = {
     status?: "active" | "pending" | "all",
     signal?: AbortSignal,
     options?: {
-      project?: string;
+      directory?: string;
       search?: string;
       graphStatus?: string;
       ragStatus?: string;
@@ -355,7 +368,7 @@ export const api = {
     if (page !== 1) parameters.set("page", String(page));
     if (pageSize !== 20) parameters.set("page_size", String(pageSize));
     if (status) parameters.set("status", status);
-    if (options?.project !== undefined) parameters.set("project", options.project);
+    if (options?.directory !== undefined) parameters.set("directory", options.directory);
     if (options?.search) parameters.set("search", options.search);
     if (options?.graphStatus && options.graphStatus !== "all") parameters.set("graph_status", options.graphStatus);
     if (options?.ragStatus && options.ragStatus !== "all") parameters.set("rag_status", options.ragStatus);
@@ -389,9 +402,9 @@ export const api = {
       body: JSON.stringify({ source_ids: sourceIds }),
       timeoutMs: 2 * 60_000,
     }),
-  deleteAllDocuments: (project?: string) =>
+  deleteAllDocuments: (directory?: string) =>
     request<DocumentBatchDeleteData>(
-      `/documents?confirm=delete-all${project !== undefined ? `&project=${encodeURIComponent(project)}` : ""}`,
+      `/documents?confirm=delete-all${directory !== undefined ? `&directory=${encodeURIComponent(directory)}` : ""}`,
       {
         method: "DELETE",
         timeoutMs: null,
@@ -409,10 +422,10 @@ export const api = {
       body: JSON.stringify({ filename: file.name, content: await file.text() }),
       timeoutMs: 2 * 60_000,
     }),
-  importFile: (file: File, ingestAfterImport = true, project?: string) => {
+  importFile: (file: File, ingestAfterImport = true, directory = "") => {
     const body = new FormData();
     body.append("file", file, file.name);
-    return request<ImportData>(`/import?ingest=${ingestAfterImport}${project !== undefined ? `&project=${encodeURIComponent(project)}` : ""}`, {
+    return request<ImportData>(`/import?ingest=${ingestAfterImport}&directory=${encodeURIComponent(directory)}`, {
       method: "POST",
       body,
       timeoutMs: null,

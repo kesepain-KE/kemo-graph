@@ -103,7 +103,7 @@ def test_delete_document_marks_source_deleted_when_backup_cleanup_is_deferred(tm
         external_dir=external,
     )
     uploaded = service.upload_file("# active", "doc.md")
-    recycle_file = external.parent / "recycle" / "doc.md"
+    recycle_file = external.parent / "recycle" / uploaded["markdown_relative_path"]
     recycle_file.parent.mkdir(parents=True)
     recycle_file.write_text("old", encoding="utf-8")
 
@@ -115,8 +115,8 @@ def test_delete_document_marks_source_deleted_when_backup_cleanup_is_deferred(tm
 
     assert result["deleted_source_id"] == uploaded["source_id"]
     assert service.list_documents(status="active")["pagination"]["total"] == 0
-    assert not (external / "doc.md").exists()
-    assert recycle_file.read_text(encoding="utf-8") == "# active"
+    assert not (external / uploaded["markdown_relative_path"]).exists()
+    assert recycle_file.read_text(encoding="utf-8") == "# active\n"
 
 
 def test_does_not_replace_a_directory(recycle, tmp_path):

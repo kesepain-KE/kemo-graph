@@ -32,7 +32,7 @@ from core.portable_store import (
 from .deps import RuntimeContext, get_context, get_job_manager, get_service, get_updater
 from .errors import success_response
 from .store_routes import _store_operation, router as store_router
-from .document_organization_routes import router as document_organization_router
+from .library_routes import router as library_router
 from .log_routes import router as log_router
 from .query_progress import router as query_progress_router
 from .schemas import (
@@ -258,14 +258,14 @@ def get_documents(
     status: Annotated[str | None, Query(description="active / pending / all")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    project: Annotated[str | None, Query(max_length=160, description="项目名；空字符串表示根目录，/ 表示全部项目")] = None,
+    directory: Annotated[str | None, Query(max_length=2048, description="原文件相对目录，省略时查询全库")] = None,
     search: Annotated[str | None, Query(max_length=200, description="按相对路径字面搜索")] = None,
     graph_status: Annotated[str | None, Query(description="Graph 状态过滤")] = None,
     rag_status: Annotated[str | None, Query(description="RAG 状态过滤")] = None,
     include_summary: Annotated[bool, Query(description="是否返回当前范围的状态摘要")] = False,
 ) -> dict:
     if (
-        project is None
+        directory is None
         and search is None
         and graph_status is None
         and rag_status is None
@@ -279,7 +279,7 @@ def get_documents(
             status=status,
             page=page,
             page_size=page_size,
-            project=project,
+            directory=directory,
             search=search,
             graph_status=graph_status,
             rag_status=rag_status,
@@ -323,16 +323,16 @@ def delete_all_documents(
         Literal["delete-all"],
         Query(description="破坏性操作确认值，必须为 delete-all"),
     ],
-    project: Annotated[
+    directory: Annotated[
         str | None,
-        Query(max_length=160, description="仅清空指定项目；空字符串表示未分组"),
+        Query(max_length=2048, description="仅清空指定原文件目录"),
     ] = None,
 ) -> dict:
     if confirm != "delete-all":  # Literal 已校验；保留显式防线。
         raise ValueError("清空文档必须显式确认 delete-all")
     return success_response(
-        service.delete_all_documents(project=project)
-        if project is not None
+        service.delete_all_documents(directory=directory)
+        if directory is not None
         else service.delete_all_documents()
     )
 
@@ -355,15 +355,14 @@ async def post_import(
         bool,
         Query(alias="ingest", description="转换后是否立即整理图谱与 RAG"),
     ] = True,
-    project: Annotated[str | None, Query(max_length=160, description="目标项目；空字符串为未分组，省略时保持原行为")] = None,
+    directory: Annotated[str | None, Query(max_length=2048, description="原文件目标相对目录")] = None,
 ) -> dict:
     with tempfile.TemporaryDirectory(prefix="kemo-graph-import-") as temporary_dir:
         filename, staged = await _stage_uploaded_document(file, Path(temporary_dir))
         result = service.import_document(
             staged,
             ingest_after_import=ingest_after_import,
-            _original_identity=f"upload://{project}/{filename}" if project else f"upload://{filename}",
-            **({"project": project} if project is not None else {}),
+            **({"directory": directory} if directory is not None else {}),
         )
         _raise_import_failure(result)
     return success_response(result)
@@ -662,6 +661,7 @@ def post_store_import_path(
                 payload.path,
                 ingest_after_import=payload.ingest_after_import,
                 expected_origin_hash=payload.expected_origin_hash,
+                directory=payload.directory,
             ),
         )
     )
@@ -688,7 +688,6 @@ async def post_store_import(
             lambda service: service.import_document(
                 staged,
                 ingest_after_import=ingest_after_import,
-                _original_identity=f"upload://{filename}",
             ),
         )
         result = data.get("result")
@@ -721,5 +720,5 @@ def _validated_upload_filename(value: str | None) -> str:
     return filename
 
 router.include_router(store_router)
-router.include_router(document_organization_router)
+router.include_router(library_router)
 router.include_router(log_router)

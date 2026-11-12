@@ -31,6 +31,8 @@ from core.portable_store import (
 
 from .deps import RuntimeContext, get_context, get_job_manager, get_service, get_updater
 from .errors import success_response
+from .library_routes import LibraryCreate, LibraryMove, LibraryPath
+from core import library
 from .schemas import (
     APIResponse,
     AnswerQueryRequest,
@@ -48,11 +50,9 @@ from .schemas import (
     StoreCacheKeyRequest,
     StoreCacheListRequest,
     StoreCleanupRecycleRequest,
-    StoreDocumentLocationRequest,
     StoreDocumentListRequest,
     StoreDocumentBatchDeleteRequest,
     StoreDocumentContentUpdateRequest,
-    StoreDocumentMoveRequest,
     StoreDeleteAllDocumentsRequest,
     StoreEdgeRequest,
     StoreFederatedQueryRequest,
@@ -68,7 +68,6 @@ from .schemas import (
     StoreNeighborhoodRequest,
     StoreNodeRequest,
     StoreOrganizeGraphRequest,
-    StoreProjectCreateRequest,
     StoreRAGQueryRequest,
     StoreRootRequest,
     StoreSourceRequest,
@@ -84,6 +83,48 @@ from .schemas import (
 
 router = APIRouter()
 Context = Annotated[RuntimeContext, Depends(get_context)]
+
+
+class StoreLibraryList(StoreRootRequest):
+    directory: str = ""
+    search: str = ""
+
+
+class StoreLibraryPath(StoreRootRequest, LibraryPath):
+    pass
+
+
+class StoreLibraryCreate(StoreRootRequest, LibraryCreate):
+    pass
+
+
+class StoreLibraryMove(StoreRootRequest, LibraryMove):
+    pass
+
+
+@router.post("/stores/library/list", response_model=APIResponse)
+def post_store_library_list(payload: StoreLibraryList, context: Context) -> dict:
+    return success_response(_store_operation(payload.store_root, context, lambda service: library.list_library(service, payload.directory, payload.search)))
+
+
+@router.post("/stores/library/create", response_model=APIResponse)
+def post_store_library_create(payload: StoreLibraryCreate, context: Context) -> dict:
+    return success_response(_store_operation(payload.store_root, context, lambda service: library.create_entry(service, payload.directory, payload.name, payload.kind)))
+
+
+@router.post("/stores/library/move", response_model=APIResponse)
+def post_store_library_move(payload: StoreLibraryMove, context: Context) -> dict:
+    return success_response(_store_operation(payload.store_root, context, lambda service: library.relocate_entry(service, payload.path, payload.destination)))
+
+
+@router.post("/stores/library/delete", response_model=APIResponse)
+def post_store_library_delete(payload: StoreLibraryPath, context: Context) -> dict:
+    return success_response(_store_operation(payload.store_root, context, lambda service: library.delete_entry(service, payload.path)))
+
+
+@router.post("/stores/library/refresh", response_model=APIResponse)
+def post_store_library_refresh(payload: StoreLibraryPath, context: Context) -> dict:
+    return success_response(_store_operation(payload.store_root, context, lambda service: library.refresh_library(service, payload.path)))
 
 
 def _store_operation(
@@ -298,81 +339,11 @@ def post_store_documents_list(
                 status=status,
                 page=payload.page,
                 page_size=payload.page_size,
-                project=payload.project,
+                directory=payload.directory,
                 search=payload.search,
                 graph_status=payload.graph_status,
                 rag_status=payload.rag_status,
                 include_summary=payload.include_summary,
-            ),
-        )
-    )
-
-
-@router.post("/stores/projects/list", response_model=APIResponse)
-def post_store_projects_list(
-    payload: StoreRootRequest,
-    context: Context,
-) -> dict:
-    return success_response(
-        _store_operation(
-            payload.store_root,
-            context,
-            lambda service: service.list_projects(),
-        )
-    )
-
-
-@router.post("/stores/projects/create", response_model=APIResponse)
-def post_store_projects_create(
-    payload: StoreProjectCreateRequest,
-    context: Context,
-) -> dict:
-    return success_response(
-        _store_operation(
-            payload.store_root,
-            context,
-            lambda service: service.create_project(payload.name),
-        )
-    )
-
-
-@router.post("/stores/documents/location", response_model=APIResponse)
-def post_store_document_location(
-    payload: StoreDocumentLocationRequest,
-    context: Context,
-) -> dict:
-    if payload.filename is None and payload.project is None:
-        raise ValueError("至少提供 filename 或 project")
-    change = {
-        "source_id": payload.source_id,
-        "filename": payload.filename,
-        "project": payload.project,
-        "expected_relative_path": payload.expected_relative_path,
-    }
-    outcome = _store_operation(
-        payload.store_root,
-        context,
-        lambda service: service.relocate_documents([change]),
-    )
-    return success_response(
-        {**outcome, "result": outcome["result"]["documents"][0]}
-    )
-
-
-@router.post("/stores/documents/move-batch", response_model=APIResponse)
-def post_store_documents_move_batch(
-    payload: StoreDocumentMoveRequest,
-    context: Context,
-) -> dict:
-    return success_response(
-        _store_operation(
-            payload.store_root,
-            context,
-            lambda service: service.relocate_documents(
-                [
-                    {"source_id": source_id, "project": payload.project}
-                    for source_id in payload.source_ids
-                ]
             ),
         )
     )

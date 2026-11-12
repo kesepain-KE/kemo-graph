@@ -17,6 +17,7 @@ from provider.embedding import EmbeddingResult
 import start
 from api import create_app as create_api_app
 from api.deps import get_service
+from core import library
 from core.config import AppConfig
 from core.db import connect_graph, connect_rag, connect_sources
 from core.ingestor import Ingestor
@@ -125,8 +126,8 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             self.assertEqual(updated["rag_status"], "pending")
             after = service.get_document_content(source_id)
             self.assertEqual(after["content"], "# Updated\n\nBody\n")
-            self.assertEqual(after["graph_hash"], old_hash)
-            self.assertEqual(after["rag_hash"], old_hash)
+            self.assertEqual(after["graph_hash"], before["processed_content_hash"])
+            self.assertEqual(after["rag_hash"], before["processed_content_hash"])
             self.assertNotEqual(after["content_hash"], old_hash)
             with self.assertRaises(DocumentContentConflictError):
                 service.update_document_content(
@@ -171,10 +172,14 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             data_dir = root / "data"
             external_dir = root / "external" / "markdown"
             external_dir.mkdir(parents=True)
-            document = external_dir / "nested" / "doc.md"
-            document.parent.mkdir()
+            document = root / "external" / "originals" / "nested" / "doc.md"
+            document.parent.mkdir(parents=True)
             document.write_text("Alpha links Beta", encoding="utf-8")
             settings = _settings()
+            service = KnowledgeBaseService(settings=settings, data_dir=data_dir, external_dir=external_dir)
+            imported = service.import_document(document, ingest_after_import=False)
+            processed_path = imported["markdown_relative_path"]
+            processed_content = (external_dir / processed_path).read_text(encoding="utf-8")
             ingestor = Ingestor(
                 data_dir,
                 external_dir,
@@ -210,8 +215,8 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             self.assertEqual(len(document_page["documents"]), 1)
             self.assertEqual(document_page["pagination"]["total"], 1)
 
-            service.create_project("project-b")
-            service.relocate_documents([{"source_id": source_id, "project": "project-b", "filename": "renamed.md"}])
+            library.create_entry(service, "", "folder-b", "directory")
+            library.relocate_entry(service, "nested/doc.md", "folder-b/renamed.md")
             self.assertEqual(service.status()["graph"], status["graph"])
             self.assertEqual(service.status()["rag"], status["rag"])
             scanned = ingestor.scan_sources()
@@ -221,24 +226,26 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             moved_record = service.list_documents()["documents"][0]
             self.assertEqual(moved_record["graph_status"], "ready")
             self.assertEqual(moved_record["rag_status"], "ready")
-            service.relocate_documents([{"source_id": source_id, "project": "nested", "filename": "doc.md"}])
+            library.relocate_entry(service, "folder-b/renamed.md", "nested/doc.md")
 
             # Re-imported documents may already have an older recycled copy.
-            previous_recycled = root / "external" / "recycle" / "nested" / "doc.md"
+            previous_recycled = root / "external" / "recycle" / processed_path
             previous_recycled.parent.mkdir(parents=True)
             previous_recycled.write_text("previous revision", encoding="utf-8")
             result = service.delete_document(source_id)
 
             self.assertEqual(result["deleted_source_id"], source_id)
-            self.assertEqual(result["recycled_path"], "recycle/nested/doc.md")
+            self.assertEqual(result["recycled_path"], f"recycle/{processed_path}")
             self.assertFalse(document.exists())
-            recycled = root / "external" / "recycle" / "nested" / "doc.md"
+            recycled = root / "external" / "recycle" / processed_path
             self.assertTrue(recycled.exists())
-            self.assertEqual(recycled.read_text(encoding="utf-8"), "Alpha links Beta")
+            self.assertEqual(recycled.read_text(encoding="utf-8"), processed_content)
             metadata = json.loads(
-                recycled.with_name("doc.md.meta.json").read_text(encoding="utf-8")
+                recycled.with_name(recycled.name + ".meta.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(metadata["original_path"], "nested/doc.md")
+            self.assertEqual(metadata["original_path"], processed_path)
+            originals_recycled = list((root / "external" / "recycle" / "originals").rglob("doc.md"))
+            self.assertEqual(originals_recycled[0].read_text(encoding="utf-8"), "Alpha links Beta")
             self.assertIn("expires_at", metadata)
             self.assertEqual(_table_count(ingestor, "graph", "nodes"), 0)
             self.assertEqual(_table_count(ingestor, "rag", "chunks"), 0)

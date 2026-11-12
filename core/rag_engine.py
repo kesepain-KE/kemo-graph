@@ -853,7 +853,7 @@ class RAGEngine(RAGAuxiliaryMixin):
             connection.close()
         return hierarchy
 
-    def _load_source_paths(self, source_ids: set[str]) -> dict[str, str]:
+    def _load_source_paths(self, source_ids: set[str]) -> dict[str, dict[str, str | None]]:
         if not source_ids:
             return {}
         placeholders = ",".join("?" for _ in source_ids)
@@ -861,7 +861,7 @@ class RAGEngine(RAGAuxiliaryMixin):
         try:
             rows = connection.execute(
                 f"""
-                SELECT source_id, relative_path
+                SELECT source_id, original_path, library_path, source_uri
                 FROM sources
                 WHERE source_id IN ({placeholders})
                 """,
@@ -869,7 +869,15 @@ class RAGEngine(RAGAuxiliaryMixin):
             ).fetchall()
         finally:
             connection.close()
-        paths = {row["source_id"]: row["relative_path"] for row in rows}
+        paths = {
+            row["source_id"]: {
+                "relative_path": row["library_path"] or row["original_path"],
+                "original_path": row["original_path"],
+                "source_path": row["library_path"],
+                "source_uri": row["source_uri"],
+            }
+            for row in rows
+        }
         missing_source_ids = source_ids.difference(paths)
         if missing_source_ids:
             raise IndexIntegrityError(

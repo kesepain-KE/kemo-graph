@@ -101,8 +101,8 @@ def scan_sources(self) -> ScanResult:
                         INSERT INTO sources (
                             source_id, original_path, relative_path, path_hash,
                             content_hash, graph_status, rag_status,
-                            exists_status, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, 'pending', 'pending', 'active', ?, ?)
+                            exists_status, created_at, updated_at, library_path
+                        ) VALUES (?, ?, ?, ?, ?, 'pending', 'pending', 'active', ?, ?, ?)
                         """,
                     (
                         source_id,
@@ -112,6 +112,7 @@ def scan_sources(self) -> ScanResult:
                         content_hash,
                         now,
                         now,
+                        _library_path(self, original_path),
                     ),
                 )
                 new_ids.append(source_id)
@@ -140,7 +141,7 @@ def scan_sources(self) -> ScanResult:
                         UPDATE sources
                         SET original_path = ?, relative_path = ?, content_hash = ?,
                             graph_status = ?, rag_status = ?,
-                            exists_status = 'active', updated_at = ?
+                            exists_status = 'active', updated_at = ?, library_path = ?
                         WHERE source_id = ?
                         """,
                     (
@@ -150,6 +151,7 @@ def scan_sources(self) -> ScanResult:
                         graph_status,
                         rag_status,
                         now,
+                        _library_path(self, original_path),
                         source_id,
                     ),
                 )
@@ -178,10 +180,10 @@ def scan_sources(self) -> ScanResult:
                     connection.execute(
                         """
                             UPDATE sources
-                            SET original_path = ?, relative_path = ?, updated_at = ?
+                            SET original_path = ?, relative_path = ?, updated_at = ?, library_path = ?
                             WHERE source_id = ?
                             """,
-                        (original_path, relative_path, now, source_id),
+                        (original_path, relative_path, now, _library_path(self, original_path), source_id),
                     )
                 unchanged_ids.append(source_id)
 
@@ -226,6 +228,16 @@ def scan_sources(self) -> ScanResult:
         _elapsed_ms(started_at),
     )
     return result
+
+
+def _library_path(self, original_path: str) -> str | None:
+    try:
+        return Path(original_path).resolve().relative_to(
+            (self.external_dir.parent / "originals").resolve()
+        ).as_posix()
+    except ValueError:
+        # External synchronization has a source URI, not a local original file.
+        return None
 
 
 def _rag_chunking_config_changed(self) -> bool:

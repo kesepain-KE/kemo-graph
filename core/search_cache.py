@@ -27,7 +27,7 @@ from .db import (
 # Bump whenever retrieval semantics change.  Existing entries are still
 # inspectable in the cache history, but must not mask a newly improved recall
 # pipeline after an upgrade.
-CACHE_FORMAT_VERSION = "3"
+CACHE_FORMAT_VERSION = "4"
 
 
 class SearchCacheError(RuntimeError):
