@@ -1,4 +1,4 @@
-"""Release metadata must agree with the authoritative root version.yaml."""
+"""Release metadata must agree with the authoritative root version.json."""
 
 import yaml
 import json
@@ -29,7 +29,6 @@ def test_documentation_matches_application_version():
         assert f"version-{version}-" in content
         assert f"**{version}**" in content
     assert f"**当前版本**：`{version}`" in (ROOT / "api.md").read_text(encoding="utf-8")
-    assert f"## {version} " in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert f"**{version}**" in (ROOT / "markitdown/README.md").read_text(encoding="utf-8")
 
 

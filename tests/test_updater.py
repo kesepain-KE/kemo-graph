@@ -37,8 +37,8 @@ def _load_update_entry():
 def _project(tmp_path: Path, version: str = "1.0.0") -> Path:
     root = tmp_path / "project"
     root.mkdir()
-    (root / "version.yaml").write_text(
-        yaml.safe_dump({"version": version}), encoding="utf-8"
+    (root / "version.json").write_text(
+        json.dumps({"version": version}), encoding="utf-8"
     )
     return root
 
@@ -257,15 +257,15 @@ def test_remote_failure_is_not_reported_as_up_to_date(tmp_path: Path) -> None:
     assert updater.status()["error"]
 
 
-def test_remote_version_is_read_as_yaml(tmp_path, monkeypatch):
+def test_remote_version_is_read_as_json(tmp_path, monkeypatch):
     import update.updater as module
     root = _project(tmp_path)
-    response = httpx.Response(200, text="version: 1.2.0\n# YAML release metadata\n",
-                              request=httpx.Request("GET", "https://release.test/version.yaml"))
+    response = httpx.Response(200, text='{"version": "1.2.0"}',
+                              request=httpx.Request("GET", "https://release.test/version.json"))
     monkeypatch.setattr(module.httpx, "get", lambda *args, **kwargs: response)
     status = ApplicationUpdater(root).check()
     assert status["latest_version"] == "1.2.0"
-    assert status["version_url"].endswith("/version.yaml")
+    assert status["version_url"].endswith("/version.json")
 
 
 def test_runtime_and_user_config_do_not_make_worktree_dirty(tmp_path: Path) -> None:
@@ -323,8 +323,8 @@ def test_cli_version_outputs_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert start.main(["version"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["data"]["version"] == yaml.safe_load(
-        (Path(__file__).resolve().parents[1] / "version.yaml").read_text(encoding="utf-8")
+    assert payload["data"]["version"] == json.loads(
+        (Path(__file__).resolve().parents[1] / "version.json").read_text(encoding="utf-8")
     )["version"]
 
 

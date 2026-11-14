@@ -1212,7 +1212,7 @@ POST /api/v1/update/apply
 ```
 
 - `status` 只读取本地版本、上次检查状态和 Git 工作区预检，不访问网络。
-- `check` 从公开仓库 `kesepain-KE/kemo-graph` 的 `main/version.yaml` 检查最新 SemVer。
+- `check` 从公开仓库 `kesepain-KE/kemo-graph` 的 `main/version.json` 检查最新 SemVer。
 - 根目录 `update.py` 在本地与远端版本相同时也会询问是否强制重新执行更新；
   用户确认后仍必须通过 Git 快进、工作区保护、依赖安装和前端构建检查。
 - `apply` 将更新作为 `kind=update` 的持久化后台任务提交，只允许来自 `localhost`、`127.0.0.1` 或 `::1` 的请求。

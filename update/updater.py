@@ -23,10 +23,10 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VERSION_FILE = "version.yaml"
+VERSION_FILE = "version.json"
 DEFAULT_REPOSITORY = "https://github.com/kesepain-KE/kemo-graph"
 DEFAULT_VERSION_URL = (
-    "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.yaml"
+    "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.json"
 )
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
@@ -141,12 +141,12 @@ def _compare_prerelease(left: tuple[str, ...], right: tuple[str, ...]) -> int:
 def read_local_version(project_root: Path | str | None = None) -> str:
     root = Path(project_root or PROJECT_ROOT).resolve()
     try:
-        payload = yaml.safe_load((root / VERSION_FILE).read_text(encoding="utf-8"))
+        payload = json.loads((root / VERSION_FILE).read_text(encoding="utf-8"))
         version = str(payload["version"]).strip()
         SemanticVersion.parse(version)
         return version
-    except (OSError, KeyError, TypeError, yaml.YAMLError, ValueError) as exc:
-        raise UpdateSourceError(f"无法读取本地 version.yaml：{exc}") from exc
+    except (OSError, KeyError, TypeError, json.JSONDecodeError, ValueError) as exc:
+        raise UpdateSourceError(f"无法读取本地 version.json：{exc}") from exc
 
 
 class ApplicationUpdater:
@@ -303,7 +303,7 @@ class ApplicationUpdater:
                 self._record_error(exc)
                 raise
             except (ValueError, TypeError, KeyError) as exc:
-                error = UpdateSourceError(f"远端 version.yaml 格式无效：{exc}")
+                error = UpdateSourceError(f"远端 version.json 格式无效：{exc}")
                 self._record_error(error)
                 raise error from exc
             except Exception as exc:
@@ -385,7 +385,7 @@ class ApplicationUpdater:
                 if SemanticVersion.parse(remote_version) < SemanticVersion.parse(
                     checked["latest_version"]
                 ):
-                    raise UpdateSourceError("GitHub main 分支版本低于远端 version.yaml")
+                    raise UpdateSourceError("GitHub main 分支版本低于远端 version.json")
 
                 callback(0.22, "备份并保护用户配置")
                 if config_path.is_file():
@@ -589,11 +589,11 @@ class ApplicationUpdater:
     def _read_remote_version(self, target: str) -> str:
         raw = self._git_output(["git", "show", f"{target}:{VERSION_FILE}"])
         try:
-            version = str(yaml.safe_load(raw)["version"]).strip()
+            version = str(json.loads(raw)["version"]).strip()
             SemanticVersion.parse(version)
             return version
-        except (yaml.YAMLError, KeyError, TypeError, ValueError) as exc:
-            raise UpdateSourceError(f"远端分支 version.yaml 无效：{exc}") from exc
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise UpdateSourceError(f"远端分支 version.json 无效：{exc}") from exc
 
     def _backup_config(self, content: bytes) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -673,14 +673,14 @@ def _fetch_version(url: str, timeout: float) -> Mapping[str, Any]:
             url,
             timeout=timeout,
             follow_redirects=True,
-            headers={"Accept": "application/yaml, text/yaml, text/plain", "User-Agent": "kemo-graph-updater"},
+            headers={"Accept": "application/json, text/plain", "User-Agent": "kemo-graph-updater"},
         )
         response.raise_for_status()
-        payload = yaml.safe_load(response.text)
-    except (httpx.HTTPError, yaml.YAMLError) as exc:
-        raise UpdateSourceError(f"无法读取 GitHub version.yaml：{exc}") from exc
+        payload = json.loads(response.text)
+    except (httpx.HTTPError, json.JSONDecodeError) as exc:
+        raise UpdateSourceError(f"无法读取 GitHub version.json：{exc}") from exc
     if not isinstance(payload, Mapping):
-        raise UpdateSourceError("GitHub version.yaml 根节点必须是 YAML 映射")
+        raise UpdateSourceError("GitHub version.json 根节点必须是 JSON 对象")
     return payload
 
 
