@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 from core.graph.visualization import GraphDirection
 from core.maintenance.rebuild import ProgressCallback
 from core.service.context import ServiceContext

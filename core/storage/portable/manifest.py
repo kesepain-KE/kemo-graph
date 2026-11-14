@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 
 
 from core.storage.portable.models import STORAGE_DIRECTORY_NAME, STORE_MANIFEST_VERSION, STORE_SCOPES, PortableStoreError, PortableStoreManifest

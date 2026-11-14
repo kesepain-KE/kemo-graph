@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 from api import create_app
-from core.settings.schema import AppConfig
-from core.documents.errors import DocumentImportPathError
-from core.documents.formats import SUPPORTED_IMPORT_SUFFIXES
+from core.settings import AppConfig
+from core.documents import DocumentImportPathError
+from core.documents import SUPPORTED_IMPORT_SUFFIXES
 from markitdown import DocumentConverter, DocumentConverterResult, MarkItDown, supported_suffixes
 from provider.tools import document_tools
 

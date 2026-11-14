@@ -8,12 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_graph, connect_rag
-from core.storage.schema import initialize_databases
-from core.graph.organizer import GraphOrganizer
-from core.service.facade import KnowledgeBaseService
-from core.rag.engine import RAGEngine
+from core.settings import AppConfig
+from core.storage import connect_graph, connect_rag
+from core.storage import initialize_databases
+from core.graph import GraphOrganizer
+from core.service import KnowledgeBaseService
+from core.rag import RAGEngine
 from provider.embedding import EmbeddingResult
 
 

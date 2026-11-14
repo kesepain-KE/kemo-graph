@@ -332,6 +332,14 @@ Suggested flow: Fork this repository → create a feature branch → make your c
 
 ---
 
+### Backend development entry points
+
+Use `from core import KnowledgeBaseService` or import it from `core.service`. Configuration and storage live in `core.settings` and `core.storage`; graph, RAG, ingestion and maintenance live in their corresponding domain packages. Legacy flat-module compatibility imports have been removed. API routes and models now live in `api/routes/` and `api/schemas/`, with the HTTP contract preserved.
+
+Run `python tools/check_architecture.py` and `python -m pytest tests/ -q`. See [core service boundaries](core/service/README.md) for dependency layers and export rules.
+
+---
+
 ## License
 
 This project is open-sourced under the [Apache License 2.0](LICENSE).

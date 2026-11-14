@@ -2,8 +2,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from fastapi import UploadFile
-from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
-from core.documents.errors import DocumentImportPathError, DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
+from core.documents import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
+from core.documents import DocumentImportPathError, DocumentTooLargeError, UnsupportedDocumentFormatError
+from core.documents.errors import DocumentIngestError
 
 
 async def _stage_uploaded_document(

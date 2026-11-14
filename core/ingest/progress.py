@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
-from core.storage.connections import connect_sources
+from core.storage import connect_sources
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()

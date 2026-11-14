@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 from core.graph.entity import extract
 from core.common.normalization import norm_key
 

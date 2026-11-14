@@ -9,14 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import create_app
-from core import build_documents, library
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_sources
-from core.ingest.pipeline import Ingestor
-from core.maintenance.jobs import MaintenanceJobManager
-from core.service.facade import KnowledgeBaseService
+from core.documents import build as build_documents
+from core.documents import library
+from core.maintenance import library as maintenance_library
+from core.settings import AppConfig
+from core.storage import connect_sources
+from core.ingest import Ingestor
+from core.maintenance import MaintenanceJobManager
+from core.service import KnowledgeBaseService
 from core.documents.errors import DocumentContentConflictError
-from core.storage.locks import get_knowledge_base_lock
+from core.storage import get_knowledge_base_lock
 from provider.embedding import EmbeddingResult
 
 
@@ -71,7 +73,7 @@ def test_processed_save_preserves_original_mapping_and_previous_index_hashes(ser
     assert record["content_hash"] == saved["content_hash"]
     assert library.original_for_source(service, source_id).read_bytes() == original
     assert (service.external_dir / "file_map.json").read_bytes() == mapping
-    assert library.refresh_library(service)["updated"] == []
+    assert maintenance_library.refresh_library(service)["updated"] == []
     assert build_documents.read_processed(service, source_id)["content"] == saved["content"]
     with pytest.raises(DocumentContentConflictError):
         build_documents.update_processed(service, source_id, "stale edit", previous["content_hash"])

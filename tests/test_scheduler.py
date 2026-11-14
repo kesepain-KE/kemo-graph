@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from core.settings.schema import AppConfig
-from core.maintenance.scheduler import MaintenanceScheduler
+from core.settings import AppConfig
+from core.maintenance import MaintenanceScheduler
 from start_web import create_app
 
 

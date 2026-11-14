@@ -9,15 +9,16 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_graph, connect_sources
-from core.storage.connections import connect_rag
-from core.storage.schema import initialize_databases
-from core.storage.meta import read_graph_meta, write_graph_meta
-from core.graph.draft import GraphDraftError, merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
-from core.ingest.pipeline import Ingestor
-from core.graph.organizer import GraphOrganizer
-from core.service.facade import KnowledgeBaseService
+from core.settings import AppConfig
+from core.storage import connect_graph, connect_sources
+from core.storage import connect_rag
+from core.storage import initialize_databases
+from core.storage import read_graph_meta, write_graph_meta
+from core.graph import GraphDraftError
+from core.graph.draft import merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
+from core.ingest import Ingestor
+from core.graph import GraphOrganizer
+from core.service import KnowledgeBaseService
 from provider import ProviderResponseError
 from provider.embedding import EmbeddingResult
 from provider.engine import chat_structured

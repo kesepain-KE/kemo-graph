@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unicodedata
 from collections.abc import Iterable, Sequence
-from core.storage.connections import connect_rag, connect_sources
+from core.storage import connect_rag, connect_sources
 from core.rag.errors import IndexIntegrityError, RAGQueryError
 from core.rag.models import _Candidate, _ChunkContext
 from core.rag.lexical import _LEXICAL_CANDIDATE_SCORE, _LEXICAL_EDGE_PUNCTUATION, _MIN_LEXICAL_QUERY_LENGTH, _normalize_lexical_text
 from core.rag.fusion import _fuse_vector_hits
-from core.documents.query_planner import QueryPlan
+from core.documents import QueryPlan
 
 def _load_candidates(
     self,

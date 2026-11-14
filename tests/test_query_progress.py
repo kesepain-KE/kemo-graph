@@ -8,9 +8,10 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from api.deps import get_service
-from core.settings.schema import AppConfig
-from core.documents.query_planner import plan_query
-from core.observability.progress import QueryProgressStore, QueryTrace, bind_trace, query_step
+from core.settings import AppConfig
+from core.documents import plan_query
+from core.observability.progress import QueryProgressStore, QueryTrace, bind_trace
+from core.observability import query_step
 
 
 def test_query_plan_reports_real_steps_and_fallback():

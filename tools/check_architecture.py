@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,8 +14,10 @@ EXPORT_BUDGETS = {"core": 24, "core.common": 24, "core.settings": 20,
                   "core.storage": 16, "core.graph": 24, "core.rag": 16,
                   "core.ingest": 16, "core.documents": 20,
                   "core.retrieval": 12, "core.observability": 12,
-                  "core.maintenance": 8, "core.service": 20}
-STAGE = 9
+                  "core.maintenance": 8, "core.service": 20,
+                  "core.documents.chunker": 8, "core.retrieval.cache": 12,
+                  "core.storage.portable": 12}
+STAGE = 10
 
 
 def import_edges(root: Path = ROOT):
@@ -51,6 +54,10 @@ def check_architecture(root: Path = ROOT, stage: int = STAGE) -> list[str]:
             problems.append(label + " (common must be independent)")
         if stage >= 3 and source_parts[0] == "core" and target.startswith("provider.tools"):
             problems.append(label + " (reverse tool dependency)")
+        if source.startswith("core.common") and target_parts[0] not in sys.stdlib_module_names and not target.startswith("core.common"):
+            problems.append(label + " (common may only use the standard library)")
+        if stage >= 10 and len(target_parts) > 1 and target_parts[0] == "core" and target_parts[1] not in LAYERS:
+            problems.append(label + " (removed flat module)")
         if len(source_parts) > 1 and len(target_parts) > 1 and source_parts[0] == target_parts[0] == "core":
             left, right = source_parts[1], target_parts[1]
             if left in LAYERS and right in LAYERS and LAYERS[left] < LAYERS[right]:
@@ -62,6 +69,19 @@ def check_architecture(root: Path = ROOT, stage: int = STAGE) -> list[str]:
                 problems.append(f"Missing facade: {module}")
             continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        exports = [node for node in tree.body if isinstance(node, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets)]
+        if not exports:
+            problems.append(f"{module}: missing explicit __all__")
+        if module != "core":
+            for node in tree.body:
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    continue
+                if isinstance(node, ast.Assign) and node in exports:
+                    continue
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    continue
+                problems.append(f"{module}:{node.lineno}: facade contains implementation")
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
                 if len(ast.literal_eval(node.value)) > budget:
@@ -73,6 +93,34 @@ def check_architecture(root: Path = ROOT, stage: int = STAGE) -> list[str]:
                 body = node.body[1:] if ast.get_docstring(node) else node.body
                 if len(body) > 3:
                     problems.append(f"{facade.name}:{node.lineno}: {node.name} exceeds three statements")
+    if stage >= 10:
+        for path in (root / "provider/tools").glob("*.py"):
+            for node in ast.parse(path.read_text(encoding="utf-8-sig")).body:
+                if isinstance(node, ast.ImportFrom):
+                    targets = [node.module or ""]
+                elif isinstance(node, ast.Import):
+                    targets = [a.name for a in node.names]
+                else:
+                    continue
+                if any(target == package or target.startswith(package + ".")
+                       for target in targets for package in ("core.ingest", "core.service")):
+                    problems.append(f"{path.relative_to(root)}:{node.lineno}: top-level tool dependency on orchestration")
+        if len(list((root / "core").glob("*.py"))) > 5:
+            problems.append("core: more than five root modules")
+        if (root / "core/ingestor").exists() and list((root / "core/ingestor").glob("*.py")):
+            problems.append("core.ingestor: compatibility package remains")
+        for name, relative in (("RAGEngine", "core/rag/engine.py"), ("Ingestor", "core/ingest/pipeline.py")):
+            path = root / relative
+            for node in ast.parse(path.read_text(encoding="utf-8-sig")).body:
+                if isinstance(node, ast.ClassDef) and node.name == name and node.end_lineno - node.lineno + 1 > 400:
+                    problems.append(f"{relative}: {name} exceeds 400 lines")
+        for path in (root / "core/service").glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8-sig"))):
+                if isinstance(node, ast.FunctionDef) and node.name.endswith("_impl"):
+                    problems.append(f"{path.relative_to(root)}:{node.lineno}: obsolete implementation wrapper")
+        for path in (root / "api/routes").glob("*.py"):
+            if len(path.read_text(encoding="utf-8-sig").splitlines()) > 250:
+                problems.append(f"{path.relative_to(root)}: route module exceeds 250 lines")
     return problems
 
 

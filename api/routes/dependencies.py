@@ -1,7 +1,7 @@
 from typing import Annotated
 from fastapi import Depends
-from core.service.facade import KnowledgeBaseService
-from core.jobs import MaintenanceJobManager
+from core.service import KnowledgeBaseService
+from core.maintenance import MaintenanceJobManager
 from update import ApplicationUpdater
 from api.deps import RuntimeContext, get_context, get_job_manager, get_service, get_updater
 

@@ -4,8 +4,8 @@ import threading
 from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any, Protocol
-from core.settings.schema import AppConfig
-from core.observability.logger import DailyTSVLogger
+from core.settings import AppConfig
+from core.observability import DailyTSVLogger
 
 LOGGER = logging.getLogger(__name__)
 

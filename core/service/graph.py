@@ -1,17 +1,17 @@
 from __future__ import annotations
-from core.storage.connections import connect_graph, connect_sources
+from core.storage import connect_graph, connect_sources
 
 from datetime import datetime, timezone
 from typing import Any
-from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.storage import connect_graph, connect_rag, connect_sources
 from core.graph.visualization import get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
 from core.documents.errors import DocumentNotFoundError
-from core.ingest.pipeline import Ingestor
-from core.storage.locks import get_knowledge_base_lock
+from core.ingest import Ingestor
+from core.storage import get_knowledge_base_lock
 from core.retrieval.cache.store import clear_search_cache_after_mutation
-from core.rag.engine import RAGEngine
+from core.rag import RAGEngine
 from core.documents.errors import DocumentContentConflictError
-from core.common.text import parse_json_list as _parse_json_list
+from core.common import parse_json_list as _parse_json_list
 
 
 from core.service.context import ServiceContext
@@ -160,7 +160,7 @@ class GraphService:
     def update_node_summary(
         self, node_id: str, summary: str, expected_summary: str,
     ) -> dict[str, Any]:
-        from core.rag.engine import RAGEngine
+        from core.rag import RAGEngine
 
         owner = self.context
         lock = get_knowledge_base_lock(owner.data_dir)

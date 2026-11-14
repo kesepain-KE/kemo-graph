@@ -13,9 +13,9 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from api.deps import get_job_manager, get_service
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_sources
-from core.ingest.pipeline import Ingestor
+from core.settings import AppConfig
+from core.storage import connect_sources
+from core.ingest import Ingestor
 from provider.embedding import EmbeddingResult
 
 

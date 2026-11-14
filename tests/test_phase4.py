@@ -13,12 +13,13 @@ from fastapi.testclient import TestClient
 from provider.embedding import EmbeddingResult
 
 from api import create_app
-from core import library
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_graph, connect_rag, connect_sources
-from core.storage.meta import read_graph_meta
-from core.ingest.pipeline import Ingestor
-from core.service.facade import KnowledgeBaseService
+from core.documents import library
+from core.maintenance import library as maintenance_library
+from core.settings import AppConfig
+from core.storage import connect_graph, connect_rag, connect_sources
+from core.storage import read_graph_meta
+from core.ingest import Ingestor
+from core.service import KnowledgeBaseService
 
 
 def _settings() -> AppConfig:
@@ -427,7 +428,7 @@ class LibraryDeleteCascadeTests(unittest.TestCase):
         self.removed_original.parent.mkdir(parents=True)
         self.removed_original.write_text("version-one Alpha Beta", encoding="utf-8")
         (originals / "keep.txt").write_text("version-two Alpha Gamma", encoding="utf-8")
-        self.assertEqual(library.refresh_library(self.service)["errors"], [])
+        self.assertEqual(maintenance_library.refresh_library(self.service)["errors"], [])
         self.ingestor = Ingestor(
             self.service.data_dir,
             self.service.external_dir,
@@ -542,8 +543,8 @@ class LibraryDeleteCascadeTests(unittest.TestCase):
         self.assert_removed()
 
     def test_scan_cleans_orphans_after_embedding_configuration_changes(self) -> None:
-        from core.rag.engine import RAGEngine
-        from core.rag.errors import IndexIntegrityError
+        from core.rag import RAGEngine
+        from core.rag import IndexIntegrityError
 
         settings = self.service.settings.model_copy(update={
             "models": self.service.settings.models.model_copy(update={
@@ -568,14 +569,14 @@ class LibraryDeleteCascadeTests(unittest.TestCase):
     def test_refresh_of_removed_directory_cleans_its_mapped_documents(self) -> None:
         self.removed_original.unlink()
         self.removed_original.parent.rmdir()
-        result = library.refresh_library(self.service, "discarded/nested")
+        result = maintenance_library.refresh_library(self.service, "discarded/nested")
         self.assertEqual(result["deleted"], [self.removed["library_path"]])
         self.assert_removed()
 
     def test_refresh_handles_added_and_removed_originals_together(self) -> None:
         self.removed_original.unlink()
         (library.original_root(self.service) / "new.txt").write_text("new document", encoding="utf-8")
-        result = library.refresh_library(self.service)
+        result = maintenance_library.refresh_library(self.service)
         self.assertEqual(result["errors"], [])
         self.assertEqual(result["updated"], ["new.txt"])
         self.assertEqual(result["deleted"], [self.removed["library_path"]])
@@ -614,7 +615,7 @@ class LibraryDeleteCascadeTests(unittest.TestCase):
         finally:
             connection.close()
         self.ingestor.file_map.upsert("upload://remove.txt", self.removed["relative_path"])
-        result = library.refresh_library(self.service)
+        result = maintenance_library.refresh_library(self.service)
         self.assertIn(self.removed["relative_path"], result["deleted"])
         self.assert_removed()
         self.ingestor.scan_sources()

@@ -3,8 +3,8 @@ from core.storage.portable.paths import _assert_initialized_layout
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
-from core.settings.schema import AppConfig, DEFAULT_CONFIG_PATH
-from core.settings.loader import load_config
+from core.settings import AppConfig, DEFAULT_CONFIG_PATH
+from core.settings import load_config
 from core.service.facade import KnowledgeBaseService
 from core.storage.portable.models import PortableStoreError
 from core.storage.portable.paths import resolve_store_paths, _unique_roots
@@ -194,15 +194,15 @@ def _mergeable_items(
             items.append(item)
     return items
 
-from core.common.time import now_iso as _now_iso
-from core.common.jsonio import write_json_atomic as _write_json_atomic
+from core.common import now_iso as _now_iso
+from core.common import write_json_atomic as _write_json_atomic
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
-from core.storage.schema import initialize_databases
+from core.settings import AppConfig
+from core.settings import load_config
+from core.storage import initialize_databases
 from core.storage.portable.models import STORAGE_DIRECTORY_NAME, STORE_MANIFEST_VERSION, PortableStoreError, PortableStoreManifest
 from core.storage.portable.paths import resolve_store_paths
 from core.storage.portable.manifest import load_store_manifest, _validated_scope, _optional_text

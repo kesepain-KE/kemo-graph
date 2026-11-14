@@ -5,10 +5,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
+from core.settings import AppConfig
+from core.settings import load_config
 from core.documents.paths import _path_key
-from core.common.fs import validated_path as _validated_path
+from core.common import validated_path as _validated_path
 
 FILE_MAP_VERSION = 1
 

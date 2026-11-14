@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Sequence
 from typing import Any
 import numpy as np
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 
 def _normalize_auxiliary_records(
     records: Sequence[tuple[str, str]],

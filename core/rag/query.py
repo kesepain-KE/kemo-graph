@@ -7,14 +7,15 @@ from typing import Any
 import numpy as np
 from provider.embedding import EmbeddingResult
 from provider.rerank import rerank
-from core.observability.progress import query_step, step_status
+from core.observability import query_step, step_status
 from core.rag.errors import RAGQueryError
 from core.rag.models import PreparedQuery, _Candidate
 from core.rag.fusion import _candidate_context_content, _chunk_family_id, _collapse_candidates_by_family, _merge_candidates, _rag_result_item
-from core.common.time import elapsed_ms as _elapsed_ms
+from core.common import elapsed_ms as _elapsed_ms
 from core.rag.lexical import _planned_lexical_match_score
 from core.rag.validation import _validate_prepared_query, _validate_score_multipliers
-from core.documents.query_planner import filter_semantic_drift, plan_query
+from core.documents.query_planner import filter_semantic_drift
+from core.documents import plan_query
 
 def query(
     self,

@@ -7,18 +7,20 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from api.schemas import APIResponse
-from core import library
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_sources
-from core.storage.schema import initialize_databases
-from core.documents.preview import preview_document
-from core.documents.file_map import FileMapStore
-from core.ingest.pipeline import Ingestor
-from core.service.facade import KnowledgeBaseService
-from core.documents.errors import DocumentContentConflictError, DocumentImportError
-from core.rag.engine import RAGEngine
-from core.retrieval.cache.store import SearchCache
-from core.retrieval.cache.errors import SearchCacheCleanupError, SearchCacheError
+from core.documents import library
+from core.maintenance import library as maintenance_library
+from core.settings import AppConfig
+from core.storage import connect_sources
+from core.storage import initialize_databases
+from core.documents import preview_document
+from core.documents import FileMapStore
+from core.ingest import Ingestor
+from core.service import KnowledgeBaseService
+from core.documents.errors import DocumentContentConflictError
+from core.documents import DocumentImportError
+from core.rag import RAGEngine
+from core.retrieval import SearchCache
+from core.retrieval import SearchCacheCleanupError, SearchCacheError
 from core.retrieval.cache.keys import compute_state_hash, make_cache_key
 
 
@@ -195,7 +197,7 @@ def test_move_can_reuse_a_deleted_original_path_without_duplicate_mappings(servi
     service.delete_document(deleted["source_id"])
     current = imported(service, tmp_path, name="current.txt")
     library.relocate_entry(service, "current.txt", "previous.txt")
-    refreshed = library.refresh_library(service)
+    refreshed = maintenance_library.refresh_library(service)
     assert refreshed["errors"] == []
     sources = service.list_documents(status="active")["documents"]
     assert [(row["source_id"], row["source_path"]) for row in sources] == [(current["source_id"], "previous.txt")]
@@ -221,14 +223,14 @@ def test_refresh_discovers_disk_changes_and_cleans_deleted_sources(service, tmp_
     (root / "nested").mkdir(parents=True)
     file = root / "nested" / "external.txt"
     file.write_text("directly created", encoding="utf-8")
-    assert library.refresh_library(service)["updated"] == ["nested/external.txt"]
+    assert maintenance_library.refresh_library(service)["updated"] == ["nested/external.txt"]
     source_id = service.list_documents()["documents"][0]["source_id"]
     file.write_text("updated outside the app", encoding="utf-8")
-    assert library.refresh_library(service)["updated"] == ["nested/external.txt"]
-    assert library.refresh_library(service)["updated"] == []
+    assert maintenance_library.refresh_library(service)["updated"] == ["nested/external.txt"]
+    assert maintenance_library.refresh_library(service)["updated"] == []
     assert service.list_documents()["documents"][0]["source_id"] == source_id
     file.unlink()
-    assert library.refresh_library(service)["deleted"] == ["nested/external.txt"]
+    assert maintenance_library.refresh_library(service)["deleted"] == ["nested/external.txt"]
     assert service.list_documents(status="active")["documents"] == []
 
 
@@ -240,7 +242,7 @@ def test_refresh_removes_unregistered_processed_files_and_stale_mappings(service
     stale.write_text("processed content without its original", encoding="utf-8")
     ingestor.file_map.upsert(str(service.external_dir.parent / "missing.docx"), "stale.md")
     ingestor.file_map.upsert("upload://already-removed.txt", "already-removed.md")
-    result = library.refresh_library(service)
+    result = maintenance_library.refresh_library(service)
     assert set(result["deleted"]) == {"orphan.md", "stale.md", "already-removed.md"}
     assert not orphan.exists() and not stale.exists()
     assert ingestor.file_map.list() == []
@@ -266,7 +268,7 @@ def test_delete_removes_original_and_processed_file_without_recreating_it(servic
     assert not (library.original_root(service) / document["source_path"]).exists()
     assert not (service.external_dir / document["markdown_relative_path"]).exists()
     assert not (service.external_dir.parent / "recycle").exists()
-    assert library.refresh_library(service)["updated"] == []
+    assert maintenance_library.refresh_library(service)["updated"] == []
     assert service.list_documents(status="active")["documents"] == []
 
 
@@ -392,7 +394,7 @@ def test_copy_paste_preserves_bytes_and_creates_an_independent_mapping_on_refres
     second = library.transfer_entry(service, "A/sample.txt", "B", "copy", conflict="keep_both")
     assert second["path"] == "B/sample - 副本.txt"
     assert (root / "B/sample.txt").read_bytes() == (root / "A/sample.txt").read_bytes()
-    assert library.refresh_library(service)["errors"] == []
+    assert maintenance_library.refresh_library(service)["errors"] == []
     rows = {row["library_path"]: row for row in library.source_rows(service)}
     assert len({row["source_id"] for row in rows.values()}) == 3
     assert rows["A/sample.txt"]["source_id"] == original["source_id"]
@@ -481,7 +483,7 @@ def test_copy_rejects_nested_links_before_creating_a_destination(service, tmp_pa
 
 def test_directory_browsing_remains_available_while_graph_write_lock_is_held(service):
     from threading import Event, Thread
-    from core.storage.locks import get_knowledge_base_lock
+    from core.storage import get_knowledge_base_lock
     library.create_entry(service, "", "A", "directory")
     locked, release = Event(), Event()
     def building():

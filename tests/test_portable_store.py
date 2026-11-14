@@ -14,8 +14,8 @@ from fastapi.testclient import TestClient
 
 import start
 from api import create_app
-from core.settings.schema import AppConfig
-from core.storage.schema import initialize_databases
+from core.settings import AppConfig
+from core.storage import initialize_databases
 from core.storage.portable.models import STORAGE_DIRECTORY_NAME, PortableStoreAccessError, PortableStoreError, PortableStoreNotInitializedError
 from core.service.federation import create_store_service, federated_query
 from core.service.federation import initialize_store

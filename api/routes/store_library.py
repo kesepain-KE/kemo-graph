@@ -1,7 +1,8 @@
 from __future__ import annotations
 from fastapi import APIRouter
 from api.errors import success_response
-from core import library
+from core.documents import library
+from core.maintenance import library as maintenance_library
 from api.schemas import APIResponse
 
 from api.routes.dependencies import Context
@@ -28,4 +29,4 @@ def post_store_library_delete(payload: StoreLibraryPath, context: Context) -> di
 
 @router.post("/stores/library/refresh", response_model=APIResponse)
 def post_store_library_refresh(payload: StoreLibraryPath, context: Context) -> dict:
-    return success_response(_store_operation(payload.store_root, context, lambda service: library.refresh_library(service, payload.path)))
+    return success_response(_store_operation(payload.store_root, context, lambda service: maintenance_library.refresh_library(service, payload.path)))

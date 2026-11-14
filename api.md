@@ -2117,3 +2117,7 @@ $result.data.result | ConvertTo-Json -Depth 20
 更完整的目录、清单、迁移和隔离规则见：
 
 > `开发文档/编程方案/16-绝对路径分布式知识库与全量API.md`
+
+### 服务实现入口
+
+Python 调用统一从 `core` 或 `core.service` 导入 `KnowledgeBaseService`。HTTP 路由按领域拆分到 `api/routes/`，请求与响应模型拆分到 `api/schemas/`；路由聚合入口仍为 `api.routes.router`。`api.create_app()` 显式创建应用，`api:app` 通过惰性属性提供，单独 `import api` 不创建应用。路由路径、方法、注册顺序和 OpenAPI 定义保持不变。模块边界见 [核心服务说明](core/service/README.md)。

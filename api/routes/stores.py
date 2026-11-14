@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 from fastapi import APIRouter, File, Form, Query, UploadFile
-from core.settings.loader import load_config
+from core.settings import load_config
 from core.service.federation import describe_store
 from core.service.federation import initialize_store
 from api.errors import success_response

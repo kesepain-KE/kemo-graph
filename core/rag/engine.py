@@ -4,14 +4,14 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 from provider.embedding import EmbeddingResult
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
-from core.storage.schema import initialize_databases
-from core.observability.logger import DailyTSVLogger
+from core.settings import AppConfig
+from core.settings import load_config
+from core.storage import initialize_databases
+from core.observability import DailyTSVLogger
 from core.rag.index import FaissIndexManager
-from core.observability.progress import tracked_step
+from core.observability import tracked_step
 from core.rag.models import PreparedQuery, _Candidate, _ChunkContext
-from core.documents.query_planner import QueryPlan
+from core.documents import QueryPlan
 
 from core.rag import query as query_ops, loading, vectors, store
 from core.rag.auxiliary import RAGAuxiliary

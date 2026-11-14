@@ -1,12 +1,12 @@
 from __future__ import annotations
-from core.common.time import elapsed_ms as _elapsed_ms
-from core.common.text import clip_context_text as _clip_context_text
+from core.common import elapsed_ms as _elapsed_ms
+from core.common import clip_context_text as _clip_context_text
 import json
 import time
 from typing import Any, Callable
 from core.service.context import ServiceContext
-from core.observability.query_logging import trace_query
-from core.observability.progress import query_step, step_status
+from core.observability import trace_query
+from core.observability import query_step, step_status
 
 
 class RetrievalService:
@@ -285,7 +285,7 @@ class RetrievalService:
 
         group_ids = [str(item["group_id"]) for item in communities]
         placeholders = ",".join("?" for _ in group_ids)
-        from core.storage.connections import connect_graph
+        from core.storage import connect_graph
 
         connection = connect_graph(owner.paths)
         try:
@@ -408,7 +408,7 @@ class RetrievalService:
         page_size: int = 20,
     ) -> dict[str, Any]:
         self.context._require_initialized()
-        from core.retrieval.cache.store import SearchCache
+        from core.retrieval import SearchCache
 
         return SearchCache(self.context.paths, self.context.settings).list(page, page_size)
 
@@ -418,7 +418,7 @@ class RetrievalService:
     ) -> dict[str, Any]:
         self.context._require_initialized()
         from core.documents.errors import DocumentNotFoundError
-        from core.retrieval.cache.store import SearchCache
+        from core.retrieval import SearchCache
 
         detail = SearchCache(self.context.paths, self.context.settings).detail(cache_key)
         if detail is None:
@@ -430,7 +430,7 @@ class RetrievalService:
         stale_only: bool = False,
     ) -> dict[str, Any]:
         self.context._require_initialized()
-        from core.retrieval.cache.store import SearchCache
+        from core.retrieval import SearchCache
 
         deleted = SearchCache(self.context.paths, self.context.settings).clear(stale_only)
         self.context._log_event(
@@ -452,7 +452,8 @@ class RetrievalService:
         owner = self.context
         if not owner.settings.search_cache_enabled:
             return execute()
-        from core.retrieval.cache.store import SearchCache, decode_cached_result
+        from core.retrieval import SearchCache
+        from core.retrieval.cache.store import decode_cached_result
         from core.retrieval.cache.keys import cache_key_lock, compute_state_hash, make_cache_key, search_config_hash
 
         try:

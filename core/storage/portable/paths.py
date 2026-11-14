@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Sequence
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
+from core.settings import AppConfig
+from core.settings import load_config
 from core.storage.paths import get_database_paths
 
 

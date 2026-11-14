@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
+from core.settings import AppConfig
+from core.settings import load_config
 
 
 from core.storage.paths import DatabasePaths, get_database_paths

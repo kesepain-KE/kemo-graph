@@ -1,11 +1,11 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
-from core.storage.connections import connect_rag
-from core.graph.engine import GraphEngine
-from core.rag.engine import RAGEngine
+from core.settings import AppConfig
+from core.settings import load_config
+from core.storage import connect_rag
+from core.graph import GraphEngine
+from core.rag import RAGEngine
 
 class HybridConfigurationError(RuntimeError):
     """Graph 与 RAG 引擎不属于同一知识库。"""

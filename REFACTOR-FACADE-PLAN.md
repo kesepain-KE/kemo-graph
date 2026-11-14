@@ -537,17 +537,17 @@ python -m pytest tests/ -q --no-header
 
 编程智能体在提交前逐条确认：
 
-- [ ] `pytest tests/ -q` → 374 passed / 5 skipped / 0 failed
-- [ ] `python tools/check_architecture.py` → 退出码 0
-- [ ] `python -c "import api; import provider.tools; import core.ingest"` 成功
-- [ ] `python start_web.py --help`（或等价启动检查）正常
-- [ ] `core/` 根目录 `.py` 文件 ≤5（Stage 8 后）
-- [ ] 无 `core/config/`、`core/db/` 等与旧模块同名的目录
-- [ ] 全部 shim 的 `__all__` 与源模块一致
-- [ ] `core/service/facade.py` 每个公开方法 ≤3 条语句
-- [ ] `core/*/__init__.py` 的 `__all__` 长度符合预算
-- [ ] 无新增 `# type: ignore`、`# noqa`（shim 的 `# noqa: F401,F403` 除外）
-- [ ] 无 `xfail` 遗留
+- [x] `pytest tests/ -q` → 436 passed / 5 skipped / 0 failed；实际基线及新增护栏测试见 §9–10
+- [x] `python tools/check_architecture.py` → 退出码 0，0 违规
+- [x] `python -c "import api; import provider.tools; import core.ingest"` 成功
+- [x] `start.py`、`start_web.py`、`restart.py`、`update.py`、`convert.py` 的 `--help` 全部正常
+- [x] Stage 10 后 `core/` 根目录仅剩 `__init__.py`，共 1 个 `.py` 文件
+- [x] 无 `core/config/`、`core/db/` 等与旧模块同名的目录
+- [x] 迁移期 shim 已删除，无残留兼容导出
+- [x] `core/service/facade.py` 每个公开方法 ≤3 条语句
+- [x] `core/*/__init__.py` 的 `__all__` 长度符合 §9 校正后的实际契约预算
+- [x] 无新增 `# type: ignore`、`# noqa`
+- [x] 无 `xfail` 遗留
 
 ## 9. 执行校正（2026-11-14）
 
@@ -561,3 +561,33 @@ python -m pytest tests/ -q --no-header
 - api/routes 和 api/schemas 同名模块改包时直接替换；兼容导出由新包承担。
 - 导出预算按实际外部契约校正，分组子门面公开必要的 API；根目录文件数指标在 Stage 10 删除兼容文件后验收。
 - 每阶段全量测试通过后独立本地提交，不推送；既有后端改动先单独记录为基线，前端改动不纳入本次提交。
+
+
+### Stage 10 执行校正
+
+- 根 `core` 使用与 `api.app` 相同的 PEP 562 惰性导出，保留 24 符号预算。直接在根门面提前加载全部引擎会与 provider 的配置导入形成循环，因此根门面不提前装配服务；其余子包保持纯导入门面。
+- 细分领域能力继续使用明确的领域模块路径，常用入口使用包门面；不为了包住已经独立的文档操作、格式转换、图谱工具而额外增加转发包。层序、旧路径、门面预算及副作用约束由架构检查执行。
+- 原始契约逐项核对：KnowledgeBaseService 38 个方法签名、RAGEngine 33 个、Ingestor 32 个均保留；类体分别为 349、259、339 行。
+- Stage 9 核对 110 条有序路由、95 个 OpenAPI 路径及完整 OpenAPI 定义一致；新增路由顺序与惰性应用测试后为 436 passed、5 skipped、2 subtests passed。
+
+## 10. 最终验收（2026-11-14）
+
+Stage 0–10 全部完成，每阶段在全量测试通过后独立本地提交，分支为 `kemo-preview`，未推送远程。执行前已有后端改动单独保存在基线提交中；既有前端改动与 `.env.example` 删除保留在工作区，不纳入重构提交。
+
+| 验收项 | 最终结果 |
+| --- | --- |
+| 全量测试 | 436 passed、5 skipped、2 subtests passed，183.76s；0 failed |
+| 架构检查 | Stage 10，0 violation(s) |
+| 原始方法签名 | KnowledgeBaseService 38 / RAGEngine 33 / Ingestor 32，全保留 |
+| 类体规模 | KnowledgeBaseService 349 / RAGEngine 259 / Ingestor 339 行 |
+| HTTP 合约 | 110 条有序路由、95 个 OpenAPI 路径及完整定义与迁移前快照一致 |
+| 启动与导入 | 五个 CLI 帮助入口、`api:app` 惰性入口、provider 先导入与 core 先导入均通过 |
+| 扁平模块 | `core/` 根目录仅 1 个 `.py` 文件；受 Git 管理的 Python 代码无旧模块导入 |
+| 语法检查 | core / api / provider / update 及启动脚本 compileall 通过 |
+| CI | 架构检查与 pytest 在同一 backend job 执行 |
+
+实际执行基线为 433 passed，新增 1 项架构检查与 2 项 API 契约测试后为 436 passed；跳过数保持 5。保留既有 Starlette/httpx 弃用提示，未降低业务断言或增加 xfail。
+
+删除兼容模块后，历史算法比对加载器只替换历史源码的导入位置，固定 Git 版本、算法与等价断言均不变；42 项节点匹配、候选排序回归通过。公共 SHA-256 文件读取使用分块标准库实现，兼容项目声明的 Python 3.10，避免使用 Python 3.11 才提供的 `hashlib.file_digest`。
+
+业务实现、HTTP/CLI 合约、配置字段与数据库 schema 保持原有语义，未创建数据迁移。模块层序、门面预算及回滚方式见 `core/service/README.md`。

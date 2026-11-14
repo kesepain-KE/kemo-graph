@@ -19,12 +19,13 @@ from fastapi.testclient import TestClient
 import start
 from api import create_app
 from api.deps import get_service
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
+from core.settings import AppConfig
+from core.settings import load_config
 from core.documents.errors import IngestError
-from core.documents.errors import DocumentImportConflictError, DocumentImportError, DocumentImportPathError, UnsupportedDocumentFormatError
-from core.service.facade import KnowledgeBaseService
-from core.observability.logger import DailyTSVLogger
+from core.documents.errors import DocumentImportConflictError
+from core.documents import DocumentImportError, DocumentImportPathError, UnsupportedDocumentFormatError
+from core.service import KnowledgeBaseService
+from core.observability import DailyTSVLogger
 from provider.tools.document_tools import DocumentConversionError
 
 
@@ -256,7 +257,7 @@ class DocumentImportTests(unittest.TestCase):
             service = _service(root)
 
             with patch(
-                "core.ingestor.Ingestor.scan_sources",
+                "core.ingest.pipeline.Ingestor.scan_sources",
                 side_effect=IngestError("scan failed"),
             ):
                 with self.assertRaises(DocumentImportError):
@@ -409,7 +410,7 @@ class DocumentImportTests(unittest.TestCase):
                 "details": [],
             }
 
-            with patch("core.ingestor.Ingestor.ingest") as ingest_mock:
+            with patch("core.ingest.pipeline.Ingestor.ingest") as ingest_mock:
                 pending = service.import_document(source, ingest_after_import=False)
                 ingest_mock.assert_not_called()
             self.assertEqual(pending["ingest_status"], "pending")
@@ -417,7 +418,7 @@ class DocumentImportTests(unittest.TestCase):
             source = Path(pending["original_path"])
             source.write_text("# Document updated", encoding="utf-8")
             with patch(
-                "core.ingestor.Ingestor.ingest",
+                "core.ingest.pipeline.Ingestor.ingest",
                 return_value=ingest_result,
             ) as ingest_mock:
                 completed = service.import_document(source)

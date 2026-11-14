@@ -17,12 +17,12 @@ from fastapi.testclient import TestClient
 import start
 from api import create_app
 from api.deps import get_service
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_graph, connect_sources
-from core.storage.schema import initialize_databases
-from core.service.facade import KnowledgeBaseService
+from core.settings import AppConfig
+from core.storage import connect_graph, connect_sources
+from core.storage import initialize_databases
+from core.service import KnowledgeBaseService
 from core.maintenance.rebuild import _copy_search_cache_history
-from core.retrieval.cache.store import SearchCache
+from core.retrieval import SearchCache
 from core.retrieval.cache.keys import compute_state_hash, make_cache_key, normalize_query
 
 
@@ -444,7 +444,7 @@ class TransparentCacheTests(unittest.TestCase):
             )
             service = KnowledgeBaseService(settings=settings, data_dir=root / "data")
             with patch(
-                "core.ingestor.Ingestor.delete_document",
+                "core.ingest.pipeline.Ingestor.delete_document",
                 return_value={"deleted_source_id": "s1"},
             ):
                 result = service.delete_document("s1")

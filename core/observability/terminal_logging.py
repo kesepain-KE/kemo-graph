@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from threading import RLock
 import yaml
-from core.settings.schema import PROJECT_ROOT
-from core.settings.loader import load_config
+from core.settings import PROJECT_ROOT
+from core.settings import load_config
 from core.observability.logger import DailyTSVLogger, redact_log_text
 from core.common.cache import file_revision
 

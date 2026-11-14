@@ -9,33 +9,21 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from core.config import DEFAULT_CONFIG_PATH, load_config
+from core.settings import DEFAULT_CONFIG_PATH
+from core.settings import load_config
 from core.observability.terminal_logging import configure_console_logging
-from core.graph_engine import GraphQueryError
-from core.graph_organizer import GraphOrganizerError
-from core.ingestor import DocumentNotFoundError, IngestError
-from core.knowledge_base import (
-    DocumentImportError,
-    DocumentImportPathError,
-    DocumentImportConflictError,
-    DocumentTooLargeError,
-    KnowledgeBaseNotInitializedError,
-    KnowledgeBaseProcessingError,
-    KnowledgeBaseService,
-    UnsupportedDocumentFormatError,
-)
-from core.rag_engine import RAGQueryError
-from core.maintenance.rebuild import RebuildError
-from core.maintenance.jobs import JobNotFoundError
-from core.portable_store import (
-    PortableStoreAccessError,
-    PortableStoreError,
-    PortableStoreNotInitializedError,
-    create_store_service,
-    describe_store,
-    federated_query,
-    initialize_store,
-)
+from core.graph import GraphQueryError
+from core.graph import GraphOrganizerError
+from core.documents.errors import DocumentNotFoundError, IngestError
+from core.documents import DocumentImportError, DocumentImportPathError, DocumentTooLargeError, UnsupportedDocumentFormatError
+from core.documents.errors import DocumentImportConflictError
+from core.service import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
+from core.service import KnowledgeBaseService
+from core.rag import RAGQueryError
+from core.maintenance import RebuildError
+from core.maintenance import JobNotFoundError
+from core.storage.portable.models import PortableStoreAccessError, PortableStoreError, PortableStoreNotInitializedError
+from core.service.federation import create_store_service, describe_store, federated_query, initialize_store
 from update import (
     ApplicationUpdater,
     UpdateBlockedError,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from provider.embedding import EmbeddingResult
-from core.documents.query_planner import QueryPlan
+from core.documents import QueryPlan
 from core.rag.errors import IndexIntegrityError
 
 @dataclass(frozen=True)

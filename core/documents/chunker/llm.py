@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 from provider.engine import chat_structured
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 from core.documents.chunker.rules import _pre_split_by_paragraphs, _semantic_blocks, _validated_block_ranges
 
 _CHUNKING_PROMPT_PATH = Path(__file__).resolve().parents[3] / "config" / "chunking_prompt.md"

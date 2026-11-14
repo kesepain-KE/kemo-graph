@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.settings.schema import AppConfig
-from core.storage.meta import read_graph_meta
-from core.graph.draft import DraftEntity, DraftRelation, GraphDraft
-from core.ingest.pipeline import Ingestor
+from core.settings import AppConfig
+from core.storage import read_graph_meta
+from core.graph import DraftEntity, DraftRelation, GraphDraft
+from core.ingest import Ingestor
 from core.ingest.graph_build import _sparsify_graph_relations
 
 

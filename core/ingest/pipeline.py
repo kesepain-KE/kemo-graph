@@ -5,22 +5,22 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 from provider.embedding import EmbeddingResult, embed
-from core.settings.schema import AppConfig, PROJECT_ROOT
-from core.settings.loader import load_config
+from core.settings import AppConfig, PROJECT_ROOT
+from core.settings import load_config
 from core.ingest.progress import advance_build, finish_build, start_build
-from core.storage.schema import initialize_databases
-from core.graph.draft import GraphDraft
-from core.graph.tools import get_graph_tools
-from core.observability.logger import DailyTSVLogger
-from core.rag.engine import RAGEngine
-from core.documents.file_map import FileMapStore
+from core.storage import initialize_databases
+from core.graph import GraphDraft
+from core.graph import get_graph_tools
+from core.observability import DailyTSVLogger
+from core.rag import RAGEngine
+from core.documents import FileMapStore
 from core.ingest.scan import ScanResult, _SourceRecord
-from core.common.time import elapsed_ms as _elapsed_ms
+from core.common import elapsed_ms as _elapsed_ms
 from core.documents.paths import _resolve_external_dir
 
 from core.ingest import scan, delete, graph_build, rag_build, sources, state, prompt
 from core.documents.errors import IngestError, SourceChangedDuringIngest
-from core.storage.locks import get_knowledge_base_lock as _get_write_lock
+from core.storage import get_knowledge_base_lock as _get_write_lock
 
 DEFAULT_GRAPH_PROMPT_PATH = PROJECT_ROOT / "config" / "graph_agent.md"
 DEFAULT_GRAPH_EXTRACT_PROMPT_PATH = PROJECT_ROOT / "config" / "graph_extract.md"

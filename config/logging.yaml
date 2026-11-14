@@ -2,10 +2,10 @@ version: 1
 disable_existing_loggers: false
 formatters:
   table:
-    (): core.logger.TSVFormatter
+    (): core.observability.logger.TSVFormatter
 handlers:
   console:
-    class: core.logger.TSVStreamHandler
+    class: core.observability.logger.TSVStreamHandler
     formatter: table
     stream: ext://sys.stderr
 root:

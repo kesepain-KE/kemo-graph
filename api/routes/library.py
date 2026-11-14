@@ -2,8 +2,9 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from markitdown import detect_file_type
-from core import library
-from core.documents.preview import preview_document
+from core.documents import library
+from core.maintenance import library as maintenance_library
+from core.documents import preview_document
 from api.errors import success_response
 
 from api.routes.dependencies import Service, Jobs
@@ -17,7 +18,7 @@ def get_library(service: Service, directory: str = "", search: str = "") -> dict
 
 @router.post("/library/refresh")
 def refresh_library(payload: LibraryPath, service: Service) -> dict:
-    return success_response(library.refresh_library(service, payload.path))
+    return success_response(maintenance_library.refresh_library(service, payload.path))
 
 @router.post("/library/entries")
 def create_entry(payload: LibraryCreate, service: Service) -> dict:

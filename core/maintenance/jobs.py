@@ -1,5 +1,5 @@
 from __future__ import annotations
-from core.common.time import now_iso as _now_iso
+from core.common import now_iso as _now_iso
 import json
 import queue
 import threading
@@ -7,11 +7,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
-from core.storage.paths import DatabasePaths
-from core.storage.connections import connect_sources
-from core.storage.schema import initialize_databases
+from core.settings import AppConfig
+from core.settings import load_config
+from core.storage import DatabasePaths
+from core.storage import connect_sources
+from core.storage import initialize_databases
 from update import ApplicationUpdater
 
 ServiceFactory = Callable[[], Any]

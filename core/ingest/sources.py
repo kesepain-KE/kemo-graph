@@ -4,10 +4,10 @@ import hashlib
 from collections.abc import Sequence
 from pathlib import Path
 from markitdown._utils import sanitize_knowledge_markdown
-from core.settings.schema import PROJECT_ROOT
-from core.storage.connections import connect_sources
+from core.settings import PROJECT_ROOT
+from core.storage import connect_sources
 from core.ingest.scan import _SourceRecord, _source_record_from_row
-from core.common.time import now_iso as _now_iso
+from core.common import now_iso as _now_iso
 from core.documents.paths import _safe_source_path
 
 def _normalize_requested_paths(

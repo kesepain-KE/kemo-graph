@@ -13,13 +13,13 @@ import numpy as np
 
 from core.documents.chunker.rules import _pre_split_by_paragraphs, estimate_token_count
 from core.documents.chunker.engine import chunk, chunking_signature, document_chunks
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_rag, connect_sources
-from core.storage.schema import initialize_databases
-from core.storage.meta import read_rag_meta
-from core.rag.index import FaissIndexManager
-from core.rag.errors import IndexIntegrityError, RAGQueryError
-from core.rag.engine import RAGEngine
+from core.settings import AppConfig
+from core.storage import connect_rag, connect_sources
+from core.storage import initialize_databases
+from core.storage import read_rag_meta
+from core.rag import FaissIndexManager
+from core.rag import IndexIntegrityError, RAGQueryError
+from core.rag import RAGEngine
 from provider import (
     ProviderAuthenticationError,
     ProviderConfigurationError,

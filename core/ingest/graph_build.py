@@ -8,11 +8,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from uuid import uuid4
-from core.storage.connections import connect_graph
-from core.graph.draft import DraftEntity, GraphDraft, merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
+from core.storage import connect_graph
+from core.graph import DraftEntity, GraphDraft
+from core.graph.draft import merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
 from core.documents.errors import IngestError
 from core.ingest.scan import _SourceRecord
-from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.common import elapsed_ms as _elapsed_ms, now_iso as _now_iso
 from core.ingest.validation import _load_json_string_list, _semantic_key, _unique_texts
 from core.ingest.prompt import _bounded_graph_draft_schema, _build_graph_section_prompt, _graph_extraction_budget, _graph_granularity_rule
 
@@ -107,7 +108,7 @@ def _update_graph_for_source(self, record: _SourceRecord, text: str) -> None:
 def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
     """使用工具调用循环构建图谱，全部工具写入共享文档事务。"""
 
-    from core.graph.tools import get_graph_tool_schemas
+    from core.graph import get_graph_tool_schemas
 
     # 工具模式以前把整篇文档作为一次请求发送，长文档容易超出网关上下文
     # 或让模型在一次循环中遗漏后半段。沿用结构化模式的 Markdown 语义分段，

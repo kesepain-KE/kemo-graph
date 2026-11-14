@@ -1,6 +1,7 @@
 """Public exceptions and configuration constants for the service facade."""
-from core.documents.errors import DocumentImportError, UnsupportedDocumentFormatError, DocumentImportPathError, DocumentTooLargeError, DocumentIngestError, DocumentContentConflictError, DocumentImportConflictError
-from core.documents.formats import SUPPORTED_IMPORT_SUFFIXES, MAX_IMPORT_BYTES
+from core.documents import DocumentImportError, UnsupportedDocumentFormatError, DocumentImportPathError, DocumentTooLargeError
+from core.documents.errors import DocumentIngestError, DocumentContentConflictError, DocumentImportConflictError
+from core.documents import SUPPORTED_IMPORT_SUFFIXES, MAX_IMPORT_BYTES
 
 
 class KnowledgeBaseNotInitializedError(RuntimeError):

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from core.common.text import escape_like as _escape_like
+from core.common import escape_like as _escape_like
 import hashlib
 import tempfile
 import time
@@ -7,17 +7,18 @@ from pathlib import Path
 from typing import Any, Sequence
 from core.documents.conversion import DocumentConversionError, import_document as convert_document
 from core.ingest.progress import read_builds
-from core.storage.connections import connect_sources
-from core.documents.file_map import FileMapError
-from core.ingest.pipeline import Ingestor
-from core.storage.locks import get_knowledge_base_lock
-from core.retrieval.cache.errors import SearchCacheCleanupError
+from core.storage import connect_sources
+from core.documents import FileMapError
+from core.ingest import Ingestor
+from core.storage import get_knowledge_base_lock
+from core.retrieval import SearchCacheCleanupError
 from core.retrieval.cache.store import clear_search_cache_after_mutation
-from core.documents.formats import SUPPORTED_IMPORT_SUFFIXES
-from core.documents.errors import DocumentContentConflictError, DocumentImportError, DocumentImportConflictError, DocumentImportPathError, UnsupportedDocumentFormatError
+from core.documents import SUPPORTED_IMPORT_SUFFIXES
+from core.documents.errors import DocumentContentConflictError, DocumentImportConflictError
+from core.documents import DocumentImportError, DocumentImportPathError, UnsupportedDocumentFormatError
 from core.documents.importing import _ingest_error_summary, _load_source_metadata, _resolve_import_source, _restore_import_destination, _safe_markdown_destination, _sha256_snapshot, _source_record_for_relative_path, _stable_import_snapshot, _stable_markdown_name
-from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
-from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic
+from core.common import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.common import write_bytes_atomic as _write_bytes_atomic
 
 
 from core.service.context import ServiceContext

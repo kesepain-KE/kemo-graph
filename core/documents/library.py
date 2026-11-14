@@ -7,15 +7,15 @@ import unicodedata
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
-from core.storage.connections import connect_sources
-from core.storage.schema import initialize_databases
+from core.storage import connect_sources
+from core.storage import initialize_databases
 from core.documents.errors import DocumentNotFoundError
 from core.documents.file_map import FileMapStore, FileMapping
 from core.documents.paths import _path_key
 from core.documents.errors import DocumentContentConflictError
 from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
-from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic
-from core.storage.locks import get_knowledge_base_lock
+from core.common import write_bytes_atomic as _write_bytes_atomic
+from core.storage import get_knowledge_base_lock
 from markitdown._utils import read_text
 
 TEXT_SUFFIXES = {

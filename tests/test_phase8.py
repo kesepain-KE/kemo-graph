@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from core.settings.schema import AppConfig
-from core.service.facade import KnowledgeBaseService
+from core.settings import AppConfig
+from core.service import KnowledgeBaseService
 from start_web import create_app
 
 

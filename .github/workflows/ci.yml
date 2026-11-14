@@ -38,6 +38,9 @@ jobs:
       - name: 语法检查
         run: python -m compileall -q core api provider markitdown update start.py start_web.py
 
+      - name: 架构边界检查
+        run: python tools/check_architecture.py
+
       - name: 单元测试
         run: python -m pytest tests -q
 

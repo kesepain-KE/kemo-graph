@@ -341,10 +341,10 @@ from collections.abc import Sequence
 from typing import Any
 import numpy as np
 from provider.embedding import EmbeddingResult
-from core.storage.connections import connect_graph, connect_rag, connect_sources
-from core.rag.engine import RAGEngine
+from core.storage import connect_graph, connect_rag, connect_sources
+from core.rag import RAGEngine
 from core.ingest.scan import _SourceRecord
-from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.common import elapsed_ms as _elapsed_ms, now_iso as _now_iso
 
 def _get_rag_engine(self, *, for_deletion: bool = False) -> RAGEngine:
     if for_deletion:

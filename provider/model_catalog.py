@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 from . import (
     ProviderResponseError,
     build_endpoint_url,

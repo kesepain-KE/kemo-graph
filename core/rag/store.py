@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 import numpy as np
 from provider.rerank import clear_cache
 from core.documents.chunker.engine import chunking_signature
-from core.storage.connections import connect_rag
-from core.storage.meta import read_rag_meta, write_rag_meta
+from core.storage import connect_rag
+from core.storage import read_rag_meta, write_rag_meta
 from core.rag.errors import IndexIntegrityError
 from core.rag.models import _MixedVectorSpaceError
-from core.common.time import elapsed_ms as _elapsed_ms
+from core.common import elapsed_ms as _elapsed_ms
 from core.rag.vectors import _validate_vector_space_id
 
 def add_vectors(

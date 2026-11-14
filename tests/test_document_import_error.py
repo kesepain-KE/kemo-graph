@@ -1,4 +1,4 @@
-"""回归：文档导入异常基类必须能从 core.knowledge_support 解析。
+"""回归：文档导入异常基类必须能从 core.documents.importing 解析。
 
 背景（2026-09-08 `refactor(core): 知识库与 RAG 引擎继续领域化拆分` 遗漏）：
 

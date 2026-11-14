@@ -1,8 +1,8 @@
 from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Callable
-from core.service.facade import KnowledgeBaseService
-from core.settings.loader import load_config
+from core.service import KnowledgeBaseService
+from core.settings import load_config
 from core.service.federation import create_store_service
 from core.storage.portable.manifest import load_store_manifest
 from api.deps import RuntimeContext

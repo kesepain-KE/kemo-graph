@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from core.common.text import escape_like as _escape_like, required_text as _required_text
-from core.common.sql import fetch_one as _fetch_one, fetch_all as _fetch_all, row_dict as _row_dict, transaction as _transaction
+from core.common import escape_like as _escape_like, required_text as _required_text
+from core.common import fetch_one as _fetch_one, fetch_all as _fetch_all, row_dict as _row_dict, transaction as _transaction
 
 import json
 import sqlite3
@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 from uuid import uuid4
 
-from core.settings.loader import load_config
-from core.storage.paths import DatabasePaths, get_database_paths
-from core.storage.meta import read_graph_meta, write_graph_meta
-from core.observability.logger import DailyTSVLogger
+from core.settings import load_config
+from core.storage import DatabasePaths, get_database_paths
+from core.storage import read_graph_meta, write_graph_meta
+from core.observability import DailyTSVLogger
 
 
 def search_documents(conn: sqlite3.Connection, query: str) -> list[dict[str, Any]]:
@@ -247,7 +247,7 @@ def delete_document(conn: sqlite3.Connection, source_id: str) -> dict[str, Any]:
     """委托 Ingestor 永久删除文档文件及 Graph/RAG/FAISS 数据。"""
 
     # Load the pipeline only when deletion needs its cascade implementation.
-    from core.ingest.pipeline import Ingestor
+    from core.ingest import Ingestor
 
     source_id = _required_text(source_id, "source_id")
     data_dir = _require_data_dir(conn)

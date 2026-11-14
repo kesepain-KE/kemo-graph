@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 from core.documents.errors import DocumentNotFoundError
-from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
+from core.documents import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
 from core.documents.library import _write_lock, original_root, resolve_path, source_rows
 
 def refresh_library(owner: Any, path: str = "", *, force: bool = False) -> dict[str, Any]:
@@ -12,7 +12,7 @@ def refresh_library(owner: Any, path: str = "", *, force: bool = False) -> dict[
         original_root(owner).mkdir(parents=True, exist_ok=True)
         deleted = []
         if not path:
-            from core.ingest.pipeline import Ingestor
+            from core.ingest import Ingestor
             from core.ingest.scan import cleanup_orphaned_sources
 
             ingestor = Ingestor(owner.data_dir, owner.external_dir, settings=owner.settings)

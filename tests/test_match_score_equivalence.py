@@ -7,8 +7,8 @@ import pytest
 from rapidfuzz.fuzz import ratio
 
 from bench.bench_text_matching import fixture, load_baseline
-from core.graph.entity import Entity
-from core.graph.engine import GraphEngine
+from core.graph import Entity
+from core.graph import GraphEngine
 from core.graph.models import _Node
 from core.graph.matching import _entity_keys, _node_keys, _node_match_score, _matched_node_to_dict
 

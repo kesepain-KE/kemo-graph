@@ -1,6 +1,6 @@
 from __future__ import annotations
 from fastapi import APIRouter
-from core.settings.loader import load_config
+from core.settings import load_config
 from core.service.federation import federated_query
 from api.errors import success_response
 from api.schemas import APIResponse, StoreAnswerQueryRequest, StoreFederatedQueryRequest, StoreGlobalQueryRequest, StoreGraphQueryRequest, StoreHybridQueryRequest, StoreRAGQueryRequest

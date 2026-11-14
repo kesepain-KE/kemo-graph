@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unicodedata
-from core.documents.query_planner import QueryPlan
+from core.documents import QueryPlan
 
 _DIRECT_LEXICAL_MATCH_SCORE = 0.75
 

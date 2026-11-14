@@ -337,6 +337,14 @@ kemo-graph 仍处于早期开发阶段。无论是问题报告、格式转换样
 
 ---
 
+### 后端开发入口
+
+统一知识库服务使用 `from core import KnowledgeBaseService`，也可从 `core.service` 导入。配置与存储分别位于 `core.settings`、`core.storage`，图谱、RAG、构建和维护分别位于 `core.graph`、`core.rag`、`core.ingest`、`core.maintenance`；旧的扁平模块兼容路径已移除。API 路由与模型分别位于 `api/routes/`、`api/schemas/`，HTTP 接口保持不变。
+
+开发前运行 `python tools/check_architecture.py` 和 `python -m pytest tests/ -q`。模块层序与导出规范见 [核心服务说明](core/service/README.md)。
+
+---
+
 ## 开源协议
 
 本项目基于 [Apache License 2.0](LICENSE) 开源。

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from typing import Any
-from core.storage.connections import connect_graph
+from core.storage import connect_graph
 from core.graph.draft import GRAPH_DRAFT_SCHEMA
 from core.documents.errors import IngestError
 from core.ingest.scan import _SourceRecord

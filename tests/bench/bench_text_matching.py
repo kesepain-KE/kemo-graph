@@ -27,6 +27,18 @@ def load_baseline(name: str):
         source = subprocess.check_output(
             ["git", "show", f"{BASE_REVISION}:core/{name}.py"], cwd=ROOT,
         ).decode("utf-8")
+        # Keep the pinned algorithms unchanged; only resolve their moved imports.
+        for old_module, new_module in {
+            "config": "core.settings",
+            "db": "core.storage",
+            "locks": "core.storage",
+            "logger": "core.observability",
+            "rag_engine": "core.rag",
+            "entity_extractor": "core.graph.entity",
+            "query_planner": "core.documents.query_planner",
+            "query_progress": "core.observability",
+        }.items():
+            source = source.replace(f"from .{old_module} import", f"from {new_module} import")
         module = ModuleType(module_name)
         module.__package__ = "core"
         sys.modules[module_name] = module
@@ -67,8 +79,8 @@ def main():
     parser.add_argument("--baseline-timeout", type=float, default=120.0)
     parser.add_argument("--baseline-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    from core.graph.entity import Entity
-    from core.graph.engine import GraphEngine
+    from core.graph import Entity
+    from core.graph import GraphEngine
     from core.graph.matching import _indexed_nodes
     from core.graph.candidates import _find_candidates
     if args.baseline_only:

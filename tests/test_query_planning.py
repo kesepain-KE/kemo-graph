@@ -9,12 +9,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-from core.settings.schema import AppConfig
+from core.settings import AppConfig
 from core.documents.chunker.engine import document_chunks
-from core.storage.connections import connect_rag, connect_sources
-from core.storage.schema import initialize_databases
-from core.documents.query_planner import filter_semantic_drift, plan_query
-from core.rag.engine import RAGEngine
+from core.storage import connect_rag, connect_sources
+from core.storage import initialize_databases
+from core.documents.query_planner import filter_semantic_drift
+from core.documents import plan_query
+from core.rag import RAGEngine
 from provider.embedding import EmbeddingResult
 
 

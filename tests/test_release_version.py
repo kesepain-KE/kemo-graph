@@ -35,7 +35,7 @@ def test_documentation_matches_application_version():
 
 def test_api_and_web_openapi_use_root_version(tmp_path):
     from api import create_app
-    from core.settings.schema import AppConfig
+    from core.settings import AppConfig
     from start_web import create_app as create_web_app
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(AppConfig().model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")

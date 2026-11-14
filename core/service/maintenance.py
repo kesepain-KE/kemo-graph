@@ -5,17 +5,18 @@ import time
 from copy import deepcopy
 from typing import Any
 from uuid import uuid4
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_graph, connect_rag, connect_sources
-from core.storage.paths import get_database_paths
-from core.storage.meta import read_graph_meta, write_graph_meta
-from core.graph.organizer import GraphOrganizer
-from core.observability.logger import DailyTSVLogger
-from core.rag.index import FaissIndexManager
-from core.rag.engine import RAGEngine
-from core.maintenance.rebuild import KnowledgeBaseRebuilder, ProgressCallback
+from core.settings import AppConfig
+from core.storage import connect_graph, connect_rag, connect_sources
+from core.storage import get_database_paths
+from core.storage import read_graph_meta, write_graph_meta
+from core.graph import GraphOrganizer
+from core.observability import DailyTSVLogger
+from core.rag import FaissIndexManager
+from core.rag import RAGEngine
+from core.maintenance import KnowledgeBaseRebuilder
+from core.maintenance.rebuild import ProgressCallback
 from core.service.errors import CONFIG_API_KEY_MASK
-from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.common import elapsed_ms as _elapsed_ms, now_iso as _now_iso
 
 
 from core.service.context import ServiceContext
@@ -335,12 +336,12 @@ class MaintenanceService:
         ).rebuild_all(progress=progress)
 
     def list_jobs(self, *, limit: int | None = None) -> list[dict[str, Any]]:
-        from core.maintenance.jobs import list_jobs
+        from core.maintenance import list_jobs
 
         return list_jobs(self.context.data_dir, settings=self.context.settings, limit=limit)
 
     def get_job(self, job_id: str) -> dict[str, Any]:
-        from core.maintenance.jobs import get_job
+        from core.maintenance import get_job
 
         return get_job(job_id, self.context.data_dir, settings=self.context.settings)
 
@@ -464,8 +465,8 @@ class MaintenanceService:
 
     def save_config(self, data: dict[str, Any]) -> dict[str, Any]:
         """保存配置并校验；密钥掩码表示保留当前显式密钥。"""
-        from core.settings.schema import AppConfig
-        from core.settings.writer import write_config
+        from core.settings import AppConfig
+        from core.settings import write_config
 
         candidate = deepcopy(data)
         raw_kemo = candidate.get("kemo")

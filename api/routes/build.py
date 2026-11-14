@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from core import build_documents
+from core.documents import build as build_documents
 from api.errors import success_response
 
 from api.routes.dependencies import Service, Jobs

@@ -17,13 +17,13 @@ from provider.embedding import EmbeddingResult
 import start
 from api import create_app as create_api_app
 from api.deps import get_service
-from core import library
-from core.settings.schema import AppConfig
-from core.storage.connections import connect_graph, connect_rag, connect_sources
-from core.ingest.pipeline import Ingestor
+from core.documents import library
+from core.settings import AppConfig
+from core.storage import connect_graph, connect_rag, connect_sources
+from core.ingest import Ingestor
 from core.documents.errors import DocumentContentConflictError
-from core.service.errors import KnowledgeBaseNotInitializedError
-from core.service.facade import KnowledgeBaseService
+from core.service import KnowledgeBaseNotInitializedError
+from core.service import KnowledgeBaseService
 from start_web import create_app as create_web_app
 
 

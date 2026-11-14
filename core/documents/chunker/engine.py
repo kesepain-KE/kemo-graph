@@ -2,8 +2,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from core.settings.schema import AppConfig
-from core.settings.loader import load_config
+from core.settings import AppConfig
+from core.settings import load_config
 from core.documents.chunker.models import DocumentChunk, _ChunkSpan
 from core.documents.chunker.llm import LOGGER, _CHUNKING_PROMPT_VERSION, _chunking_prompt_digest, _llm_chunk_ranges
 from core.documents.chunker.rules import _GRANULARITY_ORDER, _TOKEN_PATTERN, _char_ranges_to_spans, _chunk_spans, _find_parent_index, _span_from_token_range

@@ -11,13 +11,13 @@ import yaml
 from pathlib import Path
 from unittest.mock import patch
 
-from core.settings.schema import AppConfig
-from core.settings.errors import ConfigLoadError
-from core.settings.loader import load_config
-from core.settings.writer import write_config
-from core.storage.schema import initialize_databases
-from core.storage.meta import read_graph_meta, read_rag_meta, write_graph_meta, write_rag_meta
-from core.documents.file_map import FileMapStore
+from core.settings import AppConfig
+from core.settings import ConfigLoadError
+from core.settings import load_config
+from core.settings import write_config
+from core.storage import initialize_databases
+from core.storage import read_graph_meta, read_rag_meta, write_graph_meta, write_rag_meta
+from core.documents import FileMapStore
 
 
 class ConfigTests(unittest.TestCase):

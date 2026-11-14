@@ -14,11 +14,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import create_app
-from core.settings.schema import AppConfig
-from core.observability.logger import DailyTSVLogger, LOG_COLUMNS, TSVFormatter, TSVStreamHandler, redact_log_text
-from core.observability.log_viewer import read_logs
-from core.observability.query_logging import trace_query
-from core.observability.terminal_logging import TerminalLogHandler, capture_terminal_logs
+from core.settings import AppConfig
+from core.observability import DailyTSVLogger, redact_log_text
+from core.observability.logger import LOG_COLUMNS, TSVFormatter, TSVStreamHandler
+from core.observability import read_logs
+from core.observability import trace_query
+from core.observability.terminal_logging import TerminalLogHandler
+from core.observability import capture_terminal_logs
 
 
 @pytest.fixture

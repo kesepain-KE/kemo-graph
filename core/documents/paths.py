@@ -3,7 +3,7 @@ import hashlib
 import os
 import unicodedata
 from pathlib import Path
-from core.settings.schema import AppConfig, PROJECT_ROOT
+from core.settings import AppConfig, PROJECT_ROOT
 from core.documents.errors import IngestError
 
 def _resolve_external_dir(
