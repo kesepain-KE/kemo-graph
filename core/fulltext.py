@@ -9,6 +9,8 @@ import sqlite3
 import struct
 import threading
 
+from .text_norm import norm_key
+
 
 NATIVE_ROOT = Path(__file__).with_name("sqlite_simple")
 _LOAD_LOCK = threading.Lock()
@@ -83,4 +85,41 @@ def compile_fulltext(database: sqlite3.Connection, query: str) -> str:
     if "\0" in query or len(query) > 1000:
         raise ValueError("fulltext 查询不能包含 NUL，且最多 1000 个字符")
     # Keep English keywords literal instead of expanding them into Chinese pinyin.
-    return database.execute("SELECT jieba_query(?,0)", (query,)).fetchone()[0]
+    expression = database.execute("SELECT jieba_query(?,0)", (query,)).fetchone()[0]
+    return _prune_expression(expression)
+
+
+_QUERY_STOP_WORDS = frozenset({
+    "的", "了", "和", "与", "及", "或", "是", "在", "有", "什么", "如何", "怎么", "为什么",
+    "是否", "请", "请问", "关于", "之间", "区别", "一个", "一种", "哪些", "呢", "吗", "吧",
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is",
+    "it", "of", "on", "or", "that", "the", "this", "to", "was", "were", "what", "when",
+    "where", "which", "who", "why", "will", "with", "not", "difference", "between",
+})
+
+
+def _prune_expression(expression: str) -> str:
+    clauses = []
+    start = index = 0
+    quoted = False
+    while index < len(expression):
+        if expression[index] == '"':
+            if quoted and index + 1 < len(expression) and expression[index + 1] == '"':
+                index += 2
+                continue
+            quoted = not quoted
+        elif not quoted and expression.startswith(" AND ", index):
+            clauses.append(expression[start:index])
+            index += 5
+            start = index
+            continue
+        index += 1
+    clauses.append(expression[start:])
+    kept = []
+    for clause in clauses:
+        term = clause.removesuffix("*")
+        if term.startswith('"') and term.endswith('"'):
+            term = term[1:-1].replace('""', '"')
+        if any(character.isalnum() for character in term) and norm_key(term) not in _QUERY_STOP_WORDS:
+            kept.append(clause)
+    return " AND ".join(kept)
