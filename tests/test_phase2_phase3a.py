@@ -11,7 +11,8 @@ from unittest.mock import patch
 import httpx
 import numpy as np
 
-from core.chunker import _pre_split_by_paragraphs, chunk, chunking_signature, document_chunks, estimate_token_count
+from core.documents.chunker.rules import _pre_split_by_paragraphs, estimate_token_count
+from core.documents.chunker.engine import chunk, chunking_signature, document_chunks
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_rag, connect_sources
 from core.storage.schema import initialize_databases
@@ -808,7 +809,7 @@ class ChunkerTests(unittest.TestCase):
             ]
         }
 
-        with patch("core.chunker.chat_structured", return_value=response) as request:
+        with patch("core.documents.chunker.llm.chat_structured", return_value=response) as request:
             chunks = document_chunks(text, settings=settings)
 
         self.assertEqual(
@@ -836,7 +837,7 @@ class ChunkerTests(unittest.TestCase):
             ]
         }
 
-        with patch("core.chunker.chat_structured", return_value=invalid_response):
+        with patch("core.documents.chunker.llm.chat_structured", return_value=invalid_response):
             chunks = document_chunks(text, settings=settings)
 
         expected = chunk(text, settings=settings)

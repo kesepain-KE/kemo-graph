@@ -17,7 +17,7 @@ from core.settings.loader import load_config
 from core.settings.writer import write_config
 from core.storage.schema import initialize_databases
 from core.storage.meta import read_graph_meta, read_rag_meta, write_graph_meta, write_rag_meta
-from core.ingestor._file_map import FileMapStore
+from core.ingest.file_map import FileMapStore
 
 
 class ConfigTests(unittest.TestCase):

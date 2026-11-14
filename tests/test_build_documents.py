@@ -12,7 +12,7 @@ from api import create_app
 from core import build_documents, library
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_sources
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.jobs import MaintenanceJobManager
 from core.service.facade import KnowledgeBaseService
 from core.documents.errors import DocumentContentConflictError
@@ -114,7 +114,7 @@ def test_processed_edit_is_rejected_while_another_thread_builds_the_library(serv
 
 def test_build_failure_records_completed_steps_and_precise_pipeline_errors(service, tmp_path):
     document = imported(service, tmp_path)
-    with patch("core.ingestor.chat_structured", side_effect=RuntimeError("graph gateway timeout")), patch("core.ingestor.embed", side_effect=RuntimeError("embedding unavailable")):
+    with patch("core.ingest.graph_build.chat_structured", side_effect=RuntimeError("graph gateway timeout")), patch("core.ingest.pipeline.embed", side_effect=RuntimeError("embedding unavailable")):
         result = service.ingest()
     assert result["failed"] == 1
     record = service.list_documents()["documents"][0]
@@ -139,7 +139,7 @@ def test_failed_only_retries_only_failed_pipelines_and_leaves_other_pending_work
             connection.execute("UPDATE sources SET rag_status = 'failed' WHERE source_id = ?", (first["source_id"],))
     finally:
         connection.close()
-    with patch("core.ingestor.chat_structured") as graph, patch("core.ingestor.embed", side_effect=embedding):
+    with patch("core.ingest.graph_build.chat_structured") as graph, patch("core.ingest.pipeline.embed", side_effect=embedding):
         result = service.ingest(failed_only=True)
     assert result["rag_updated"] == 1
     assert result["graph_updated"] == 0
@@ -168,7 +168,7 @@ def test_api_saves_only_and_force_rebuilds_a_ready_source_with_real_steps(servic
         assert client.put(url, json={"content": "outdated", "expected_content_hash": previous["content_hash"]}).status_code == 409
         # Prove force-rebuild does not silently skip ready records.
         mark_ready(service, source_id)
-        with patch("core.ingestor.chat_structured", side_effect=empty_graph) as graph, patch("core.ingestor.embed", side_effect=embedding):
+        with patch("core.ingest.graph_build.chat_structured", side_effect=empty_graph) as graph, patch("core.ingest.pipeline.embed", side_effect=embedding):
             response = client.post(f"/api/v1/documents/{source_id}/rebuild")
             assert response.status_code == 200, response.text
             job_id = response.json()["data"]["job_id"]
@@ -191,7 +191,7 @@ def test_api_saves_only_and_force_rebuilds_a_ready_source_with_real_steps(servic
 
 def test_service_restart_marks_unfinished_step_failed_instead_of_spinning_forever(service, tmp_path):
     document = imported(service, tmp_path)
-    from core.build_progress import start_build, advance_build
+    from core.ingest.progress import start_build, advance_build
     start_build(service.paths, document["source_id"], "graph", "hash")
     advance_build(service.paths, document["source_id"], "graph", "extract", "抽取实体与关系")
     ingestor = Ingestor(service.data_dir, service.external_dir, settings=service.settings)

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 import numpy as np
 from provider.rerank import clear_cache
-from core.chunker import chunking_signature
+from core.documents.chunker.engine import chunking_signature
 from core.storage.connections import connect_rag
 from core.storage.meta import read_rag_meta, write_rag_meta
 from core.rag.errors import IndexIntegrityError

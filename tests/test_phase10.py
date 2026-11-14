@@ -15,7 +15,7 @@ from core.storage.connections import connect_rag
 from core.storage.schema import initialize_databases
 from core.storage.meta import read_graph_meta, write_graph_meta
 from core.graph.draft import GraphDraftError, merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.graph.organizer import GraphOrganizer
 from core.service.facade import KnowledgeBaseService
 from provider import ProviderResponseError
@@ -196,7 +196,7 @@ class StructuredIngestTests(unittest.TestCase):
                 _draft(node_weight=0.6, edge_weight=0.7),
                 _draft(node_weight=0.95, edge_weight=0.9),
             ]
-            with patch("core.ingestor.chat_structured", side_effect=responses):
+            with patch("core.ingest.graph_build.chat_structured", side_effect=responses):
                 result = ingestor.ingest(mode="graph")
             self.assertEqual(result["graph_updated"], 2)
 
@@ -462,7 +462,7 @@ class StructuredIngestFailureTests(unittest.TestCase):
             document = external / "doc.md"
             document.write_text("Alpha relates Beta", encoding="utf-8")
             ingestor = Ingestor(root / "data", external, settings=_settings(root))
-            with patch("core.ingestor.chat_structured", return_value=_draft()):
+            with patch("core.ingest.graph_build.chat_structured", return_value=_draft()):
                 self.assertEqual(ingestor.ingest(mode="graph")["graph_updated"], 1)
 
             graph = connect_graph(ingestor.paths)
@@ -474,7 +474,7 @@ class StructuredIngestFailureTests(unittest.TestCase):
                 graph.close()
 
             document.write_text("Gamma now replaces everything", encoding="utf-8")
-            with patch("core.ingestor.chat_structured", side_effect=RuntimeError("gateway")):
+            with patch("core.ingest.graph_build.chat_structured", side_effect=RuntimeError("gateway")):
                 failed = ingestor.ingest(mode="graph")
             self.assertEqual(failed["failed"], 1)
             graph = connect_graph(ingestor.paths)
@@ -510,7 +510,7 @@ class StructuredIngestFailureTests(unittest.TestCase):
                     raise RuntimeError("section failed")
                 return _draft(left=f"Alpha {current}", right=f"Beta {current}")
 
-            with patch("core.ingestor.chat_structured", side_effect=fail_one):
+            with patch("core.ingest.graph_build.chat_structured", side_effect=fail_one):
                 result = ingestor.ingest(mode="graph")
             self.assertEqual(result["failed"], 1)
             graph = connect_graph(ingestor.paths)

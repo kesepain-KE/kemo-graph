@@ -6,10 +6,10 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 from core.documents.conversion import DocumentConversionError, import_document as convert_document
-from core.build_progress import read_builds
+from core.ingest.progress import read_builds
 from core.storage.connections import connect_sources
-from core.ingestor._file_map import FileMapError
-from core.ingestor import Ingestor
+from core.ingest.file_map import FileMapError
+from core.ingest.pipeline import Ingestor
 from core.storage.locks import get_knowledge_base_lock
 from core.retrieval.cache.errors import SearchCacheCleanupError
 from core.retrieval.cache.store import clear_search_cache_after_mutation

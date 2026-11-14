@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 from provider.embedding import EmbeddingResult, embed
 from provider.rerank import clear_cache, rerank
-from core.chunker import chunking_signature
+from core.documents.chunker.engine import chunking_signature
 from core.settings.schema import AppConfig
 from core.settings.loader import load_config
 from core.storage.connections import connect_graph, connect_rag, connect_sources

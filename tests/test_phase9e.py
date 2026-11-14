@@ -21,7 +21,7 @@ from api import create_app
 from api.deps import get_service
 from core.settings.schema import AppConfig
 from core.settings.loader import load_config
-from core.ingestor import IngestError
+from core.ingest.errors import IngestError
 from core.documents.errors import DocumentImportConflictError, DocumentImportError, DocumentImportPathError, UnsupportedDocumentFormatError
 from core.service.facade import KnowledgeBaseService
 from core.logger import DailyTSVLogger
@@ -438,7 +438,7 @@ class DocumentImportTests(unittest.TestCase):
                 tool_handler("finish", {})
                 return "done"
 
-            with patch("core.ingestor.chat_with_tools", side_effect=finish_graph):
+            with patch("core.ingest.graph_build.chat_with_tools", side_effect=finish_graph):
                 service.ingest(paths=[imported["markdown_relative_path"]], mode="graph")
             service.delete_document(imported["source_id"])
 

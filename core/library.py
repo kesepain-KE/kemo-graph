@@ -15,9 +15,9 @@ from uuid import uuid4
 
 from core.storage.connections import connect_sources
 from core.storage.schema import initialize_databases
-from core.ingestor._delete import DocumentNotFoundError
-from core.ingestor._file_map import FileMapStore, FileMapping
-from core.ingestor._utils import _path_key
+from core.ingest.errors import DocumentNotFoundError
+from core.ingest.file_map import FileMapStore, FileMapping
+from core.ingest.paths import _path_key
 from core.documents.errors import DocumentContentConflictError
 from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
 from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic
@@ -202,8 +202,8 @@ def refresh_library(owner: Any, path: str = "", *, force: bool = False) -> dict[
         original_root(owner).mkdir(parents=True, exist_ok=True)
         deleted = []
         if not path:
-            from core.ingestor import Ingestor
-            from core.ingestor._scan import cleanup_orphaned_sources
+            from core.ingest.pipeline import Ingestor
+            from core.ingest.scan import cleanup_orphaned_sources
 
             ingestor = Ingestor(owner.data_dir, owner.external_dir, settings=owner.settings)
             _, deleted = cleanup_orphaned_sources(ingestor, remove_unmapped=True)

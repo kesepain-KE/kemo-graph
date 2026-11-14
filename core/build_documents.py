@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.storage.connections import connect_sources
-from core.ingestor._delete import DocumentNotFoundError
-from core.ingestor._utils import _safe_source_path
+from core.ingest.errors import DocumentNotFoundError
+from core.ingest.paths import _safe_source_path
 from core.documents.errors import DocumentContentConflictError, DocumentTooLargeError
 from core.documents.formats import MAX_IMPORT_BYTES
 from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic

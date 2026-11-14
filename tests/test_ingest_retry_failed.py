@@ -15,7 +15,7 @@ from api import create_app
 from api.deps import get_job_manager, get_service
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_sources
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from provider.embedding import EmbeddingResult
 
 
@@ -98,13 +98,13 @@ def _statuses(ingestor: Ingestor) -> tuple[str, str]:
 
 
 def test_failed_graph_is_skipped_by_default_and_retried_on_request(ingestor: Ingestor) -> None:
-    with patch("core.ingestor.chat_structured", side_effect=RuntimeError("gateway")):
+    with patch("core.ingest.graph_build.chat_structured", side_effect=RuntimeError("gateway")):
         failed = ingestor.ingest(mode="graph")
     assert failed["failed"] == 1
     assert _statuses(ingestor)[0] == "failed"
 
     # 默认：失败来源根本不被选中，既不算 processed/skipped，也不会调用模型。
-    with patch("core.ingestor.chat_structured", return_value=_draft()) as chat:
+    with patch("core.ingest.graph_build.chat_structured", return_value=_draft()) as chat:
         skipped = ingestor.ingest(mode="graph")
     assert skipped["processed"] == 0
     assert skipped["skipped"] == 0
@@ -112,7 +112,7 @@ def test_failed_graph_is_skipped_by_default_and_retried_on_request(ingestor: Ing
     assert chat.call_count == 0
 
     # 显式要求后重跑同一来源，且不重复计入失败。
-    with patch("core.ingestor.chat_structured", return_value=_draft()) as chat:
+    with patch("core.ingest.graph_build.chat_structured", return_value=_draft()) as chat:
         retried = ingestor.ingest(mode="graph", retry_failed=True)
     assert retried["graph_updated"] == 1
     assert retried["failed"] == 0
@@ -121,19 +121,19 @@ def test_failed_graph_is_skipped_by_default_and_retried_on_request(ingestor: Ing
 
 
 def test_failed_rag_is_retried_only_with_the_flag(ingestor: Ingestor) -> None:
-    with patch("core.ingestor.embed", side_effect=RuntimeError("gateway")):
+    with patch("core.ingest.pipeline.embed", side_effect=RuntimeError("gateway")):
         failed = ingestor.ingest(mode="rag")
     assert failed["failed"] == 1
     assert _statuses(ingestor)[1] == "failed"
 
-    with patch("core.ingestor.embed", side_effect=_embedding) as embed:
+    with patch("core.ingest.pipeline.embed", side_effect=_embedding) as embed:
         skipped = ingestor.ingest(mode="rag")
     assert skipped["processed"] == 0
     assert skipped["skipped"] == 0
     assert skipped["details"] == []
     assert embed.call_count == 0
 
-    with patch("core.ingestor.embed", side_effect=_embedding) as embed:
+    with patch("core.ingest.pipeline.embed", side_effect=_embedding) as embed:
         retried = ingestor.ingest(mode="rag", retry_failed=True)
     assert retried["rag_updated"] == 1
     assert retried["failed"] == 0
@@ -142,11 +142,11 @@ def test_failed_rag_is_retried_only_with_the_flag(ingestor: Ingestor) -> None:
 
 
 def test_retry_only_touches_failed_sources_and_leaves_ready_alone(ingestor: Ingestor) -> None:
-    with patch("core.ingestor.chat_structured", return_value=_draft()):
+    with patch("core.ingest.graph_build.chat_structured", return_value=_draft()):
         assert ingestor.ingest(mode="graph")["graph_updated"] == 1
 
     # 已经 ready 的来源既不是 pending 也不是 failed，开了开关也不会被重新构建。
-    with patch("core.ingestor.chat_structured", return_value=_draft()) as chat:
+    with patch("core.ingest.graph_build.chat_structured", return_value=_draft()) as chat:
         again = ingestor.ingest(mode="graph", retry_failed=True)
     assert again["processed"] == 0
     assert again["skipped"] == 0

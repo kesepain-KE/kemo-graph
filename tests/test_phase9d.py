@@ -13,12 +13,12 @@ import numpy as np
 
 from provider.embedding import EmbeddingResult
 
-from core.chunker import chunking_signature
+from core.documents.chunker.engine import chunking_signature
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.storage.schema import initialize_databases
 from core.storage.meta import read_rag_meta, write_rag_meta
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.rag.errors import IndexIntegrityError
 from core.rag.engine import RAGEngine
 from provider.tools import get_tool_schemas
@@ -88,7 +88,7 @@ class ToolGraphBuildTests(unittest.TestCase):
                 self.assertEqual(tool_handler("finish", {}), {"finished": True})
                 return "finished"
 
-            with patch("core.ingestor.chat_with_tools", side_effect=build_graph):
+            with patch("core.ingest.graph_build.chat_with_tools", side_effect=build_graph):
                 first = ingestor.ingest(mode="graph")
             self.assertEqual(first["graph_updated"], 1)
             self.assertIn("doc.md", str(captured["system"]))
@@ -119,7 +119,7 @@ class ToolGraphBuildTests(unittest.TestCase):
                 )
                 raise RuntimeError("simulated gateway failure")
 
-            with patch("core.ingestor.chat_with_tools", side_effect=fail_after_write):
+            with patch("core.ingest.graph_build.chat_with_tools", side_effect=fail_after_write):
                 failed = ingestor.ingest(mode="graph")
             self.assertEqual(failed["failed"], 1)
             self.assertEqual(self._keywords(ingestor), {"Alpha", "Beta"})
@@ -192,7 +192,7 @@ class ToolGraphBuildTests(unittest.TestCase):
                 tool_handler("finish", {})
                 return "finished"
 
-            with patch("core.ingestor.chat_with_tools", side_effect=update_existing):
+            with patch("core.ingest.graph_build.chat_with_tools", side_effect=update_existing):
                 result = ingestor.ingest(mode="graph")
             self.assertEqual(result["graph_updated"], 1)
             graph_connection = connect_graph(ingestor.paths)

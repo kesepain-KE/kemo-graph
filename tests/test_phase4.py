@@ -17,7 +17,7 @@ from core import library
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.storage.meta import read_graph_meta
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.service.facade import KnowledgeBaseService
 
 
@@ -137,7 +137,7 @@ class SourceScanTests(unittest.TestCase):
 
 
 class IncrementalIngestTests(unittest.TestCase):
-    @patch("core.ingestor.chat_with_tools")
+    @patch("core.ingest.graph_build.chat_with_tools")
     def test_first_build_unchanged_skip_and_atomic_incremental_replace(
         self, mock_chat
     ) -> None:
@@ -227,7 +227,7 @@ class IncrementalIngestTests(unittest.TestCase):
                 read_graph_meta(ingestor.paths)["changed_since_summary"], 2
             )
 
-    @patch("core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph)
+    @patch("core.ingest.graph_build.chat_with_tools", side_effect=_versioned_tool_graph)
     def test_graph_and_rag_modes_fill_chunk_nodes_when_both_are_current(
         self, _mock_chat
     ) -> None:
@@ -268,7 +268,7 @@ class IncrementalIngestTests(unittest.TestCase):
                 embedder=_embedding,
             )
             with patch(
-                "core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph
+                "core.ingest.graph_build.chat_with_tools", side_effect=_versioned_tool_graph
             ):
                 initial.ingest(mode="both")
             old_source = _only_source(initial)
@@ -288,7 +288,7 @@ class IncrementalIngestTests(unittest.TestCase):
                 embedder=fail_embedding,
             )
             with patch(
-                "core.ingestor.chat_with_tools",
+                "core.ingest.graph_build.chat_with_tools",
                 side_effect=RuntimeError("graph preparation failed"),
             ):
                 result = failing.ingest(mode="both")
@@ -308,7 +308,7 @@ class IncrementalIngestTests(unittest.TestCase):
             )
             self.assertEqual(failing._get_rag_engine().index.ids, old_vectors)
 
-    @patch("core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph)
+    @patch("core.ingest.graph_build.chat_with_tools", side_effect=_versioned_tool_graph)
     def test_faiss_replace_failure_recovers_from_committed_rag_database(
         self, _mock_chat
     ) -> None:
@@ -346,7 +346,7 @@ class IncrementalIngestTests(unittest.TestCase):
 
 
 class DeleteCascadeTests(unittest.TestCase):
-    @patch("core.ingestor.chat_with_tools")
+    @patch("core.ingest.graph_build.chat_with_tools")
     def test_delete_recalculates_shared_references_and_removes_last_source(
         self, mock_chat
     ) -> None:
@@ -434,7 +434,7 @@ class LibraryDeleteCascadeTests(unittest.TestCase):
             settings=settings,
             embedder=_embedding,
         )
-        with patch("core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph):
+        with patch("core.ingest.graph_build.chat_with_tools", side_effect=_versioned_tool_graph):
             result = self.ingestor.ingest()
         self.assertEqual(result["failed"], 0)
         self.removed = next(

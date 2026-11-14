@@ -10,7 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 from core.settings.schema import AppConfig
-from core.chunker import document_chunks
+from core.documents.chunker.engine import document_chunks
 from core.storage.connections import connect_rag, connect_sources
 from core.storage.schema import initialize_databases
 from core.documents.query_planner import filter_semantic_drift, plan_query
@@ -121,7 +121,7 @@ class QueryPlannerTests(unittest.TestCase):
             ]
         }
 
-        with patch("core.chunker.chat_structured", return_value=boundaries):
+        with patch("core.documents.chunker.llm.chat_structured", return_value=boundaries):
             chunks = document_chunks(text, settings=settings)
 
         self.assertEqual(
@@ -147,7 +147,7 @@ class QueryPlannerTests(unittest.TestCase):
             ]
         }
 
-        with patch("core.chunker.chat_structured", return_value=boundaries):
+        with patch("core.documents.chunker.llm.chat_structured", return_value=boundaries):
             chunks = document_chunks(text, settings=settings)
 
         small_chunks = [chunk for chunk in chunks if chunk.granularity == "small"]

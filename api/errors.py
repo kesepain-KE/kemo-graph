@@ -11,8 +11,8 @@ from fastapi.responses import JSONResponse
 
 from core.graph.errors import GraphQueryError
 from core.graph.errors import GraphNodeNotFoundError, GraphRevisionChangedError
-from core.ingestor._delete import DocumentNotFoundError
-from core.ingestor import IngestError
+from core.ingest.errors import DocumentNotFoundError
+from core.ingest.errors import IngestError
 from core.documents.errors import DocumentImportError, DocumentContentConflictError, DocumentImportConflictError, DocumentImportPathError, DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
 from core.service.errors import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
 from core.logger import DailyTSVLogger

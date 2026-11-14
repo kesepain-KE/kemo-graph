@@ -19,7 +19,7 @@ from core.settings.loader import load_config
 from core.storage.paths import DatabasePaths
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.storage.schema import initialize_databases
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.storage.locks import get_knowledge_base_lock
 from core.logger import DailyTSVLogger
 from core.rag.engine import RAGEngine

@@ -9,8 +9,8 @@ from unittest.mock import patch
 from core.settings.schema import AppConfig
 from core.storage.meta import read_graph_meta
 from core.graph.draft import DraftEntity, DraftRelation, GraphDraft
-from core.ingestor import Ingestor
-from core.ingestor._graph_build import _sparsify_graph_relations
+from core.ingest.pipeline import Ingestor
+from core.ingest.graph_build import _sparsify_graph_relations
 
 
 class GraphExtractionGranularityTests(unittest.TestCase):
@@ -102,7 +102,7 @@ class GraphExtractionGranularityTests(unittest.TestCase):
                 return "done"
 
             with patch(
-                "core.ingestor.chat_with_tools", side_effect=finish_section
+                "core.ingest.graph_build.chat_with_tools", side_effect=finish_section
             ) as chat:
                 result = ingestor.ingest(mode="graph")
 
@@ -153,7 +153,7 @@ class GraphExtractionGranularityTests(unittest.TestCase):
                 ],
                 "relations": [],
             }
-            with patch("core.ingestor.chat_structured", return_value=payload) as chat:
+            with patch("core.ingest.graph_build.chat_structured", return_value=payload) as chat:
                 result = ingestor.ingest(mode="graph")
 
             self.assertEqual(result["failed"], 0)
@@ -203,7 +203,7 @@ class GraphExtractionGranularityTests(unittest.TestCase):
                 tool_handler("finish", {})
                 return "done"
 
-            with patch("core.ingestor.chat_with_tools", side_effect=over_budget):
+            with patch("core.ingest.graph_build.chat_with_tools", side_effect=over_budget):
                 result = ingestor.ingest(mode="graph")
 
             self.assertEqual(result["failed"], 0)
@@ -226,7 +226,7 @@ class GraphExtractionGranularityTests(unittest.TestCase):
                 log_dir=str(root / "log"),
             )
             first_ingestor = Ingestor(root / "data", external, settings=first_settings)
-            with patch("core.ingestor.chat_with_tools") as chat:
+            with patch("core.ingest.graph_build.chat_with_tools") as chat:
                 chat.side_effect = lambda *, tool_handler, **kwargs: (
                     tool_handler("finish", {})
                 )
@@ -262,7 +262,7 @@ class GraphExtractionGranularityTests(unittest.TestCase):
                 log_dir=str(root / "log"),
             )
             first = Ingestor(root / "data", external, settings=first_settings)
-            with patch("core.ingestor.chat_with_tools") as chat:
+            with patch("core.ingest.graph_build.chat_with_tools") as chat:
                 chat.side_effect = lambda *, tool_handler, **kwargs: tool_handler("finish", {})
                 self.assertEqual(first.ingest(mode="graph")["failed"], 0)
             old_signature = read_graph_meta(first.paths)["extraction_signature"]

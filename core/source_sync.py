@@ -16,8 +16,8 @@ from uuid import uuid4
 
 from core.storage.connections import connect_sources
 from core.storage.schema import initialize_databases
-from core.ingestor import Ingestor
-from core.ingestor._utils import _hash_relative_path
+from core.ingest.pipeline import Ingestor
+from core.ingest.paths import _hash_relative_path
 from core.retrieval.cache.store import clear_search_cache_after_mutation
 
 

@@ -20,7 +20,7 @@ from api.deps import get_service
 from core import library
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_graph, connect_rag, connect_sources
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.documents.errors import DocumentContentConflictError
 from core.service.errors import KnowledgeBaseNotInitializedError
 from core.service.facade import KnowledgeBaseService
@@ -162,7 +162,7 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             )
             self.assertEqual(service.status()["sources"]["active"], 0)
 
-    @patch("core.ingestor.chat_with_tools", side_effect=_tool_graph)
+    @patch("core.ingest.graph_build.chat_with_tools", side_effect=_tool_graph)
     def test_status_full_graph_and_document_delete(self, _mock_chat) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

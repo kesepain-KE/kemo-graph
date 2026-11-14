@@ -18,7 +18,7 @@ from api import create_app
 from api.deps import get_job_manager
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_graph, connect_sources
-from core.ingestor import Ingestor
+from core.ingest.pipeline import Ingestor
 from core.jobs import MaintenanceJobManager
 from core.rebuilder import KnowledgeBaseRebuilder, RebuildError
 from provider.embedding import EmbeddingResult
@@ -176,7 +176,7 @@ class RebuildTests(unittest.TestCase):
                 settings=settings,
                 embedder=_embedding,
             )
-            with patch("core.ingestor.chat_structured", return_value=_draft("Old")):
+            with patch("core.ingest.graph_build.chat_structured", return_value=_draft("Old")):
                 self.assertEqual(initial.ingest(mode="both")["failed"], 0)
             sources = connect_sources(initial.paths)
             try:
@@ -188,8 +188,8 @@ class RebuildTests(unittest.TestCase):
 
             document.write_text("New relates Target", encoding="utf-8")
             with (
-                patch("core.ingestor.chat_structured", return_value=_draft()),
-                patch("core.ingestor.embed", side_effect=_embedding),
+                patch("core.ingest.graph_build.chat_structured", return_value=_draft()),
+                patch("core.ingest.pipeline.embed", side_effect=_embedding),
             ):
                 result = KnowledgeBaseRebuilder(
                     data,
@@ -232,10 +232,10 @@ class RebuildTests(unittest.TestCase):
                 settings=settings,
                 embedder=_embedding,
             )
-            with patch("core.ingestor.chat_structured", return_value=_draft("Old")):
+            with patch("core.ingest.graph_build.chat_structured", return_value=_draft("Old")):
                 initial.ingest(mode="both")
             with patch(
-                "core.ingestor.chat_structured", side_effect=RuntimeError("gateway")
+                "core.ingest.graph_build.chat_structured", side_effect=RuntimeError("gateway")
             ):
                 with self.assertRaises(RebuildError):
                     KnowledgeBaseRebuilder(
