@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso, write_json_atomic as _write_json_atomic
+
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -530,20 +532,8 @@ def _unique_roots(values: Sequence[Path | str]) -> list[Path]:
     return roots
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 __all__ = [

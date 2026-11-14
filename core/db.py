@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import write_json_atomic as _write_json_atomic
+
 import json
 import os
 import sqlite3
@@ -509,6 +511,7 @@ def read_graph_meta(paths: DatabasePaths) -> dict[str, Any]:
 
 
 def write_graph_meta(paths: DatabasePaths, meta: dict[str, Any]) -> None:
+    paths.data_dir.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(paths.graph_meta, meta)
 
 
@@ -519,6 +522,7 @@ def read_rag_meta(
 
 
 def write_rag_meta(paths: DatabasePaths, meta: dict[str, Any]) -> None:
+    paths.data_dir.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(paths.rag_meta, meta)
 
 
@@ -770,14 +774,6 @@ def _read_meta(path: Path, defaults: dict[str, Any]) -> dict[str, Any]:
     return {**defaults, **loaded}
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary_path, path)
 
 
 def deepcopy_dict(value: dict[str, Any]) -> dict[str, Any]:

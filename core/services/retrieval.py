@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from core.common import elapsed_ms as _elapsed_ms, clip_context_text as _clip_context_text
+
 import json
 import time
 from typing import Any, Callable
@@ -545,13 +547,8 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _clip_context_text(value: Any, limit: int) -> str:
-    text = str(value or "").strip()
-    return text if len(text) <= limit else f"{text[:limit].rstrip()}…"
 
 
-def _elapsed_ms(started_at: float) -> int:
-    return round((time.perf_counter() - started_at) * 1000)
 
 # The cache methods were kept as a separate implementation during the
 # interrupted extraction above.  Bind the concrete methods here so the class

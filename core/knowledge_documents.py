@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import escape_like as _escape_like
+
 import json
 import hashlib
 import os
@@ -109,10 +111,6 @@ from .knowledge_support import (
 _DOCUMENT_BUILD_STATUSES = ("pending", "processing", "ready", "failed")
 
 
-def _escape_like(value: str) -> str:
-    """Escape a user supplied literal for a SQLite LIKE expression."""
-
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _document_filters(

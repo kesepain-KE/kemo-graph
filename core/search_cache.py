@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso
+
 import hashlib
 import json
 import sqlite3
@@ -629,8 +631,6 @@ def _validate_page(page: int, page_size: int) -> None:
         raise ValueError("page_size 必须是 1 到 100 之间的整数")
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 __all__ = [

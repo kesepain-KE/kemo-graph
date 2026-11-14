@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import elapsed_ms as _elapsed_ms
+
 import hashlib
 import time
 import unicodedata
@@ -347,8 +349,6 @@ def _validate_prepared_query(query: str, prepared: PreparedQuery) -> None:
         raise RAGQueryError("prepared_query 的计划与向量数量不一致")
 
 
-def _elapsed_ms(started_at: float) -> int:
-    return round((time.perf_counter() - started_at) * 1000)
 
 
 def _validate_vector_space_id(value: Any, vector_id: int | None = None) -> str:

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from core.common import parse_json_list as _parse_json_list
+
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -466,15 +468,6 @@ class GraphService:
         )
 
 
-def _parse_json_list(value: str | None) -> list[str]:
-    if not value:
-        return []
-    parsed = json.loads(value)
-    if not isinstance(parsed, list) or any(
-        not isinstance(item, str) for item in parsed
-    ):
-        raise ValueError("图谱中的 JSON 数组字段格式错误")
-    return parsed
 
 
 def _relation_row(row: Any) -> dict[str, Any]:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso
+
 import json
 import os
 import re
@@ -719,8 +721,6 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
     os.replace(temporary, path)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _timestamp() -> str:

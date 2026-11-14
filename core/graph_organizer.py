@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso
+
 import json
 import sqlite3
 import time
@@ -931,10 +933,6 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(left | right)
 
 
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat()
 
 
 __all__ = [

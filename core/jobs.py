@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso
+
 import json
 import queue
 import threading
@@ -465,8 +467,6 @@ def _initial_detail(kind: str) -> str:
     }[kind]
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 __all__ = [

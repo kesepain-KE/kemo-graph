@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso, escape_like as _escape_like, fetch_one as _fetch_one, fetch_all as _fetch_all, row_dict as _row_dict, transaction as _transaction
+
 import json
 import math
 import sqlite3
@@ -386,52 +388,16 @@ def _required_text(
     return text
 
 
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _fetch_one(
-    conn: sqlite3.Connection,
-    sql: str,
-    parameters: Sequence[Any] = (),
-) -> dict[str, Any] | None:
-    cursor = conn.execute(sql, tuple(parameters))
-    row = cursor.fetchone()
-    return None if row is None else _row_dict(cursor, row)
 
 
-def _fetch_all(
-    conn: sqlite3.Connection,
-    sql: str,
-    parameters: Sequence[Any] = (),
-) -> list[dict[str, Any]]:
-    cursor = conn.execute(sql, tuple(parameters))
-    return [_row_dict(cursor, row) for row in cursor.fetchall()]
 
 
-def _row_dict(cursor: sqlite3.Cursor, row: Any) -> dict[str, Any]:
-    if isinstance(row, sqlite3.Row):
-        return {key: row[key] for key in row.keys()}
-    names = [str(column[0]) for column in cursor.description or ()]
-    return dict(zip(names, row, strict=True))
 
 
-@contextmanager
-def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    savepoint = f"provider_tool_{uuid4().hex}"
-    conn.execute(f"SAVEPOINT {savepoint}")
-    try:
-        yield
-    except Exception:
-        conn.execute(f"ROLLBACK TO {savepoint}")
-        conn.execute(f"RELEASE {savepoint}")
-        raise
-    else:
-        conn.execute(f"RELEASE {savepoint}")
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 __all__ = [

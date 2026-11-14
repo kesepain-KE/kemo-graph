@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import required_text as _required_text
+
 import hashlib
 import json
 import sqlite3
@@ -315,13 +317,6 @@ def _validate_integer(
     return value
 
 
-def _required_text(value: str, name: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{name} 必须是字符串")
-    text = value.strip()
-    if not text:
-        raise ValueError(f"{name} 不能为空")
-    return text
 
 
 def _require_revision(expected: str | None, current: str) -> None:

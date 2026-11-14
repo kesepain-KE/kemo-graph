@@ -14,7 +14,7 @@ EXPORT_BUDGETS = {"core": 24, "core.common": 24, "core.settings": 12,
                   "core.ingest": 16, "core.documents": 20,
                   "core.retrieval": 12, "core.observability": 12,
                   "core.maintenance": 8, "core.service": 20}
-STAGE = 0
+STAGE = 1
 
 
 def import_edges(root: Path = ROOT):

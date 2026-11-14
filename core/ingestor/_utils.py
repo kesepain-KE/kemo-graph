@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso, elapsed_ms as _elapsed_ms, write_json_atomic as _write_json_atomic, validated_path as _validated_path
+
 import hashlib
 import json
 import os
@@ -105,32 +107,11 @@ def _get_write_lock(data_dir: Path) -> threading.RLock:
     return get_knowledge_base_lock(data_dir)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
-def _elapsed_ms(started_at: float) -> int:
-    return round((time.perf_counter() - started_at) * 1000)
 
 
-def _validated_path(value: Path | str, field_name: str) -> str:
-    text = os.fspath(value).strip()
-    if not text:
-        raise ValueError(f"{field_name} 不能为空")
-    return text
 
 
 def _path_key(value: Path | str) -> str:
     return os.path.normcase(os.path.normpath(os.fspath(value).strip()))
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    try:
-        temporary_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)

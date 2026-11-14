@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import now_iso as _now_iso, elapsed_ms as _elapsed_ms, write_json_atomic as _write_json_atomic, write_bytes_atomic as _write_bytes_atomic, parse_json_list as _parse_json_list, clip_context_text as _clip_context_text
+
 import json
 import hashlib
 import os
@@ -87,15 +89,6 @@ def _public_convert_document(*args: Any, **kwargs: Any) -> Any:
 
     return knowledge_base.convert_document(*args, **kwargs)
 
-def _parse_json_list(value: str | None) -> list[str]:
-    if not value:
-        return []
-    parsed = json.loads(value)
-    if not isinstance(parsed, list) or any(
-        not isinstance(item, str) for item in parsed
-    ):
-        raise ValueError("图谱中的 JSON 数组字段格式错误")
-    return parsed
 
 
 def _relation_row(row: Any) -> dict[str, Any]:
@@ -576,40 +569,3 @@ def _load_source_metadata(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
-
-
-def _clip_context_text(value: Any, limit: int) -> str:
-    text = str(value or "").strip()
-    return text if len(text) <= limit else f"{text[:limit].rstrip()}…"
-
-
-def _elapsed_ms(started_at: float) -> int:
-    return round((time.perf_counter() - started_at) * 1000)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _write_bytes_atomic(path: Path, content: bytes) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        with temporary.open("wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
