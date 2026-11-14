@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import math
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable
+
+
+from .text_norm import norm_key
 
 
 GRAPH_DRAFT_SCHEMA: dict[str, Any] = {
@@ -172,7 +174,7 @@ def merge_graph_drafts(drafts: Iterable[GraphDraft]) -> GraphDraft:
     for draft_index, draft in enumerate(drafts):
         for entity in draft.entities:
             source_local_id = entity.local_id
-            terms = {_key(entity.keyword), *(_key(alias) for alias in entity.aliases)}
+            terms = {norm_key(entity.keyword), *(norm_key(alias) for alias in entity.aliases)}
             owners = {term_owner[term] for term in terms if term in term_owner}
             created = False
             if len(owners) > 1:
@@ -217,7 +219,7 @@ def merge_graph_drafts(drafts: Iterable[GraphDraft]) -> GraphDraft:
                 merged[selected_index] = _merge_entity(merged[selected_index], entity)
             selected = merged[selected_index]
             local_map[(draft_index, source_local_id)] = selected.local_id
-            for term in {_key(selected.keyword), *(_key(alias) for alias in selected.aliases)}:
+            for term in {norm_key(selected.keyword), *(norm_key(alias) for alias in selected.aliases)}:
                 term_owner[term] = selected_index
 
     relations_by_key: dict[tuple[str, str, str], DraftRelation] = {}
@@ -234,7 +236,7 @@ def merge_graph_drafts(drafts: Iterable[GraphDraft]) -> GraphDraft:
                 evidence_weight=relation.evidence_weight,
                 evidence=relation.evidence,
             )
-            key = (source, _key(relation.relation), target)
+            key = (source, norm_key(relation.relation), target)
             previous = relations_by_key.get(key)
             if previous is None or normalized.evidence_weight > previous.evidence_weight:
                 relations_by_key[key] = normalized
@@ -288,7 +290,7 @@ def _split_oversized(value: str, max_chars: int) -> list[str]:
 
 def _merge_entity(left: DraftEntity, right: DraftEntity) -> DraftEntity:
     aliases = _unique([*left.aliases, *right.aliases])
-    if _key(left.keyword) != _key(right.keyword):
+    if norm_key(left.keyword) != norm_key(right.keyword):
         aliases = _unique([*aliases, right.keyword])
     return DraftEntity(
         local_id=left.local_id,
@@ -299,10 +301,6 @@ def _merge_entity(left: DraftEntity, right: DraftEntity) -> DraftEntity:
         evidence_weight=max(left.evidence_weight, right.evidence_weight),
         evidence=right.evidence if len(right.evidence) > len(left.evidence) else left.evidence,
     )
-
-
-def _key(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
 def _text(value: Any, name: str, maximum: int) -> str:
@@ -342,7 +340,7 @@ def _unique(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for value in values:
-        key = _key(value)
+        key = norm_key(value)
         if key and key not in seen:
             seen.add(key)
             result.append(value)

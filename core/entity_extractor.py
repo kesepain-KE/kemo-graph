@@ -14,6 +14,7 @@ from provider.engine import chat
 
 from .config import AppConfig, load_config
 from .logger import DailyTSVLogger
+from .text_norm import norm_key
 
 
 _QUOTED_PATTERN = re.compile(r"[\"'“”‘’《》]([^\"'“”‘’《》]{1,80})[\"'“”‘’《》]")
@@ -102,8 +103,8 @@ def _extract_by_rule(chunks: list[str]) -> list[Entity]:
 
     entities: list[Entity] = []
     for candidate in candidates:
-        normalized = _normalize(candidate.strip(_EDGE_PUNCTUATION))
-        if not normalized or normalized.casefold() in _RULE_STOP_WORDS:
+        normalized = display_normalize(candidate.strip(_EDGE_PUNCTUATION))
+        if not normalized or norm_key(normalized) in _RULE_STOP_WORDS:
             continue
         if len(normalized) == 1 and not normalized.isascii():
             continue
@@ -171,13 +172,13 @@ def _entity_from_payload(payload: Any, index: int) -> Entity:
     ):
         raise EntityExtractionError(f"第 {index} 个实体 confidence 必须在 0~1")
 
-    normalized_value = _normalize(normalized)
+    normalized_value = display_normalize(normalized)
     clean_aliases = _unique_strings(
-        alias for alias in aliases if _normalize(alias).casefold() != normalized_value.casefold()
+        alias for alias in aliases if norm_key(alias) != norm_key(normalized_value)
     )
     return Entity(
-        text=_normalize(text),
-        type=_normalize(entity_type),
+        text=display_normalize(text),
+        type=display_normalize(entity_type),
         normalized=normalized_value,
         aliases=clean_aliases,
         confidence=float(confidence),
@@ -188,7 +189,7 @@ def _deduplicate(entities: list[Entity]) -> list[Entity]:
     merged: dict[str, Entity] = {}
     order: list[str] = []
     for entity in entities:
-        key = entity.normalized.casefold()
+        key = norm_key(entity.normalized)
         previous = merged.get(key)
         if previous is None:
             merged[key] = entity
@@ -209,15 +210,15 @@ def _unique_strings(values: Any) -> list[str]:
     results: list[str] = []
     seen: set[str] = set()
     for value in values:
-        normalized = _normalize(value)
-        key = normalized.casefold()
+        normalized = display_normalize(value)
+        key = norm_key(normalized)
         if normalized and key not in seen:
             seen.add(key)
             results.append(normalized)
     return results
 
 
-def _normalize(value: str) -> str:
+def display_normalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).strip().split())
 
 

@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 from provider.engine import chat, chat_with_tools
 
+from .text_norm import norm_key
 from .config import AppConfig, PROJECT_ROOT, load_config
 from .db import (
     DatabasePaths,
@@ -516,7 +517,7 @@ def _find_candidates(
                 "node_id": str(row["node_id"]),
                 "keyword": str(row["keyword"]),
                 "summary": str(row["summary"] or ""),
-                "terms": {_key(row["keyword"]), *(_key(value) for value in aliases)},
+                "terms": {norm_key(row["keyword"]), *(norm_key(value) for value in aliases)},
             }
         )
     neighbors = _neighbor_signatures(connection)
@@ -537,8 +538,8 @@ def _find_candidates(
                 )
                 summary = SequenceMatcher(
                     None,
-                    _key(left["summary"])[:800],
-                    _key(right["summary"])[:800],
+                    norm_key(left["summary"])[:800],
+                    norm_key(right["summary"])[:800],
                 ).ratio()
                 adjacency = _jaccard(
                     neighbors.get(left["node_id"], set()),
@@ -575,10 +576,10 @@ def _neighbor_signatures(connection: sqlite3.Connection) -> dict[str, set[str]]:
     ).fetchall()
     for row in rows:
         signatures.setdefault(str(row["source_node_id"]), set()).add(
-            f"out:{_key(row['relation'])}:{_key(row['target_keyword'])}"
+            f"out:{norm_key(row['relation'])}:{norm_key(row['target_keyword'])}"
         )
         signatures.setdefault(str(row["target_node_id"]), set()).add(
-            f"in:{_key(row['relation'])}:{_key(row['source_keyword'])}"
+            f"in:{norm_key(row['relation'])}:{norm_key(row['source_keyword'])}"
         )
     return signatures
 
@@ -657,7 +658,7 @@ def _merge_nodes(
             str(merged["keyword"]),
         ]
     )
-    aliases = [value for value in aliases if _key(value) != _key(chosen_keyword)]
+    aliases = [value for value in aliases if norm_key(value) != norm_key(chosen_keyword)]
     tags = _unique_texts([*keep["tags"], *merged["tags"]])
 
     connection.execute(
@@ -892,10 +893,6 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
-
-
-def _key(value: Any) -> str:
-    return " ".join(unicodedata.normalize("NFKC", str(value)).casefold().split())
 
 
 def _now_iso() -> str:

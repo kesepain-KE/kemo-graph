@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import unicodedata
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from .text_norm import norm_key
 from .config import AppConfig, load_config
 from .db import DatabasePaths, connect_graph, initialize_databases
 from .entity_extractor import Entity, extract
@@ -452,14 +452,14 @@ def _parse_string_array(value: str | None, field: str, node_id: str) -> list[str
 
 
 def _node_match_score(entity: Entity, node: _Node) -> float:
-    primary = _match_key(entity.normalized)
-    node_keyword = _match_key(node.keyword)
-    node_aliases = {_match_key(alias) for alias in node.aliases}
+    primary = norm_key(entity.normalized)
+    node_keyword = norm_key(node.keyword)
+    node_aliases = {norm_key(alias) for alias in node.aliases}
     if primary == node_keyword:
         return 1.0
 
     alternate_terms = {
-        _match_key(value)
+        norm_key(value)
         for value in [entity.text, *entity.aliases]
         if value.strip()
     }
@@ -483,7 +483,7 @@ def _node_match_score(entity: Entity, node: _Node) -> float:
     # users naturally search for; it is still protected by the minimum partial
     # match length check above.
     descriptive_terms = {
-        _match_key(value)
+        norm_key(value)
         for value in [node.summary, *node.tags]
         if isinstance(value, str) and value.strip()
     }
@@ -519,7 +519,7 @@ def _entities_from_query_plan(plan: QueryPlan) -> list[Entity]:
     entities: list[Entity] = []
     seen: set[str] = set()
     for item in plan.entities:
-        key = _match_key(item.normalized)
+        key = norm_key(item.normalized)
         if key in seen:
             continue
         seen.add(key)
@@ -532,7 +532,7 @@ def _entities_from_query_plan(plan: QueryPlan) -> list[Entity]:
                 confidence=item.confidence,
             )
         )
-        seen.update(_match_key(alias) for alias in item.aliases)
+        seen.update(norm_key(alias) for alias in item.aliases)
     for variant in plan.variants:
         # Graph anchors should stay precise.  Low-weight related/broader
         # variants are useful for RAG recall, but treating them as graph
@@ -541,7 +541,7 @@ def _entities_from_query_plan(plan: QueryPlan) -> list[Entity]:
         # sufficiently close to the user's stated intent to use as anchors.
         if variant.weight < 0.8:
             continue
-        key = _match_key(variant.text)
+        key = norm_key(variant.text)
         if key in seen:
             continue
         seen.add(key)
@@ -563,10 +563,6 @@ def _is_meaningful_contains_match(left: str, right: str) -> bool:
     if min(len(left), len(right)) < _MIN_PARTIAL_MATCH_LENGTH:
         return False
     return left in right or right in left
-
-
-def _match_key(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
 def _matched_node_to_dict(item: _MatchedNode) -> dict[str, Any]:
