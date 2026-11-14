@@ -1,0 +1,444 @@
+- path: /openapi.json
+  methods:
+  - GET
+  - HEAD
+  name: openapi
+- path: /docs
+  methods:
+  - GET
+  - HEAD
+  name: swagger_ui_html
+- path: /docs/oauth2-redirect
+  methods:
+  - GET
+  - HEAD
+  name: swagger_ui_redirect
+- path: /redoc
+  methods:
+  - GET
+  - HEAD
+  name: redoc_html
+- path: /api/v1/query/progress/{progress_id}
+  methods:
+  - GET
+  name: get_query_progress
+- path: /api/v1/documents/{source_id}/processed
+  methods:
+  - GET
+  name: get_processed
+- path: /api/v1/documents/{source_id}/processed
+  methods:
+  - PUT
+  name: update_processed
+- path: /api/v1/documents/{source_id}/rebuild
+  methods:
+  - POST
+  name: rebuild_document
+- path: /api/v1/build/retry-failed
+  methods:
+  - POST
+  name: retry_failed
+- path: /api/v1/status
+  methods:
+  - GET
+  name: get_status
+- path: /api/v1/ingest
+  methods:
+  - POST
+  name: post_ingest
+- path: /api/v1/query/graph
+  methods:
+  - POST
+  name: post_query_graph
+- path: /api/v1/query/rag
+  methods:
+  - POST
+  name: post_query_rag
+- path: /api/v1/query/hybrid
+  methods:
+  - POST
+  name: post_query_hybrid
+- path: /api/v1/query/answer
+  methods:
+  - POST
+  name: post_query_answer
+- path: /api/v1/query/global
+  methods:
+  - POST
+  name: post_query_global
+- path: /api/v1/search/cache
+  methods:
+  - GET
+  name: get_search_cache
+- path: /api/v1/search/cache/{cache_key}
+  methods:
+  - GET
+  name: get_search_cache_detail
+- path: /api/v1/search/cache
+  methods:
+  - DELETE
+  name: delete_search_cache
+- path: /api/v1/documents
+  methods:
+  - GET
+  name: get_documents
+- path: /api/v1/documents/{source_id}/content
+  methods:
+  - GET
+  name: get_document_content
+- path: /api/v1/documents/{source_id}/content
+  methods:
+  - PUT
+  name: put_document_content
+- path: /api/v1/documents/delete-batch
+  methods:
+  - POST
+  name: post_delete_documents
+- path: /api/v1/documents
+  methods:
+  - DELETE
+  name: delete_all_documents
+- path: /api/v1/documents/{source_id}
+  methods:
+  - DELETE
+  name: delete_document
+- path: /api/v1/upload
+  methods:
+  - POST
+  name: post_upload
+- path: /api/v1/import
+  methods:
+  - POST
+  name: post_import
+- path: /api/v1/nodes/{node_id}
+  methods:
+  - DELETE
+  name: delete_node
+- path: /api/v1/nodes/{node_id}
+  methods:
+  - GET
+  name: get_node
+- path: /api/v1/nodes/{node_id}
+  methods:
+  - PATCH
+  name: patch_node_summary
+- path: /api/v1/graph/search
+  methods:
+  - GET
+  name: search_graph_nodes
+- path: /api/v1/relations/{edge_id}
+  methods:
+  - GET
+  name: get_relation
+- path: /api/v1/relations/{edge_id}
+  methods:
+  - DELETE
+  name: delete_relation
+- path: /api/v1/graph/full
+  methods:
+  - GET
+  name: get_full_graph
+- path: /api/v1/graph
+  methods:
+  - GET
+  name: get_full_graph
+- path: /api/v1/graph/visualization/meta
+  methods:
+  - GET
+  name: get_graph_visualization_meta
+- path: /api/v1/graph/visualization/nodes
+  methods:
+  - GET
+  name: get_graph_visualization_nodes
+- path: /api/v1/graph/visualization/edges
+  methods:
+  - GET
+  name: get_graph_visualization_edges
+- path: /api/v1/graph/neighborhood/{node_id}
+  methods:
+  - GET
+  name: get_graph_neighborhood
+- path: /api/v1/config
+  methods:
+  - GET
+  name: get_config
+- path: /api/v1/config
+  methods:
+  - PUT
+  name: put_config
+- path: /api/v1/config/models
+  methods:
+  - GET
+  name: get_model_catalog
+- path: /api/v1/update/status
+  methods:
+  - GET
+  name: get_update_status
+- path: /api/v1/update/check
+  methods:
+  - POST
+  name: post_update_check
+- path: /api/v1/update/apply
+  methods:
+  - POST
+  name: post_update_apply
+- path: /api/v1/jobs/ingest
+  methods:
+  - POST
+  name: post_ingest_job
+- path: /api/v1/jobs/summarize
+  methods:
+  - POST
+  name: post_summarize_job
+- path: /api/v1/maintenance/organize-graph
+  methods:
+  - POST
+  name: post_organize_graph
+- path: /api/v1/maintenance/rebuild-knowledge-base
+  methods:
+  - POST
+  name: post_rebuild_knowledge_base
+- path: /api/v1/maintenance/rebuild-all
+  methods:
+  - POST
+  name: post_rebuild_all
+- path: /api/v1/jobs
+  methods:
+  - GET
+  name: get_jobs
+- path: /api/v1/jobs/{job_id}
+  methods:
+  - GET
+  name: get_job
+- path: /api/v1/maintenance/summarize
+  methods:
+  - POST
+  name: post_summarize
+- path: /api/v1/stores/initialize
+  methods:
+  - POST
+  name: post_store_initialize
+- path: /api/v1/stores/info
+  methods:
+  - POST
+  name: post_store_info
+- path: /api/v1/stores/status
+  methods:
+  - POST
+  name: post_store_status
+- path: /api/v1/stores/import-path
+  methods:
+  - POST
+  name: post_store_import_path
+- path: /api/v1/stores/import
+  methods:
+  - POST
+  name: post_store_import
+- path: /api/v1/stores/upload
+  methods:
+  - POST
+  name: post_store_upload
+- path: /api/v1/stores/library/list
+  methods:
+  - POST
+  name: post_store_library_list
+- path: /api/v1/stores/library/create
+  methods:
+  - POST
+  name: post_store_library_create
+- path: /api/v1/stores/library/move
+  methods:
+  - POST
+  name: post_store_library_move
+- path: /api/v1/stores/library/delete
+  methods:
+  - POST
+  name: post_store_library_delete
+- path: /api/v1/stores/library/refresh
+  methods:
+  - POST
+  name: post_store_library_refresh
+- path: /api/v1/stores/sources/sync
+  methods:
+  - POST
+  name: post_store_sources_sync
+- path: /api/v1/stores/sources/status
+  methods:
+  - POST
+  name: post_store_sources_status
+- path: /api/v1/stores/sources/delete
+  methods:
+  - POST
+  name: post_store_sources_delete
+- path: /api/v1/stores/ingest
+  methods:
+  - POST
+  name: post_store_ingest
+- path: /api/v1/stores/query/graph
+  methods:
+  - POST
+  name: post_store_query_graph
+- path: /api/v1/stores/query/rag
+  methods:
+  - POST
+  name: post_store_query_rag
+- path: /api/v1/stores/query/hybrid
+  methods:
+  - POST
+  name: post_store_query_hybrid
+- path: /api/v1/stores/query/answer
+  methods:
+  - POST
+  name: post_store_query_answer
+- path: /api/v1/stores/query/global
+  methods:
+  - POST
+  name: post_store_query_global
+- path: /api/v1/stores/query/federated
+  methods:
+  - POST
+  name: post_store_query_federated
+- path: /api/v1/stores/documents/list
+  methods:
+  - POST
+  name: post_store_documents_list
+- path: /api/v1/stores/documents/content
+  methods:
+  - POST
+  name: post_store_document_content
+- path: /api/v1/stores/documents/update
+  methods:
+  - POST
+  name: post_store_document_update
+- path: /api/v1/stores/documents/delete-batch
+  methods:
+  - POST
+  name: post_store_documents_delete_batch
+- path: /api/v1/stores/documents/delete-all
+  methods:
+  - POST
+  name: post_store_documents_delete_all
+- path: /api/v1/stores/documents/delete
+  methods:
+  - POST
+  name: post_store_document_delete
+- path: /api/v1/stores/nodes/delete
+  methods:
+  - POST
+  name: post_store_node_delete
+- path: /api/v1/stores/nodes/get
+  methods:
+  - POST
+  name: post_store_node_get
+- path: /api/v1/stores/relations/get
+  methods:
+  - POST
+  name: post_store_relation_get
+- path: /api/v1/stores/relations/delete
+  methods:
+  - POST
+  name: post_store_relation_delete
+- path: /api/v1/stores/graph/full
+  methods:
+  - POST
+  name: post_store_graph_full
+- path: /api/v1/stores/graph/visualization/meta
+  methods:
+  - POST
+  name: post_store_graph_visualization_meta
+- path: /api/v1/stores/graph/visualization/nodes
+  methods:
+  - POST
+  name: post_store_graph_visualization_nodes
+- path: /api/v1/stores/graph/visualization/edges
+  methods:
+  - POST
+  name: post_store_graph_visualization_edges
+- path: /api/v1/stores/graph/neighborhood
+  methods:
+  - POST
+  name: post_store_graph_neighborhood
+- path: /api/v1/stores/cache/list
+  methods:
+  - POST
+  name: post_store_cache_list
+- path: /api/v1/stores/cache/show
+  methods:
+  - POST
+  name: post_store_cache_show
+- path: /api/v1/stores/cache/clear
+  methods:
+  - POST
+  name: post_store_cache_clear
+- path: /api/v1/stores/maintenance/organize-graph
+  methods:
+  - POST
+  name: post_store_organize_graph
+- path: /api/v1/stores/maintenance/rebuild-knowledge-base
+  methods:
+  - POST
+  name: post_store_rebuild_knowledge_base
+- path: /api/v1/stores/maintenance/rebuild-all
+  methods:
+  - POST
+  name: post_store_rebuild_all
+- path: /api/v1/stores/maintenance/summarize
+  methods:
+  - POST
+  name: post_store_summarize
+- path: /api/v1/stores/jobs/list
+  methods:
+  - POST
+  name: post_store_jobs_list
+- path: /api/v1/stores/jobs/get
+  methods:
+  - POST
+  name: post_store_job_get
+- path: /api/v1/library
+  methods:
+  - GET
+  name: get_library
+- path: /api/v1/library/refresh
+  methods:
+  - POST
+  name: refresh_library
+- path: /api/v1/library/entries
+  methods:
+  - POST
+  name: create_entry
+- path: /api/v1/library/entries
+  methods:
+  - PATCH
+  name: move_entry
+- path: /api/v1/library/entries
+  methods:
+  - DELETE
+  name: delete_entry
+- path: /api/v1/library/transfer
+  methods:
+  - POST
+  name: transfer_entry
+- path: /api/v1/library/build
+  methods:
+  - POST
+  name: build_entry
+- path: /api/v1/library/preview
+  methods:
+  - GET
+  name: preview_original
+- path: /api/v1/library/original
+  methods:
+  - GET
+  name: get_original
+- path: /api/v1/documents/{source_id}/original
+  methods:
+  - GET
+  name: get_source_original
+- path: /api/v1/documents/{source_id}/source
+  methods:
+  - GET
+  name: get_source_location
+- path: /api/v1/system/logs
+  methods:
+  - GET
+  name: get_system_logs

@@ -1,5 +1,11 @@
 """对外 API 面契约：新增或删除端点必须同步更新本清单与 api.md。"""
 
+from pathlib import Path
+import subprocess
+import sys
+
+import yaml
+
 from api import app
 
 
@@ -114,3 +120,40 @@ def test_old_project_organization_is_removed() -> None:
 
 def test_graph_full_is_compatibility_alias_only() -> None:
     assert "/api/v1/graph/full" not in app.openapi()["paths"]
+
+
+def test_route_order_and_methods_match_baseline() -> None:
+    def route_table(routes, prefix=""):
+        for route in routes:
+            if hasattr(route, "original_router"):
+                yield from route_table(
+                    route.original_router.routes,
+                    prefix + route.include_context.prefix,
+                )
+            else:
+                yield {
+                    "path": prefix + route.path,
+                    "methods": sorted(route.methods),
+                    "name": route.name,
+                }
+
+    baseline = Path(__file__).parent / "fixtures" / "api_routes.yaml"
+    assert list(route_table(app.routes)) == yaml.safe_load(baseline.read_text(encoding="utf-8"))
+
+
+def test_api_import_is_lazy_and_uvicorn_entry_still_resolves() -> None:
+    subprocess.run(
+        [sys.executable, "-c", """
+import api
+assert 'app' not in vars(api)
+from fastapi import FastAPI
+from uvicorn.importer import import_from_string
+app = import_from_string('api:app')
+assert isinstance(app, FastAPI)
+assert api.app is app
+"""],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

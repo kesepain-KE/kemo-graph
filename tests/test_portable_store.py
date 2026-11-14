@@ -662,7 +662,7 @@ def test_store_api_accepts_multipart_document_upload(tmp_path: Path) -> None:
         assert unsupported.status_code == 415
         assert unsupported.json()["error"]["code"] == "UNSUPPORTED_FORMAT"
 
-        with patch("api.routes.MAX_IMPORT_BYTES", 4):
+        with patch("api.routes.uploads.MAX_IMPORT_BYTES", 4):
             too_large = client.post(
                 "/api/v1/stores/import?ingest=false",
                 data={"store_root": str(store_root)},

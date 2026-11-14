@@ -65,7 +65,12 @@ def create_app(
     return app
 
 
-app = create_app()
+def __getattr__(name: str):
+    if name == "app":
+        global app
+        app = create_app()
+        return app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = ["app", "create_app"]
