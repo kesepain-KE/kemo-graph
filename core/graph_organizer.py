@@ -8,8 +8,12 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from heapq import nsmallest
 from pathlib import Path
 from typing import Any, Iterable
+
+import numpy as np
+from rapidfuzz import fuzz, process
 
 from provider.engine import chat, chat_with_tools
 
@@ -510,57 +514,89 @@ def _find_candidates(
         """
     ).fetchall()
     nodes: list[dict[str, Any]] = []
-    for row in rows:
+    by_term: dict[str, set[int]] = {}
+    flat_terms: list[str] = []
+    owners: list[int] = []
+    offsets = [0]
+    for index, row in enumerate(rows):
         aliases = _json_list(row["aliases"], row["node_id"], "aliases")
-        nodes.append(
-            {
-                "node_id": str(row["node_id"]),
-                "keyword": str(row["keyword"]),
-                "summary": str(row["summary"] or ""),
-                "terms": {norm_key(row["keyword"]), *(norm_key(value) for value in aliases)},
-            }
-        )
+        terms = {norm_key(row["keyword"]), *(norm_key(value) for value in aliases)}
+        nodes.append({
+            "node_id": str(row["node_id"]),
+            "keyword": str(row["keyword"]),
+            "summary": norm_key(str(row["summary"] or ""))[:800],
+            "terms": terms,
+        })
+        for term in sorted(terms):
+            by_term.setdefault(term, set()).add(index)
+            flat_terms.append(term)
+            owners.append(index)
+        offsets.append(len(flat_terms))
+    def sort_key(item: MergeCandidate):
+        return (-item.score, item.left_keyword, item.right_keyword, item.left_node_id, item.right_node_id)
+
+    def exact_candidates():
+        for left_index, left in enumerate(nodes):
+            right_indexes = set().union(*(by_term[term] for term in left["terms"]))
+            for right_index in right_indexes:
+                if right_index > left_index:
+                    right = nodes[right_index]
+                    yield MergeCandidate(
+                        left["node_id"], right["node_id"], left["keyword"], right["keyword"],
+                        1.0, "exact_term",
+                    )
+
+    candidates = nsmallest(MAX_ORGANIZER_CANDIDATES, exact_candidates(), key=sort_key)
+    # No non-exact score can exceed 1.0, so a full exact page is final.
+    if len(candidates) == MAX_ORGANIZER_CANDIDATES or not flat_terms:
+        return candidates
+    exact_pairs = {(item.left_node_id, item.right_node_id) for item in candidates}
     neighbors = _neighbor_signatures(connection)
-    candidates: list[MergeCandidate] = []
-    for left_index, left in enumerate(nodes):
-        for right in nodes[left_index + 1 :]:
-            if left["terms"].intersection(right["terms"]):
-                score = 1.0
-                reason = "exact_term"
-            else:
+    term_owners = np.asarray(owners, dtype=np.intp)
+    # Even perfect summaries and adjacency cannot rescue a lexical upper bound
+    # below this floor. Unlike a heuristic threshold multiplier, this loses no hits.
+    minimum_lexical = max(0.0, min(threshold, (threshold - 0.35) / 0.65))
+    floor = max(0.0, minimum_lexical * 100.0 - 1e-10)
+    for block_start in range(0, len(nodes), 64):
+        block_end = min(block_start + 64, len(nodes))
+        first_term = offsets[block_start]
+        upper = process.cdist(
+            flat_terms[first_term:offsets[block_end]], flat_terms,
+            scorer=fuzz.ratio, score_cutoff=floor, dtype=np.float64, workers=-1,
+        )
+        for left_index in range(block_start, block_end):
+            left = nodes[left_index]
+            term_start = offsets[left_index] - first_term
+            term_end = offsets[left_index + 1] - first_term
+            lexical_upper = upper[term_start:term_end].max(axis=0)
+            right_indexes = np.unique(term_owners[lexical_upper >= floor])
+            batch: list[MergeCandidate] = []
+            for right_index in right_indexes:
+                if right_index <= left_index:
+                    continue
+                right = nodes[right_index]
+                if (left["node_id"], right["node_id"]) in exact_pairs:
+                    continue
                 lexical = max(
-                    (
-                        SequenceMatcher(None, left_term, right_term).ratio()
-                        for left_term in left["terms"]
-                        for right_term in right["terms"]
-                    ),
+                    (SequenceMatcher(None, left_term, right_term).ratio()
+                     for left_term in left["terms"] for right_term in right["terms"]),
                     default=0.0,
                 )
-                summary = SequenceMatcher(
-                    None,
-                    norm_key(left["summary"])[:800],
-                    norm_key(right["summary"])[:800],
-                ).ratio()
+                if max(lexical, lexical * 0.65 + 0.35) + 1e-12 < threshold:
+                    continue
+                summary = SequenceMatcher(None, left["summary"], right["summary"]).ratio()
                 adjacency = _jaccard(
                     neighbors.get(left["node_id"], set()),
                     neighbors.get(right["node_id"], set()),
                 )
                 score = max(lexical, lexical * 0.65 + summary * 0.2 + adjacency * 0.15)
-                if score < threshold:
-                    continue
-                reason = "semantic_similarity"
-            candidates.append(
-                MergeCandidate(
-                    left_node_id=left["node_id"],
-                    right_node_id=right["node_id"],
-                    left_keyword=left["keyword"],
-                    right_keyword=right["keyword"],
-                    score=score,
-                    reason=reason,
-                )
-            )
-    candidates.sort(key=lambda item: (-item.score, item.left_keyword, item.right_keyword, item.left_node_id, item.right_node_id))
-    return candidates[:MAX_ORGANIZER_CANDIDATES]
+                if score >= threshold:
+                    batch.append(MergeCandidate(
+                        left["node_id"], right["node_id"], left["keyword"], right["keyword"],
+                        score, "semantic_similarity",
+                    ))
+            candidates = nsmallest(MAX_ORGANIZER_CANDIDATES, candidates + batch, key=sort_key)
+    return candidates
 
 
 def _neighbor_signatures(connection: sqlite3.Connection) -> dict[str, set[str]]:

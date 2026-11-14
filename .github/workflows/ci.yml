@@ -21,6 +21,9 @@ jobs:
         python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Regression benchmarks load the pinned original implementation from Git.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:

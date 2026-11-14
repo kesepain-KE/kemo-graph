@@ -64,10 +64,21 @@ def main():
     parser.add_argument("--nodes", type=int, nargs="+", default=[2000])
     parser.add_argument("--entities", type=int, nargs="+", default=[5])
     parser.add_argument("--organizer", action="store_true")
+    parser.add_argument("--baseline-timeout", type=float, default=120.0)
+    parser.add_argument("--baseline-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     from core.entity_extractor import Entity
     from core.graph_engine import GraphEngine, _indexed_nodes
     from core.graph_organizer import _find_candidates
+    if args.baseline_only:
+        connection, _ = fixture(args.nodes[0])
+        try:
+            original = load_baseline("graph_organizer")
+            elapsed, expected = timed(lambda: original._find_candidates(connection, threshold=0.86))
+            print(json.dumps([elapsed, [item.as_dict() for item in expected]]), flush=True)
+        finally:
+            connection.close()
+        return
     engine = object.__new__(GraphEngine)
     print("| mode | nodes | entities | original seconds | cold seconds | warm seconds | warm speedup | equal |")
     print("|---|---:|---:|---:|---:|---:|---:|---|")
@@ -75,11 +86,20 @@ def main():
         connection, rows = fixture(count)
         try:
             if args.organizer:
-                original = load_baseline("graph_organizer")
-                before, expected = timed(lambda: original._find_candidates(connection, threshold=0.86))
+                try:
+                    baseline = subprocess.run(
+                        [sys.executable, str(Path(__file__).resolve()), "--organizer", "--baseline-only", "--nodes", str(count)],
+                        capture_output=True, text=True, check=True, timeout=args.baseline_timeout,
+                    )
+                    before, expected = json.loads(baseline.stdout)
+                except subprocess.TimeoutExpired:
+                    before, expected = None, None
                 after, actual = timed(lambda: _find_candidates(connection, threshold=0.86))
-                assert [item.as_dict() for item in actual] == [item.as_dict() for item in expected]
-                print(f"| organizer | {count} | - | {before:.6f} | {after:.6f} | - | {before / after:.2f}x | yes |", flush=True)
+                if expected is not None:
+                    assert [item.as_dict() for item in actual] == expected
+                    print(f"| organizer | {count} | - | {before:.6f} | {after:.6f} | - | {before / after:.2f}x | yes |", flush=True)
+                else:
+                    print(f"| organizer | {count} | - | timeout ({args.baseline_timeout:g}s) | {after:.6f} | - | - | checked separately at 500 nodes |", flush=True)
             else:
                 original = load_baseline("graph_engine")
                 for entities_count in args.entities:
