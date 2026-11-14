@@ -236,7 +236,7 @@ def test_federated_query_isolates_failures_and_labels_results(tmp_path: Path) ->
     )
 
     with patch(
-        "core.portable_store._query_store",
+        "core.storage.portable.federation._query_store",
         return_value={"query": "q", "results": [{"chunk_id": 1, "score": 0.8}]},
     ):
         result = federated_query(

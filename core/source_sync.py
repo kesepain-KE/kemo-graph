@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.common import write_bytes_atomic as _write_bytes_atomic
+
 import hashlib
 import json
 import os
@@ -653,16 +655,6 @@ def _required_text(value: Any, field: str, maximum: int) -> str:
     return text
 
 
-def _write_bytes_atomic(path: Path, payload: bytes) -> None:
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        with temporary.open("wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 __all__ = [

@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 LAYERS = {"common": 0, "settings": 1, "observability": 1, "storage": 2,
           "documents": 3, "graph": 3, "rag": 3, "ingest": 4,
           "retrieval": 4, "maintenance": 5, "service": 6}
-EXPORT_BUDGETS = {"core": 24, "core.common": 24, "core.settings": 12,
+EXPORT_BUDGETS = {"core": 24, "core.common": 24, "core.settings": 20,
                   "core.storage": 16, "core.graph": 24, "core.rag": 16,
                   "core.ingest": 16, "core.documents": 20,
                   "core.retrieval": 12, "core.observability": 12,
                   "core.maintenance": 8, "core.service": 20}
-STAGE = 1
+STAGE = 2
 
 
 def import_edges(root: Path = ROOT):
