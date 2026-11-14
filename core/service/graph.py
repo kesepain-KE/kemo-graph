@@ -4,7 +4,7 @@ from core.storage import connect_graph, connect_sources
 from datetime import datetime, timezone
 from typing import Any
 from core.storage import connect_graph, connect_rag, connect_sources
-from core.graph.visualization import get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
+from core.graph.visualization import GraphDirection, get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
 from core.documents.errors import DocumentNotFoundError
 from core.ingest import Ingestor
 from core.storage import get_knowledge_base_lock
@@ -16,11 +16,95 @@ from core.common import parse_json_list as _parse_json_list
 
 from core.service.context import ServiceContext
 from core.graph.meta import refresh_graph_meta
+from core.graph.tool_store import add_entity, add_relation, get_entity
 
 class GraphService:
     def __init__(self, context: ServiceContext) -> None:
         self.context = context
 
+    def create_node(
+        self,
+        keyword: str,
+        summary: str,
+        aliases: list[str] | None = None,
+        tags: list[str] | None = None,
+        source_id: str = "manual",
+        content_hash: str = "manual",
+    ) -> dict[str, Any]:
+        """创建带来源绑定的独立节点，不自动调用模型或合并同名节点。"""
+
+        owner = self.context
+        lock = get_knowledge_base_lock(owner.data_dir)
+        if not lock.acquire(blocking=False):
+            raise DocumentContentConflictError("图谱正在构建或修改，请稍后创建节点")
+        try:
+            owner._require_available("graph")
+            connection = connect_graph(owner.paths)
+            try:
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    node_id = add_entity(
+                        connection, keyword=keyword, summary=summary,
+                        aliases=aliases, tags=tags,
+                        source_id=source_id, content_hash=content_hash,
+                    )
+                    node = get_entity(connection, node_id)
+            finally:
+                connection.close()
+            refresh_graph_meta(owner, changed=True)
+            return clear_search_cache_after_mutation(owner.documents, node)
+        finally:
+            lock.release()
+
+    def create_relation(
+        self,
+        source_node_id: str,
+        relation: str,
+        target_node_id: str,
+        evidence_weight: float,
+        source_id: str = "manual",
+        content_hash: str = "manual",
+    ) -> dict[str, Any]:
+        """按关系三元组去重，更新同来源证据并重算当前最大权重。"""
+
+        owner = self.context
+        lock = get_knowledge_base_lock(owner.data_dir)
+        if not lock.acquire(blocking=False):
+            raise DocumentContentConflictError("图谱正在构建或修改，请稍后创建关系")
+        try:
+            owner._require_available("graph")
+            connection = connect_graph(owner.paths)
+            try:
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        edge_id = add_relation(
+                            connection, source_node_id=source_node_id,
+                            relation=relation, target_node_id=target_node_id,
+                            evidence_weight=evidence_weight,
+                            source_id=source_id, content_hash=content_hash,
+                        )
+                    except LookupError as exc:
+                        raise DocumentNotFoundError(str(exc)) from exc
+                    edge = connection.execute(
+                        """
+                        SELECT e.edge_id, e.source_node_id, sn.keyword AS source_keyword,
+                               e.relation, e.target_node_id, tn.keyword AS target_keyword,
+                               e.weight, e.support_count, e.created_at
+                        FROM edges e
+                        JOIN nodes sn ON sn.node_id = e.source_node_id
+                        JOIN nodes tn ON tn.node_id = e.target_node_id
+                        WHERE e.edge_id = ?
+                        """,
+                        (edge_id,),
+                    ).fetchone()
+                    result = _relation_row(edge)
+            finally:
+                connection.close()
+            refresh_graph_meta(owner, changed=True)
+            return clear_search_cache_after_mutation(owner.documents, result)
+        finally:
+            lock.release()
 
     def get_node(self, node_id: str) -> dict[str, Any]:
         """返回节点、双向关系和可追溯的来源绑定。"""
@@ -440,7 +524,7 @@ class GraphService:
         node_id: str,
         *,
         depth: int = 2,
-        direction: str = "both",
+        direction: GraphDirection = "both",
         limit: int = 2000,
         edge_limit: int = 10000,
         expected_revision: str | None = None,

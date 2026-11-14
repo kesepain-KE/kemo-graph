@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from provider.engine import chat
 from core.settings import DEFAULT_CONFIG_PATH, AppConfig
 from core.settings import load_config
@@ -12,9 +13,16 @@ from core.observability import DailyTSVLogger
 from core.rag import RAGEngine
 from core.service.errors import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
 
+if TYPE_CHECKING:
+    from core.service.documents import DocumentService
+    from core.service.retrieval import RetrievalService
+
 
 class ServiceContext:
     """Shared runtime for the four domain services."""
+
+    documents: DocumentService
+    retrieval: RetrievalService
 
     def __init__(
         self,

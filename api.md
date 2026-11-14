@@ -3,7 +3,7 @@
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
 > **当前版本**：`2.0.0`
-> **实现来源**：`api/__init__.py`、`api/routes.py`、`api/store_routes.py`、`api/library_routes.py`、`api/schemas.py`。
+> **实现来源**：`api/__init__.py`、`api/routes/`、`api/schemas/`。
 
 ---
 
@@ -985,6 +985,100 @@ DELETE /api/v1/relations/{edge_id}
 ```
 
 这是破坏性操作。系统删除关系及全部 `edge_sources` 证据，使旧节点群总结失效，同步清理群组辅助向量与搜索缓存。节点和源文档本身不会因单独删除关系而删除。
+
+### 6.5 创建节点
+
+```http
+POST /api/v1/nodes
+Content-Type: application/json
+```
+
+```json
+{
+  "keyword": "知识图谱",
+  "summary": "该概念在当前语境中的完整描述",
+  "aliases": ["KG"],
+  "tags": ["AI"],
+  "source_id": "manual",
+  "content_hash": "manual"
+}
+```
+
+| 字段 | 必填 | 约束 |
+|---|:---:|---|
+| `keyword` | 是 | 字符串，去除首尾空白后 2–20 字符 |
+| `summary` | 是 | 字符串，去除首尾空白后 1–200000 字符 |
+| `aliases` / `tags` | 否 | 字符串数组，默认 `[]`；项不能为空，按首次出现顺序去重 |
+| `source_id` | 否 | 默认 `"manual"`，去除首尾空白后 1–200 字符 |
+| `content_hash` | 否 | 默认 `"manual"`，去除首尾空白后不能为空 |
+
+响应为 `200`，`data` 直接返回节点，不额外包裹 `node`：
+
+```json
+{
+  "ok": true,
+  "data": {
+    "node_id": "node-uuid",
+    "keyword": "知识图谱",
+    "summary": "该概念在当前语境中的完整描述",
+    "aliases": ["KG"],
+    "tags": ["AI"],
+    "weight": 1.0,
+    "ref_count": 1,
+    "created_at": "2026-11-14T12:00:00+00:00",
+    "updated_at": "2026-11-14T12:00:00+00:00",
+    "sources": [{"source_id": "manual", "content_hash": "manual"}],
+    "search_cache_deleted": 0
+  },
+  "error": null
+}
+```
+
+每次 POST 都创建独立节点，同名 `keyword` 不自动合并，因此该操作**不幂等**。创建时写入来源绑定，`ref_count` 为 1；无需在文档来源表中伪造实体文件记录。使用默认手工来源时，节点详情保留绑定，文件路径为空。后续图谱整理沿用现有合并规则，手工来源不会使节点因零引用被清除，但不保证同名节点整理后仍保持独立。
+
+创建后立即可通过节点详情、`GET /graph`、可视化和 `/graph/search` 读取。接口不调用 LLM 或 Embedding，不自动生成实体向量、节点群或群总结。底层已有单节点 `build_entity_vectors(node_id, summary)` 与批量 `sync_entity_vectors(...)`；只有通过这些既有向量同步流程补齐索引后，新节点才参与 Hybrid 的 `entities` 语义召回。
+
+### 6.6 创建关系
+
+```http
+POST /api/v1/relations
+Content-Type: application/json
+```
+
+```json
+{
+  "source_node_id": "node-a",
+  "relation": "增强",
+  "target_node_id": "node-b",
+  "evidence_weight": 0.9,
+  "source_id": "manual",
+  "content_hash": "manual"
+}
+```
+
+源、目标节点 ID 均必填且必须已存在；`relation` 去除首尾空白后为 1–100 字符。`evidence_weight` 必填，必须为 0–1 的有限 JSON 数字，不接受布尔值或数字字符串。`source_id`、`content_hash` 的默认值及约束与创建节点一致。
+
+响应为 `200`，`data` 直接返回关系的 `edge_id`、`source_node_id`、`source_keyword`、`relation`、`target_node_id`、`target_keyword`、`path`、`weight`、`support_count`、`created_at` 和 `search_cache_deleted`，不额外包裹 `edge`。`path` 与关系详情接口格式一致。
+
+**去重及证据更新规则**：
+
+- 按 `(source_node_id, relation, target_node_id)` 去重，重复提交返回同一 `edge_id`，不新建重复边。
+- 同一关系、同一 `source_id` 再次提交，会**覆盖**该来源的 `content_hash` 与 `evidence_weight`，不会增加证据条数；相同完整请求重复提交保持相同关系及证据。
+- 不同 `source_id` 增加来源证据，`support_count` 为当前来源数，`weight` 为**当前所有来源证据的最大值**，不是历史最大值。例如同来源权重 `0.9 → 0.2` 后只有一条证据，边权重变为 `0.2`；新增另一来源 `0.7` 后支持数为 2，边权重为 `0.7`。
+- 每次成功调用仍刷新图谱元数据并清理搜索缓存，不承诺所有衍生元数据完全不变。整理流程对自环关系等仍执行既有清理规则。
+
+两个创建端点均使用知识库写锁和 SQLite 事务；成功后刷新图谱统计、递增 `changed_since_summary`、清理搜索缓存。可视化 `revision` 继续由权威数据派生；创建节点或变更关系后，携带旧 `expected_revision` 的可视化分页返回 `409 GRAPH_CHANGED`。
+
+| HTTP / 错误码 | 场景 |
+|---|---|
+| `422 INVALID_PARAM` | 非法字段值、空白必填文本、未知字段 |
+| `404 NOT_FOUND` | 创建关系时源或目标节点不存在 |
+| `409 PROCESSING` | 知识库图谱正在构建 |
+| `409 CONTENT_CONFLICT` | 其他构建或修改操作占有写锁 |
+| `503 NOT_INITIALIZED` | 知识库未初始化 |
+| `503 SEARCH_CACHE_CLEANUP_FAILED` | 写入已提交，但清缓存失败；`error.result` 返回同形的已提交节点或关系及 `search_cache_deleted: null`、`search_cache_error` |
+
+收到缓存清理失败时应先用 `error.result` 中的 ID 读取已提交记录，再处理缓存故障，不要盲目重试创建节点。创建能力暂不提供 `/stores/*` 镜像、批量创建、全字段节点修改或关系修改。
 
 ---
 

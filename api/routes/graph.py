@@ -2,11 +2,19 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 from api.errors import success_response
-from api.schemas import APIResponse, NodeSummaryUpdateRequest
+from api.schemas import APIResponse, NodeCreateRequest, NodeSummaryUpdateRequest, RelationCreateRequest
 
 from api.routes.dependencies import Service
 
 router = APIRouter()
+
+@router.post("/nodes", response_model=APIResponse)
+def create_node(payload: NodeCreateRequest, service: Service) -> dict:
+    return success_response(service.graph.create_node(**payload.model_dump()))
+
+@router.post("/relations", response_model=APIResponse)
+def create_relation(payload: RelationCreateRequest, service: Service) -> dict:
+    return success_response(service.graph.create_relation(**payload.model_dump()))
 
 @router.delete("/nodes/{node_id}", response_model=APIResponse)
 def delete_node(node_id: str, service: Service) -> dict:

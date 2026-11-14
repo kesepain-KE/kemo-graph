@@ -112,6 +112,14 @@
   methods:
   - POST
   name: post_import
+- path: /api/v1/nodes
+  methods:
+  - POST
+  name: create_node
+- path: /api/v1/relations
+  methods:
+  - POST
+  name: create_relation
 - path: /api/v1/nodes/{node_id}
   methods:
   - DELETE
