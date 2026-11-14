@@ -25,6 +25,7 @@ from ..db import (
     write_graph_meta,
 )
 from ..graph_draft import GraphDraft
+from ..graph.tools import get_graph_tools
 from ..logger import DailyTSVLogger
 from ..rag_engine import RAGEngine
 
@@ -74,6 +75,7 @@ class Ingestor:
         rag_engine: RAGEngine | None = None,
         graph_prompt_path: Path | str = DEFAULT_GRAPH_PROMPT_PATH,
         graph_extract_prompt_path: Path | str = DEFAULT_GRAPH_EXTRACT_PROMPT_PATH,
+        tool_provider: Callable[..., list[dict[str, Any]]] | None = None,
     ) -> None:
         self.settings = settings or load_config()
         self.paths = initialize_databases(data_dir, self.settings)
@@ -86,6 +88,7 @@ class Ingestor:
             lambda texts: embed(texts, settings=self.settings)
         )
         self._rag_engine = rag_engine
+        self._tool_provider = tool_provider or get_graph_tools
         self._logger = DailyTSVLogger(
             self.settings.resolve_log_dir(),
             self.settings.log_level,

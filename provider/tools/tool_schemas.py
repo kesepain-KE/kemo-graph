@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from core.graph.tool_schemas import GRAPH_TOOL_SCHEMAS, FINISH_SCHEMA
 
 
 def _function_schema(
@@ -199,22 +200,8 @@ IMPORT_DOCUMENT_SCHEMA = _function_schema(
     ["path", "external_dir"],
 )
 
-FINISH_SCHEMA = _function_schema(
-    "finish",
-    "图谱构建完成，无需更多操作",
-    {},
-)
 
 
-GRAPH_TOOL_SCHEMAS = [
-    ADD_ENTITY_SCHEMA,
-    ADD_RELATION_SCHEMA,
-    SEARCH_ENTITIES_SCHEMA,
-    GET_ENTITY_SCHEMA,
-    LIST_ENTITIES_SCHEMA,
-    UPDATE_ENTITY_SCHEMA,
-    DELETE_ENTITY_SCHEMA,
-]
 
 DELETE_TOOL_SCHEMAS = [
     SEARCH_DOCUMENTS_SCHEMA,

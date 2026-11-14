@@ -172,8 +172,7 @@ def _update_graph_for_source(self, record: _SourceRecord, text: str) -> None:
 def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
     """使用工具调用循环构建图谱，全部工具写入共享文档事务。"""
 
-    # 延迟导入避免 delete_tools -> Ingestor 形成模块初始化环。
-    from provider.tools import get_graph_tools, get_tool_schemas
+    from ..graph.tools import get_graph_tool_schemas
 
     # 工具模式以前把整篇文档作为一次请求发送，长文档容易超出网关上下文
     # 或让模型在一次循环中遗漏后半段。沿用结构化模式的 Markdown 语义分段，
@@ -230,13 +229,13 @@ def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
         orphan_node_ids.update(_recalculate_nodes(connection, old_node_ids))
 
         if sections:
-            registrations = get_graph_tools(
+            registrations = self._tool_provider(
                 connection,
                 source_id=record.source_id,
                 content_hash=record.content_hash,
             )
             registrations_by_name = {str(tool["name"]): tool for tool in registrations}
-            schemas = get_tool_schemas("graph")
+            schemas = get_graph_tool_schemas()
             finish_called = False
             section_counts = {"entities": 0, "relations": 0}
 

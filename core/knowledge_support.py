@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterator, Sequence
 from uuid import uuid4
 
 from provider.engine import chat
-from provider.tools.document_tools import (
+from core.documents.conversion import (
     DocumentConversionError,
     SUPPORTED_DOCUMENT_SUFFIXES,
     import_document as convert_document,

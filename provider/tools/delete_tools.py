@@ -18,7 +18,6 @@ from core.db import (
     read_graph_meta,
     write_graph_meta,
 )
-from core.ingestor import Ingestor
 from core.logger import DailyTSVLogger
 
 
@@ -249,6 +248,9 @@ def delete_relation(conn: sqlite3.Connection, edge_id: str) -> dict[str, Any]:
 
 def delete_document(conn: sqlite3.Connection, source_id: str) -> dict[str, Any]:
     """委托 Ingestor 永久删除文档文件及 Graph/RAG/FAISS 数据。"""
+
+    # Load the pipeline only when deletion needs its cascade implementation.
+    from core.ingestor import Ingestor
 
     source_id = _required_text(source_id, "source_id")
     data_dir = _require_data_dir(conn)
