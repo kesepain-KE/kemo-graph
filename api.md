@@ -1343,7 +1343,7 @@ GET /graph 或 POST /query/graph → 检查节点/边/来源影响 → DELETE /n
 <configured-log-dir>/YYYY-MM-DD.tsv
 ```
 
-文件日志、终端日志与重启辅助日志统一采用 TSV 表格；网页以相同字段展示：
+文件日志、终端镜像与重启辅助日志采用 TSV 表格；控制台使用对齐、自动折行的可读表格，网页以相同字段展示：
 
 | 列 | 含义 |
 |---|---|
@@ -1354,7 +1354,7 @@ GET /graph 或 POST /query/graph → 检查节点/边/来源影响 → DELETE /n
 | `detail` | 脱敏后的单行详情 |
 | `elapsed_ms` | 毫秒耗时；无耗时为 `-` |
 
-`config/logging.yaml` 控制标准 Python logging 的 TSV 终端输出；重启辅助日志位于 `update/runtime/restart.tsv`。HTTP 日志接口仍返回带命名字段的 JSON 行记录，便于客户端生成表格。
+`config/logging.yaml` 控制标准 Python logging 的终端表格。控制台显示时间、级别、来源和详情四列，有效的动作与耗时合并进详情，省略默认的 `console` 与空耗时。成功的后台轮询与静态资源访问不刷屏，失败请求照常显示，终端镜像的落盘规则不变；重启辅助日志位于 `update/runtime/restart.tsv`。HTTP 日志接口仍返回带命名字段的 JSON 行记录，便于客户端生成表格。
 
 日志会记录导入、图谱构建、RAG、FAISS、删除、维护和 API 错误的摘要；不会记录 API Key、Bearer Token、完整文档正文或完整模型提示词。
 

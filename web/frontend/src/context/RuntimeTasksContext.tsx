@@ -18,7 +18,6 @@ export type RuntimeTaskKind =
   | "rebuild_knowledge_base"
   | "rebuild_all"
   | "summarize"
-  | "cleanup_recycle"
   | "update";
 export type RuntimeTaskStatus =
   | "queued"
@@ -123,7 +122,6 @@ function serverTaskTitle(job: MaintenanceJob): string {
     rebuild_knowledge_base: "变化文档知识库重建",
     rebuild_all: "全项目重建",
     summarize: "节点群总结",
-    cleanup_recycle: "回收站清理",
     update: "kemo-graph 应用更新",
   }[job.kind];
 }

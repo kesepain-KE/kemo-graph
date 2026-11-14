@@ -1,4 +1,3 @@
-import { Focus, Hand, Minus, Plus, RotateCcw } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -9,6 +8,7 @@ import {
 } from "react";
 
 import { LoadingState } from "../../components/Feedback";
+import { GraphCanvasTools } from "./GraphCanvasTools";
 import { LayoutController } from "./engine/LayoutController";
 import type { GraphRenderScene, GraphRenderer } from "./engine/GraphRenderer";
 import type { ForceSettings, LayoutRuntimeStatus } from "./engine/layoutTypes";
@@ -23,6 +23,8 @@ type GraphViewportProps = {
   layoutKey: string;
   forceSettings: ForceSettings;
   fallback: ReactNode;
+  fallbackRef: React.RefObject<Pick<GraphViewportHandle, "focusSelected" | "resetView">>;
+  focusRequest: number;
 };
 
 export type GraphViewportHandle = {
@@ -43,6 +45,8 @@ export const GraphViewport = forwardRef<GraphViewportHandle, GraphViewportProps>
   layoutKey,
   forceSettings,
   fallback,
+  fallbackRef,
+  focusRequest,
 }, forwardedRef) {
   const hostRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<GraphRenderer | null>(null);
@@ -59,6 +63,7 @@ export const GraphViewport = forwardRef<GraphViewportHandle, GraphViewportProps>
     "initializing",
   );
   const [failure, setFailure] = useState<string | null>(null);
+  const [panMode, setPanMode] = useState(false);
 
   sceneRef.current = scene;
   layoutKeyRef.current = layoutKey;
@@ -73,9 +78,9 @@ export const GraphViewport = forwardRef<GraphViewportHandle, GraphViewportProps>
     play: () => layoutRef.current?.play(),
     pause: () => layoutRef.current?.pause(),
     reheat: () => layoutRef.current?.reheat(),
-    focusSelected: () => rendererRef.current?.focusNode(sceneRef.current.selectedId),
-    resetView: () => rendererRef.current?.resetView(),
-  }), []);
+    focusSelected: () => status === "fallback" ? fallbackRef.current?.focusSelected() : rendererRef.current?.focusNode(sceneRef.current.selectedId),
+    resetView: () => status === "fallback" ? fallbackRef.current?.resetView() : rendererRef.current?.resetView(),
+  }), [status, fallbackRef]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -165,6 +170,11 @@ export const GraphViewport = forwardRef<GraphViewportHandle, GraphViewportProps>
     }
   }, [forceSettings, layoutKey, status]);
 
+  useEffect(() => { rendererRef.current?.setPanMode(panMode); }, [panMode, status]);
+  useEffect(() => {
+    if (status === "ready" && focusRequest > 0) rendererRef.current?.focusNode(scene.selectedId);
+  }, [focusRequest, status]);
+
   if (status === "fallback") {
     return (
       <div className="graph-renderer-fallback" data-renderer-backend="svg">
@@ -193,49 +203,9 @@ export const GraphViewport = forwardRef<GraphViewportHandle, GraphViewportProps>
         <LoadingState label="正在初始化本机 GPU 图谱引擎…" />
       ) : null}
 
-      <div className="graph-legend">
-        <span><i className="legend-dot legend-dot--core" />核心概念</span>
-        <span><i className="legend-dot legend-dot--concept" />一般概念</span>
-        <span><i className="legend-dot legend-dot--group" />真实群组配色</span>
-      </div>
-
-      <div className="canvas-tools">
-        <button className="icon-button" title="拖拽画布" type="button">
-          <Hand size={17} />
-        </button>
-        <button
-          className="icon-button"
-          title="聚焦所选节点"
-          type="button"
-          onClick={() => rendererRef.current?.focusNode(scene.selectedId)}
-        >
-          <Focus size={17} />
-        </button>
-        <div className="zoom-control">
-          <button
-            type="button"
-            onClick={() => rendererRef.current?.zoomBy(-0.12)}
-            aria-label="缩小"
-          >
-            <Minus size={15} />
-          </button>
-          <span>GPU</span>
-          <button
-            type="button"
-            onClick={() => rendererRef.current?.zoomBy(0.12)}
-            aria-label="放大"
-          >
-            <Plus size={15} />
-          </button>
-        </div>
-      </div>
-      <button
-        className="reset-view"
-        type="button"
-        onClick={() => rendererRef.current?.resetView()}
-      >
-        <RotateCcw size={15} /> 重置视图
-      </button>
+      <GraphCanvasTools scene={scene} panMode={panMode} onPanMode={() => setPanMode((current) => !current)}
+        onFocus={() => rendererRef.current?.focusNode(scene.selectedId)}
+        onZoom={(delta) => rendererRef.current?.zoomBy(delta)} onReset={() => rendererRef.current?.resetView()} />
     </div>
   );
 });

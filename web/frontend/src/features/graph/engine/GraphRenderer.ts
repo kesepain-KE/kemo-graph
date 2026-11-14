@@ -82,6 +82,7 @@ export interface GraphRenderer {
   zoomBy(delta: number, anchor?: { x: number; y: number }): void;
   focusNode(nodeId: string | null): void;
   resetView(): void;
+  setPanMode(enabled: boolean): void;
   destroy(): void;
 }
 

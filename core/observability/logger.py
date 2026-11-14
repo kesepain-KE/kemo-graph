@@ -3,7 +3,9 @@ import csv
 import io
 import logging
 import re
+import shutil
 import threading
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -121,17 +123,112 @@ class TSVFormatter(logging.Formatter):
         super().__init__()
         self.secrets = secrets
 
-    def format(self, record: logging.LogRecord) -> str:
-        output = io.StringIO(newline="")
-        csv.writer(output, delimiter="\t", lineterminator="\n").writerow((
+    def _fields(self, record: logging.LogRecord) -> tuple[str, ...]:
+        return (
             datetime.fromtimestamp(record.created, timezone.utc).strftime("%H:%M:%S"),
             "ERROR" if record.levelno >= logging.ERROR else record.levelname,
             _single_line(record.name, 80),
             _single_line(getattr(record, "action", "console"), 80),
             _sanitize_detail(redact_log_text(super().format(record), self.secrets)),
             _single_line(getattr(record, "elapsed_ms", "-"), 80),
-        ))
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        output = io.StringIO(newline="")
+        csv.writer(output, delimiter="\t", lineterminator="\n").writerow(self._fields(record))
         return output.getvalue().rstrip("\n")
+
+
+def _display_width(text: str) -> int:
+    return sum(
+        0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in "WF" else 1
+        for char in text
+    )
+
+
+def _wrap_console_text(text: str, width: int) -> list[str]:
+    lines = []
+    line = ""
+    line_width = 0
+    for char in text:
+        char_width = _display_width(char)
+        if line and line_width + char_width > width:
+            lines.append(line)
+            line = ""
+            line_width = 0
+        line += char
+        line_width += char_width
+    return [*lines, line]
+
+
+def _console_row(fields: tuple[str, ...] | list[str], widths: tuple[int, ...]) -> str:
+    cells = []
+    for text, width in zip(fields, widths):
+        if _display_width(text) > width:
+            text = _wrap_console_text(text, width - 1)[0] + "…"
+        cells.append(text + " " * (width - _display_width(text)))
+    return " │ ".join(cells)
+
+
+class ConsoleTableFormatter(TSVFormatter):
+    """终端使用对齐、折行的可读表格；持久化 TSV 格式保持不变。"""
+
+    def __init__(self, secrets: tuple[str, ...] = ()) -> None:
+        super().__init__(secrets)
+        self._last_widths: tuple[int, ...] | None = None
+
+    def format(self, record: logging.LogRecord) -> str:
+        terminal_width = shutil.get_terminal_size(fallback=(140, 24)).columns
+        widths = (8, 7, 22, max(20, terminal_width - 46))
+        timestamp, level, module, action, detail, elapsed = self._fields(record)
+        module = module.removeprefix("core.")
+        if module == "uvicorn.error":
+            module = "uvicorn"
+        if action != "console":
+            detail = f"[{action}] {detail}"
+        if elapsed != "-":
+            detail = f"{detail} ({elapsed} ms)"
+        fields = [timestamp, level, module, detail]
+
+        rows = []
+        if widths != self._last_widths:
+            rows.append(_console_row(("时间 UTC", "级别", "来源", "详情"), widths))
+            rows.append("─┼─".join("─" * width for width in widths))
+            self._last_widths = widths
+        for index, detail in enumerate(_wrap_console_text(detail, widths[3])):
+            cells = fields.copy() if index == 0 else [""] * len(fields)
+            cells[3] = detail
+            rows.append(_console_row(cells, widths))
+        return "\n".join(rows)
+
+
+class ConsoleAccessFilter(logging.Filter):
+    """仅在控制台隐藏成功的轮询和静态资源请求，不影响落盘日志。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name != "uvicorn.access"
+            or record.levelno >= logging.WARNING
+            or not isinstance(record.args, tuple)
+            or len(record.args) != 5
+        ):
+            return True
+        _, method, target, _, status = record.args
+        if method not in ("GET", "HEAD") or not isinstance(status, int):
+            return True
+        if not (200 <= status < 300 or status == 304):
+            return True
+        path = str(target).partition("?")[0]
+        return not (
+            path in (
+                "/api/v1/jobs",
+                "/api/v1/system/runtime",
+                "/api/v1/system/logs",
+                "/kemo-graph-logo.png",
+            )
+            or path.startswith(("/api/v1/query/progress/", "/assets/"))
+        )
+
 
 class TSVStreamHandler(logging.StreamHandler):
     """每个终端流写入一次表头，后续逐条写入表格行。"""

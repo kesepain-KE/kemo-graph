@@ -14,5 +14,10 @@ describe("RuntimeLogPanel", () => {
     expect(html).toContain("日志日期（UTC）");
     expect(html).toContain("200 条");
     expect(html).toContain('role="tabpanel"');
+    expect(html).toContain("<table");
+    expect(html.match(/scope="col"/g)).toHaveLength(6);
+    expect(html).toContain("模块");
+    expect(html).toContain("动作");
+    expect(html).toContain("耗时（ms）");
   });
 });

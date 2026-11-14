@@ -13,12 +13,13 @@ import {
   PanelRightOpen,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   TextSearch,
   Trash2,
   X,
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/api";
@@ -26,6 +27,7 @@ import { ErrorNotice, LoadingState } from "../components/Feedback";
 import { SearchProgressCard, searchModeHelp } from "../components/SearchProgressCard";
 import {
   useSearchSession,
+  type SearchResult,
   type SearchResultDisplayMode,
 } from "../context/SearchSessionContext";
 import type {
@@ -33,10 +35,12 @@ import type {
   GraphNode,
   GraphEdge,
   GraphPath,
+  GraphGroup,
   GraphQueryData,
   GlobalQueryData,
   HybridQueryData,
   RagQueryData,
+  RagResult,
   SearchCacheItem,
   SearchMode,
 } from "../types/api";
@@ -124,6 +128,7 @@ function RelationChain({
             <button
               type="button"
               className="relation-chain__node"
+              title={node?.keyword ?? nodeId}
               disabled={!node}
               onClick={() => node && onNode(node)}
             >
@@ -137,22 +142,25 @@ function RelationChain({
 }
 
 function RelationshipResults({
-  data,
   nodes,
+  edges,
+  paths,
   onNode,
 }: {
-  data: GraphQueryData;
   nodes: GraphNode[];
+  edges: GraphEdge[];
+  paths: GraphPath[];
   onNode: (node: GraphNode) => void;
 }) {
   const nodeMap = new Map(nodes.map((node) => [node.node_id, node]));
-  const edgeMap = new Map(data.edges.map((edge) => [edge.edge_id, edge]));
-  const paths: GraphPath[] = data.paths ?? [];
-  const relations = data.relations ?? [];
-  if (!paths.length && !relations.length) return null;
+  const edgeMap = new Map(edges.map((edge) => [edge.edge_id, edge]));
+  const title = paths.length ? "关系路径" : "关系连线";
   return (
-    <section className="relationship-results">
-      <header><GitFork size={15} /><strong>关系路径</strong><span>{paths.length || relations.length} 条</span></header>
+    <section className="result-column relationship-results">
+      <div className="result-column__heading">
+        <span className="result-icon"><GitFork size={17} /></span>
+        <div><h3>{title}</h3><p>{paths.length || edges.length} 条</p></div>
+      </div>
       <div className="relationship-results__list">
         {paths.map((path) => (
           <article className="relation-chain-card" key={path.edge_ids.join("/")} title={path.text}>
@@ -161,8 +169,8 @@ function RelationshipResults({
           </article>
         ))}
         {!paths.length
-          ? relations.map((relation) => (
-              <article className="relation-chain-card" key={relation.edge_id} title={relation.text}>
+          ? edges.map((relation) => (
+              <article className="relation-chain-card" key={relation.edge_id}>
                 <RelationChain
                   nodeIds={[relation.source_node_id, relation.target_node_id]}
                   edgeIds={[relation.edge_id]}
@@ -170,7 +178,10 @@ function RelationshipResults({
                   edges={edgeMap}
                   onNode={onNode}
                 />
-                <small>关系权重 {Math.round(relation.weight * 100)}%</small>
+                <small>
+                  关系权重 {Math.round(relation.weight * 100)}%
+                  {relation.support_count != null ? ` · ${relation.support_count} 条支持` : ""}
+                </small>
               </article>
             ))
           : null}
@@ -180,15 +191,16 @@ function RelationshipResults({
 }
 
 function GraphResults({
-  data,
+  nodes,
+  query,
   onNode,
   displayMode,
 }: {
-  data: GraphQueryData;
+  nodes: GraphNode[];
+  query: string;
   onNode: (node: GraphNode) => void;
   displayMode: SearchResultDisplayMode;
 }) {
-  const nodes = [...data.hit_nodes, ...data.expanded_nodes];
   const [page, setPage] = useState(1);
   const pageCount = Math.max(1, Math.ceil(nodes.length / GRAPH_RESULT_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
@@ -197,22 +209,22 @@ function GraphResults({
 
   useEffect(() => {
     setPage(1);
-  }, [data.query]);
+  }, [query]);
 
   return (
     <section className="result-column result-column--graph">
       <div className="result-column__heading">
         <span className="result-icon result-icon--graph"><Network size={17} /></span>
-        <div><h3>图谱结果</h3><p>{nodes.length} 个节点 · {data.edges.length} 条关系</p></div>
+        <div><h3>图谱节点</h3><p>{nodes.length} 个节点</p></div>
       </div>
-      <RelationshipResults data={data} nodes={nodes} onNode={onNode} />
       <div className="node-result-grid" aria-live="polite">
         {visibleNodes.map((node) => (
           <button className="node-result-card" key={`${node.node_id}-${node.depth ?? 0}`} onClick={() => onNode(node)}>
             <span className="node-result-card__dot" />
             <span>
               <strong>{node.keyword}</strong>
-              <small>{node.depth ? `第 ${node.depth} 层邻居` : `匹配度 ${Math.round((node.match_score ?? 1) * 100)}%`}</small>
+              <small>{node.depth ? `第 ${node.depth} 层邻居` : node.match_score != null
+                ? `匹配度 ${Math.round(node.match_score * 100)}%` : "直接命中"}</small>
               <div className="node-result-card__summary">
                 <SearchResultText content={node.summary} displayMode={displayMode} compact />
               </div>
@@ -246,24 +258,55 @@ function GraphResults({
           </button>
         </footer>
       ) : null}
-      {data.groups.length ? (
-        <div className="group-summary">
-          <span>群组摘要</span>
-          {data.groups.map((group) => (
-            <SearchResultText key={group.group_id} content={group.summary} displayMode={displayMode} />
-          ))}
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: SearchResultDisplayMode }) {
+function GraphGroups({ groups, displayMode }: { groups: GraphGroup[]; displayMode: SearchResultDisplayMode }) {
+  return (
+    <section className="result-column global-result">
+      <div className="result-column__heading">
+        <span className="result-icon"><Network size={17} /></span>
+        <div><h3>节点群摘要</h3><p>{groups.length} 个相关群组</p></div>
+      </div>
+      <div className="global-result__groups">
+        {groups.map((group, index) => (
+          <article key={group.group_id}>
+            <strong title={group.group_id}>群组 {index + 1}</strong>
+            {group.node_count != null ? <small>{group.node_count} 个节点</small> : null}
+            <SearchResultText content={group.summary} displayMode={displayMode} />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RagSource({ result }: { result: RagResult }) {
+  return (
+    <footer className="rag-source">
+      <FileText size={14} />
+      {result.source.source_path ? (
+        <Link to={`/documents?path=${encodeURIComponent(result.source.source_path)}`}>
+          {result.source.source_path}
+        </Link>
+      ) : <span>{result.source.original_path ?? result.source.relative_path ?? result.source.source_id}</span>}
+    </footer>
+  );
+}
+
+function RagResults({
+  data,
+  displayMode,
+}: {
+  data: RagQueryData;
+  displayMode: SearchResultDisplayMode;
+}) {
   return (
     <section className="result-column result-column--rag">
       <div className="result-column__heading">
         <span className="result-icon result-icon--rag"><BookOpen size={17} /></span>
-        <div><h3>RAG 片段</h3><p>{data.results.length} 条语义召回</p></div>
+        <div><h3>文档片段</h3><p>{data.results.length} 条语义召回</p></div>
       </div>
       <div className="rag-result-list">
         {data.results.map((result, index) => {
@@ -296,14 +339,7 @@ function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: Se
                 <SearchResultText content={matchedContent} displayMode={displayMode} />
               </details>
             ) : null}
-            <footer>
-              <FileText size={14} />
-              {result.source.source_path ? (
-                <Link to={`/documents?path=${encodeURIComponent(result.source.source_path)}`}>
-                  {result.source.source_path}
-                </Link>
-              ) : <span>{result.source.original_path ?? result.source.relative_path ?? result.source.source_id}</span>}
-            </footer>
+            <RagSource result={result} />
           </article>
           );
         })}
@@ -313,66 +349,196 @@ function RagResults({ data, displayMode }: { data: RagQueryData; displayMode: Se
   );
 }
 
-function GlobalResults({ data, displayMode }: { data: GlobalQueryData; displayMode: SearchResultDisplayMode }) {
+type ResultTabId = "answer" | "nodes" | "edges" | "paths" | "rag" | "groups" | "scores";
+type ResultTab = { id: ResultTabId; label: string; icon: typeof Network; count?: number };
+type ResultScore = { id: string; label: string; kind: string; metric: string; value: number; percent: boolean };
+
+function ScoreResults({ scores }: { scores: ResultScore[] }) {
   return (
-    <section className="result-column global-result">
+    <section className="result-column result-column--scores">
       <div className="result-column__heading">
-        <span className="result-icon result-icon--global"><Globe2 size={17} /></span>
-        <div><h3>全局回答</h3><p>{data.communities.length} 个相关节点群</p></div>
+        <span className="result-icon"><SlidersHorizontal size={17} /></span>
+        <div><h3>相关度</h3><p>{scores.length} 项召回评分</p></div>
       </div>
-      <div className={`global-result__answer is-${displayMode}`}>
-        <SearchResultText content={data.answer} displayMode={displayMode} />
+      <div className="search-score-table">
+        <table>
+          <thead><tr><th scope="col">内容</th><th scope="col">类型</th><th scope="col">指标</th><th scope="col">得分</th></tr></thead>
+          <tbody>
+            {scores.map((score) => (
+              <tr key={score.id}>
+                <th scope="row">{score.label}</th>
+                <td>{score.kind}</td>
+                <td>{score.metric}</td>
+                <td>{score.percent ? `${Math.round(score.value * 100)}%` : score.value.toFixed(4)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      {data.communities.length ? (
-        <div className="global-result__groups">
-          {data.communities.map((group) => (
-            <article key={group.group_id}>
-              <strong>{group.group_id}</strong>
-              <SearchResultText content={group.summary} displayMode={displayMode} />
-            </article>
-          ))}
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function AnswerResults({
-  data,
-  onNode,
+export function SearchResultPanels({
+  result,
+  mode,
   displayMode,
+  onDisplayModeChange,
+  onNode,
 }: {
-  data: AnswerQueryData;
-  onNode: (node: GraphNode) => void;
+  result: SearchResult;
+  mode: SearchMode;
   displayMode: SearchResultDisplayMode;
+  onDisplayModeChange: (mode: SearchResultDisplayMode) => void;
+  onNode: (node: GraphNode) => void;
 }) {
-  return (
-    <div className="answer-results">
-      <section className="result-column answer-result">
-        <div className="result-column__heading">
-          <span className="result-icon result-icon--answer"><Bot size={18} /></span>
-          <div>
-            <h3>LLM 回答</h3>
-            <p>基于图谱结构与向量片段的混合知识上下文</p>
-          </div>
-          <span className="answer-result__badge"><Sparkles size={13} />混合增强</span>
-        </div>
-        <div className={`answer-result__body is-${displayMode}`}>
-          <SearchResultText content={data.answer} displayMode={displayMode} />
-        </div>
-      </section>
+  const [selectedTab, setSelectedTab] = useState<ResultTabId | null>(null);
+  const resultId = useId();
+  const browserRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const retrieval = mode === "answer" ? (result as AnswerQueryData).retrieval
+    : mode === "hybrid" ? result as HybridQueryData : null;
+  const graph = mode === "graph" ? result as GraphQueryData : retrieval?.graph;
+  const rag = mode === "rag" ? result as RagQueryData : retrieval?.rag;
+  const global = mode === "global" ? result as GlobalQueryData : null;
+  const answer = mode === "answer" ? (result as AnswerQueryData).answer : global?.answer;
+  const nodes = graph ? [...graph.hit_nodes, ...graph.expanded_nodes] : global?.key_entities ?? [];
+  const edges = [...new Map([...(graph?.edges ?? []), ...(graph?.relations ?? [])].map((edge) => [edge.edge_id, edge])).values()];
+  const paths = graph?.paths ?? [];
+  const groups = [...new Map([
+    ...(graph?.groups ?? []), ...(retrieval?.communities ?? global?.communities ?? []),
+  ].map((group) => [group.group_id, group])).values()];
+  const nodeNames = new Map(nodes.map((node) => [node.node_id, node.keyword]));
+  const scores: ResultScore[] = [
+    ...(rag?.results ?? []).map((item, index) => ({
+      id: `rag:${item.chunk_id}`,
+      label: `片段 ${index + 1} · ${item.source.source_path ?? item.source.original_path ?? item.source.relative_path ?? item.source.source_id}`,
+      kind: "文档片段", metric: "语义相似度", value: item.score, percent: true,
+    })),
+    ...nodes.filter((node) => node.match_score != null).map((node) => ({
+      id: `node:${node.node_id}`, label: node.keyword,
+      kind: "图谱节点", metric: "节点匹配度", value: node.match_score!, percent: true,
+    })),
+    ...edges.map((edge) => ({
+      id: `edge:${edge.edge_id}`,
+      label: `${nodeNames.get(edge.source_node_id) ?? edge.source_node_id} → ${nodeNames.get(edge.target_node_id) ?? edge.target_node_id}`,
+      kind: "关系连线", metric: "关系权重", value: edge.weight, percent: true,
+    })),
+    ...paths.map((path, index) => ({
+      id: `path:${index}`, label: path.text,
+      kind: "关系路径", metric: "链路权重", value: path.weight, percent: true,
+    })),
+    ...(retrieval?.entities ?? []).map((entity) => ({
+      id: `entity:${entity.node_id}`, label: entity.keyword,
+      kind: "实体", metric: "融合得分", value: entity.score, percent: false,
+    })),
+    ...(retrieval?.communities ?? []).map((group) => ({
+      id: `group:${group.group_id}`, label: group.group_id,
+      kind: "节点群", metric: "融合得分", value: group.score, percent: false,
+    })),
+  ];
+  const tabs: ResultTab[] = [];
+  if (answer?.trim()) tabs.push({ id: "answer", label: mode === "global" ? "全局回答" : "LLM 回答", icon: Bot });
+  if (nodes.length) tabs.push({ id: "nodes", label: "图谱节点", icon: Network, count: nodes.length });
+  if (edges.length) tabs.push({ id: "edges", label: "关系连线", icon: GitFork, count: edges.length });
+  if (paths.length) tabs.push({ id: "paths", label: "关系路径", icon: GitFork, count: paths.length });
+  if (rag?.results.length) tabs.push({ id: "rag", label: "文档片段", icon: BookOpen, count: rag.results.length });
+  if (groups.length) tabs.push({ id: "groups", label: "节点群摘要", icon: Globe2, count: groups.length });
+  if (scores.length) tabs.push({ id: "scores", label: "相关度", icon: SlidersHorizontal, count: scores.length });
+  const activeTab = tabs.find((tab) => tab.id === selectedTab) ?? tabs[0];
+  const activeId = activeTab?.id;
 
-      <section className="answer-evidence" aria-label="回答依据">
-        <header>
-          <span>回答依据</span>
-          <small>以下内容是本次回答实际使用的检索结果</small>
-        </header>
-        <div className="answer-evidence__grid">
-          <GraphResults data={data.retrieval.graph} onNode={onNode} displayMode={displayMode} />
-          <RagResults data={data.retrieval.rag} displayMode={displayMode} />
+  useEffect(() => setSelectedTab(null), [result]);
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0;
+  }, [result, activeId]);
+
+  useEffect(() => {
+    const browser = browserRef.current;
+    const stage = browser?.closest<HTMLElement>(".page-stage");
+    if (!browser || !stage) return;
+    const resize = () => {
+      const style = getComputedStyle(stage);
+      browser.style.setProperty("--search-result-height", `${Math.max(240,
+        stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
+      )}px`);
+    };
+    // Move the outer workspace into view before scrolling the result text.
+    const expandForReading = (event: WheelEvent) => {
+      if (event.ctrlKey || event.shiftKey || event.deltaY <= 0) return;
+      const distance = browser.getBoundingClientRect().top - stage.getBoundingClientRect().top
+        - parseFloat(getComputedStyle(stage).paddingTop);
+      if (distance <= 1) return;
+      event.preventDefault();
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1);
+      const movement = Math.min(distance, delta);
+      stage.scrollTop += movement;
+      if (contentRef.current && delta > movement) contentRef.current.scrollTop += delta - movement;
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(stage);
+    browser.addEventListener("wheel", expandForReading, { passive: false });
+    return () => {
+      observer.disconnect();
+      browser.removeEventListener("wheel", expandForReading);
+    };
+  }, []);
+
+  return (
+    <section className="search-results" ref={browserRef} aria-label="检索结果与依据">
+      <div className="search-result-view-bar">
+        {tabs.length ? (
+          <div className="search-result-tabs" role="tablist" aria-label="检索结果分类"
+            onKeyDown={(event) => {
+              const index = tabs.findIndex((tab) => tab.id === activeId);
+              const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+                : event.key === "ArrowLeft" ? (index - 1 + tabs.length) % tabs.length
+                : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+              if (next == null) return;
+              event.preventDefault();
+              setSelectedTab(tabs[next].id);
+              event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next].focus();
+            }}>
+            {tabs.map(({ id, label, icon: Icon, count }) => (
+              <button type="button" role="tab" key={id} id={`${resultId}-${id}`}
+                aria-label={label} aria-selected={activeId === id} aria-controls={`${resultId}-content`}
+                tabIndex={activeId === id ? 0 : -1}
+                className={`search-result-tab ${activeId === id ? "is-active" : ""}`}
+                onClick={() => setSelectedTab(id)}>
+                <Icon size={15} /><span>{label}</span>
+                {count != null ? <span className="search-result-tab__count" aria-hidden="true">{count}</span> : null}
+              </button>
+            ))}
+          </div>
+        ) : <strong className="search-result-label">检索结果</strong>}
+        <div className="search-result-view-switch" role="group" aria-label="结果显示方式">
+          <button type="button" className={displayMode === "markdown" ? "is-active" : ""}
+            aria-pressed={displayMode === "markdown"} onClick={() => onDisplayModeChange("markdown")}>
+            <FileText size={14} />Markdown
+          </button>
+          <button type="button" className={displayMode === "source" ? "is-active" : ""}
+            aria-pressed={displayMode === "source"} onClick={() => onDisplayModeChange("source")}>
+            <Code2 size={14} />文本源码
+          </button>
         </div>
-      </section>
-    </div>
+      </div>
+      <div className="search-result-content" ref={contentRef} role="tabpanel" id={`${resultId}-content`}
+        aria-labelledby={activeId ? `${resultId}-${activeId}` : undefined}
+        aria-label={activeId ? undefined : "检索结果"} tabIndex={0}>
+        {activeId === "answer" ? (
+          <article className="answer-result"><SearchResultText content={answer!} displayMode={displayMode} /></article>
+        ) : null}
+        {activeId === "nodes" ? <GraphResults nodes={nodes} query={"query" in result ? result.query ?? "" : ""}
+          displayMode={displayMode} onNode={onNode} /> : null}
+        {activeId === "edges" || activeId === "paths" ? <RelationshipResults nodes={nodes} edges={edges}
+          paths={activeId === "paths" ? paths : []} onNode={onNode} /> : null}
+        {activeId === "rag" && rag ? <RagResults data={rag} displayMode={displayMode} /> : null}
+        {activeId === "groups" ? <GraphGroups groups={groups} displayMode={displayMode} /> : null}
+        {activeId === "scores" ? <ScoreResults scores={scores} /> : null}
+        {!activeId ? <div className="empty-result">没有召回相关内容，试试其他关键词</div> : null}
+      </div>
+    </section>
   );
 }
 
@@ -491,154 +657,113 @@ export function SearchPage() {
     }
   };
 
-  const graphData =
-    result && mode === "graph"
-      ? (result as GraphQueryData)
-      : result && mode === "hybrid"
-        ? (result as HybridQueryData).graph
-        : null;
-  const ragData =
-    result && mode === "rag"
-      ? (result as RagQueryData)
-      : result && mode === "hybrid"
-        ? (result as HybridQueryData).rag
-        : null;
-  const globalData = result && mode === "global" ? (result as GlobalQueryData) : null;
-  const answerData = result && mode === "answer" ? (result as AnswerQueryData) : null;
-
   return (
     <section className="search-page page-stack">
-      <div className="search-hero">
-        <h1>知识检索</h1>
-        <p>用自然语言查找原文、探索知识关系，或基于检索证据生成回答。</p>
+      <header className="search-page-header">
+        <div>
+          <h1>知识检索</h1>
+        </div>
+        <button
+          className="search-history-trigger"
+          type="button"
+          aria-label={`搜索历史，${historyTotal} 条缓存`}
+          aria-expanded={historyOpen}
+          aria-controls="search-history-panel"
+          onClick={() => setHistoryOpen(true)}
+        >
+          <PanelRightOpen size={16} />
+          <span>搜索历史</span>
+          <em>{historyTotal}</em>
+        </button>
+      </header>
 
-        <form className="hero-search" onSubmit={(event) => void runSearch(event)}>
-          <Search size={21} />
-          <input
-            autoFocus
-            aria-label="检索问题"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="描述你想了解的问题，或输入概念、实体名称…"
-          />
-          <button
-            className="hero-search__refresh"
-            disabled={loading || !query.trim()}
-            onClick={() => void runSearch(undefined, true)}
-            title="跳过已有缓存并重新执行检索"
-            type="button"
-          >
-            <RefreshCw size={16} />重新检索
-          </button>
-          <button className="hero-search__submit" disabled={loading || !query.trim()} type="submit">
-            {loading ? "处理中…" : mode === "answer" ? "获取回答" : "开始检索"}<ArrowRight size={17} />
-          </button>
-        </form>
-
-        <div className="search-mode-switch" role="tablist" aria-label="检索模式">
-          {modes.map(({ value, label, icon: Icon }) => (
+      <div className="search-workbench">
+        <div className="search-hero">
+          <form className="hero-search" role="search" onSubmit={(event) => void runSearch(event)}>
+            <label className="hero-search__input">
+              <Search size={18} />
+              <input
+                autoFocus
+                aria-label="检索问题"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="输入问题、概念或实体名称…"
+              />
+            </label>
             <button
+              className="hero-search__refresh"
+              disabled={loading || !query.trim()}
+              onClick={() => void runSearch(undefined, true)}
+              title="忽略缓存，重新检索"
               type="button"
-              role="tab"
-              aria-selected={mode === value}
-              disabled={loading}
-              title={searchModeHelp[value].description}
-              className={mode === value ? "is-active" : ""}
-              key={value}
-              onClick={() => {
-                selectMode(value);
-              }}
             >
-              <Icon size={16} />{label}
+              <RefreshCw size={16} />重新检索
             </button>
-          ))}
+            <button className="hero-search__submit" disabled={loading || !query.trim()} type="submit">
+              {loading ? "处理中…" : mode === "answer" ? "获取回答" : "开始检索"}<ArrowRight size={17} />
+            </button>
+          </form>
+
+          <div className="search-controls">
+            <div className="search-mode-switch" role="tablist" aria-label="检索模式">
+              {modes.map(({ value, label, icon: Icon }) => (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === value}
+                  disabled={loading}
+                  title={searchModeHelp[value].description}
+                  className={mode === value ? "is-active" : ""}
+                  key={value}
+                  onClick={() => {
+                    setHistoryNotice(null);
+                    selectMode(value);
+                  }}
+                >
+                  <Icon size={16} />{label}
+                </button>
+              ))}
+            </div>
+
+          </div>
+
+          <div className="search-suggestions" role="group" aria-label="示例问题">
+            {suggestions.map((suggestion) => (
+              <button key={suggestion} onClick={() => setQuery(suggestion)}>{suggestion}</button>
+            ))}
+          </div>
         </div>
 
-        <p className="search-mode-help">{searchModeHelp[mode].description}</p>
-
-        <div className="search-suggestions">
-          <span>试试：</span>
-          {suggestions.map((suggestion) => (
-            <button key={suggestion} onClick={() => setQuery(suggestion)}>{suggestion}</button>
-          ))}
-        </div>
-      </div>
-
-      <button
-        className="search-history-trigger"
-        type="button"
-        aria-label={`搜索历史，${historyTotal} 条缓存`}
-        aria-expanded={historyOpen}
-        aria-controls="search-history-panel"
-        onClick={() => setHistoryOpen(true)}
-      >
-        <PanelRightOpen size={17} />
-        <span>搜索历史</span>
-        <em>{historyTotal}</em>
-      </button>
-
-      <div className="search-workspace">
-        <div className="search-primary">
-          {progress ? <SearchProgressCard progress={progress} /> : null}
-          {error ? <ErrorNotice message={error} /> : null}
+        <div className="search-workspace" aria-busy={loading}>
+          {historyNotice || progress || error ? (
+            <div className="search-workspace-feedback">
+              {historyNotice ? <p className="search-workspace-notice" role="status">{historyNotice}</p> : null}
+              {progress ? (
+                <details className="search-flow" open={loading || Boolean(error)}>
+                  <summary>
+                    <span>{loading ? "正在检索" : error ? "检索失败" : progress.status === "restored" ? "历史快照" : "检索完成"}</span>
+                  </summary>
+                  <SearchProgressCard progress={progress} />
+                </details>
+              ) : null}
+              {error ? <ErrorNotice message={error} /> : null}
+            </div>
+          ) : null}
 
           {result ? (
-            <div className="search-results-frame">
-              <div className="search-result-view-bar" aria-label="结果显示方式">
-                <span>内容显示</span>
-                <div className="search-result-view-switch" role="group" aria-label="Markdown 或原文显示">
-                  <button
-                    className={resultDisplayMode === "markdown" ? "is-active" : ""}
-                    type="button"
-                    aria-pressed={resultDisplayMode === "markdown"}
-                    onClick={() => setResultDisplayMode("markdown")}
-                  >
-                    <FileText size={14} />Markdown
-                  </button>
-                  <button
-                    className={resultDisplayMode === "source" ? "is-active" : ""}
-                    type="button"
-                    aria-pressed={resultDisplayMode === "source"}
-                    onClick={() => setResultDisplayMode("source")}
-                  >
-                    <Code2 size={14} />原文
-                  </button>
-                </div>
+            <SearchResultPanels result={result} mode={mode} displayMode={resultDisplayMode}
+              onDisplayModeChange={setResultDisplayMode}
+              onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)} />
+          ) : (
+            <section className="search-empty-result" aria-label="检索结果与依据">
+              <div className="search-placeholder">
+                <img className="search-placeholder__logo" src="/kemo-graph-logo.png" alt="" aria-hidden="true" />
+                <h3>{loading ? "正在检索…" : error ? "暂无结果" : "从一个问题开始"}</h3>
+                {error ? <p>调整问题或重新检索</p> : null}
+                {!loading && !error ? <Link to="/documents"><BookOpen size={14} />管理知识库</Link> : null}
               </div>
-              <div className={`search-results ${mode === "hybrid" ? "is-hybrid" : ""} ${mode === "answer" ? "is-answer" : ""}`}>
-                {answerData ? (
-                  <AnswerResults
-                    data={answerData}
-                    displayMode={resultDisplayMode}
-                    onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
-                  />
-                ) : null}
-                {graphData ? (
-                  <GraphResults
-                    data={graphData}
-                    displayMode={resultDisplayMode}
-                    onNode={(node) => navigate(`/graph?node=${encodeURIComponent(node.node_id)}`)}
-                  />
-                ) : null}
-                {ragData ? <RagResults data={ragData} displayMode={resultDisplayMode} /> : null}
-                {globalData ? <GlobalResults data={globalData} displayMode={resultDisplayMode} /> : null}
-              </div>
-            </div>
-          ) : null}
-
-          {!result && !loading && !error ? (
-            <div className="search-placeholder">
-              <img
-                className="search-placeholder__logo"
-                src="/kemo-graph-logo.png"
-                alt=""
-                aria-hidden="true"
-              />
-              <h3>从一个具体问题开始</h3>
-              <p>请先在文档管理中导入资料并完成整理。检索启动后可切换页面，返回时继续查看进度和结果。</p>
-              <p>右上角“搜索历史”可查看已缓存的结果；“重新检索”会跳过缓存，再查询一次。</p>
-            </div>
-          ) : null}
+            </section>
+          )}
         </div>
       </div>
 
@@ -659,7 +784,7 @@ export function SearchPage() {
           >
           <header className="search-history__header">
             <span className="search-history__icon"><History size={18} /></span>
-            <span><strong id="search-history-title">搜索历史</strong><small>{historyTotal} 条服务端缓存</small></span>
+            <span><strong id="search-history-title">搜索历史</strong><small>{historyTotal} 条记录</small></span>
             <button
               disabled={historyLoading}
               onClick={() => void loadHistory()}

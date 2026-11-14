@@ -5,12 +5,12 @@ import { ThemedDatePicker } from "./ThemedDatePicker";
 import type { LogCategory, RuntimeLogs } from "../types/api";
 
 const tabs = [
-  { value: "terminal", label: "终端启动日志", icon: Terminal, hint: "Web 启停与 Python / Uvicorn 日志；从启用记录后的服务启动开始保存，不含 shell 历史或未接入 logging 的直接输出。" },
-  { value: "query", label: "查询日志", icon: FileSearch, hint: "检索开始、完成、失败、耗时与缓存事件；使用 query_id 关联一次查询，不额外记录提问正文或模型回答。" },
-  { value: "internal", label: "内部运行日志", icon: Activity, hint: "文档导入、图谱构建、向量索引、删除、维护及其他内部运行事件。" },
+  { value: "terminal", label: "终端启动日志", icon: Terminal, hint: "服务启停与终端运行记录" },
+  { value: "query", label: "查询日志", icon: FileSearch, hint: "检索进度、耗时与缓存记录" },
+  { value: "internal", label: "内部运行日志", icon: Activity, hint: "文档处理、构建与维护记录" },
 ] as const;
 
-export function RuntimeLogPanel() {
+export function RuntimeLogPanel({ active = true }: { active?: boolean }) {
   const [category, setCategory] = useState<LogCategory>("terminal");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [data, setData] = useState<RuntimeLogs | null>(null);
@@ -22,27 +22,27 @@ export function RuntimeLogPanel() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!date) { setLoading(false); return; }
-    let active = true;
+    if (!active || !date) { setLoading(false); return; }
+    let current = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     const load = async () => {
-      if (!active || !date) return;
+      if (!current || !date) return;
       // Refresh after completion, not with overlapping interval requests.
       if (!document.hidden) {
         setLoading(true);
         try {
           const next = await api.getSystemLogs(category, date, controller.signal);
-          if (active) { setData(next); setError(null); setUpdatedAt(new Date().toLocaleTimeString()); }
+          if (current) { setData(next); setError(null); setUpdatedAt(new Date().toLocaleTimeString()); }
         } catch (caught) {
-          if (active) setError(caught instanceof Error ? caught.message : "无法读取日志");
-        } finally { if (active) setLoading(false); }
+          if (current) setError(caught instanceof Error ? caught.message : "无法读取日志");
+        } finally { if (current) setLoading(false); }
       }
-      if (active && autoRefresh) timer = setTimeout(() => void load(), 5000);
+      if (current && autoRefresh) timer = setTimeout(() => void load(), 5000);
     };
     void load();
-    return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [category, date, autoRefresh, refresh]);
+    return () => { current = false; controller.abort(); clearTimeout(timer); };
+  }, [active, category, date, autoRefresh, refresh]);
   const visibleData = data?.category === category && data?.date === date ? data : null;
   useEffect(() => {
     if (follow && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
@@ -50,7 +50,7 @@ export function RuntimeLogPanel() {
   const selected = tabs.find((tab) => tab.value === category)!;
   return <section className="runtime-log-panel card" aria-label="运行日志">
     <header className="runtime-log-panel__header">
-      <div><p className="eyebrow">Runtime logs</p><h3>运行日志</h3></div>
+      <div><h2>运行日志</h2></div>
       <div className="runtime-log-panel__controls">
         <label>日期（UTC）<ThemedDatePicker ariaLabel="日志日期（UTC）" value={date} onChange={(next) => { setDate(next); setError(null); setFollow(true); }} /></label>
         <label><input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />自动刷新</label>
@@ -59,7 +59,7 @@ export function RuntimeLogPanel() {
       </div>
     </header>
     <div className="runtime-log-tabs" role="tablist" aria-label="日志类型">
-      {tabs.map(({ value, label, icon: Icon }, index) => <button type="button" role="tab" key={value} id={`runtime-log-tab-${value}`} aria-selected={category === value} tabIndex={category === value ? 0 : -1} aria-controls="runtime-log-content"
+      {tabs.map(({ value, label, icon: Icon, hint }, index) => <button type="button" role="tab" key={value} title={hint} id={`runtime-log-tab-${value}`} aria-selected={category === value} tabIndex={category === value ? 0 : -1} aria-controls="runtime-log-content"
         onKeyDown={(event) => {
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
@@ -68,24 +68,35 @@ export function RuntimeLogPanel() {
           document.getElementById(`runtime-log-tab-${tabs[next].value}`)?.focus();
         }} onClick={() => { setCategory(value); setError(null); setFollow(true); }}><Icon size={16} />{label}</button>)}
     </div>
-    <p className="runtime-log-hint">{selected.hint}</p>
     {error && <p className="runtime-log-error" role="alert">{error} {visibleData ? "下方保留上次成功读取的内容。" : ""}</p>}
     <div className="runtime-log-content" ref={viewport} role="tabpanel" id="runtime-log-content" aria-labelledby={`runtime-log-tab-${category}`} tabIndex={0}
       onScroll={(event) => { const el = event.currentTarget; setFollow(el.scrollHeight - el.clientHeight - el.scrollTop < 32); }}>
-      {visibleData?.entries.map((entry) => {
-        const level = entry.level.toLowerCase();
-        const tone = level.startsWith("err") ? "is-error" : level.startsWith("warn") ? "is-warning" : "is-info";
-        const tag = tone === "is-error" ? "ERR" : tone === "is-warning" ? "WRN" : "OUT";
-        return <div className={`runtime-log-line ${tone}`} key={entry.id}>
-          <time>{entry.time}</time>
-          <span className="runtime-log-line__tag">{tag}</span>
-          <code className="runtime-log-line__body" title={`${entry.module} / ${entry.action}`}>{entry.detail}</code>
-          {entry.elapsed_ms !== "-" && <small className="runtime-log-line__elapsed">{entry.elapsed_ms} ms</small>}
-        </div>;
-      })}
-      {!visibleData?.entries.length && <div className="empty-compact"><selected.icon size={25} /><strong>{loading ? "正在读取日志…" : "暂无此类日志"}</strong><span>{!date ? "请选择日志日期。" : error ? "读取失败，请检查服务连接后重试。" : "可切换日期或等待新的运行事件；历史终端输出无法回补。"}</span></div>}
+      <table className="runtime-log-table" aria-label={`${selected.label}表格`} aria-busy={loading}>
+        <thead><tr>
+          <th scope="col">时间（UTC）</th>
+          <th scope="col">级别</th>
+          <th scope="col">模块</th>
+          <th scope="col">动作</th>
+          <th scope="col">详情</th>
+          <th scope="col">耗时（ms）</th>
+        </tr></thead>
+        <tbody>
+          {visibleData?.entries.map((entry) => {
+            const tone = entry.level === "ERROR" ? "is-error" : entry.level === "WARNING" ? "is-warning" : "is-info";
+            return <tr className={tone} key={entry.id}>
+              <td><time>{entry.time}</time></td>
+              <td><span className="runtime-log-table__level">{entry.level}</span></td>
+              <td><code>{entry.module}</code></td>
+              <td><code>{entry.action}</code></td>
+              <td className="runtime-log-table__detail"><code>{entry.detail}</code></td>
+              <td className="runtime-log-table__elapsed">{entry.elapsed_ms}</td>
+            </tr>;
+          })}
+          {!visibleData?.entries.length && <tr><td colSpan={6}><div className="empty-compact"><selected.icon size={25} /><strong>{loading ? "正在读取日志…" : "暂无此类日志"}</strong><span>{!date ? "请选择日期" : error ? "请检查连接后重试" : "切换日期查看"}</span></div></td></tr>}
+        </tbody>
+      </table>
     </div>
-    <footer className="runtime-log-footer" role="status"><span>{visibleData?.entries.length ?? 0} 条 · 最多展示最近 200 条 · 日志时间为 UTC</span><span>{loading ? "刷新中…" : updatedAt ? `上次读取 ${updatedAt}` : "尚未读取"}{autoRefresh ? " · 每 5 秒刷新" : " · 自动刷新已暂停"}</span></footer>
-    {visibleData?.truncated && <p className="runtime-log-hint">已限制显示量：仅扫描所选日期文件末尾 2 MB，并展示其中最新的匹配记录。更早内容请查看服务端原始日志。</p>}
+    <footer className="runtime-log-footer" role="status"><span>{visibleData?.entries.length ?? 0} 条 · 上限 200 条</span><span>{loading ? "刷新中…" : updatedAt ? `更新于 ${updatedAt}` : "尚未读取"}{autoRefresh ? " · 每 5 秒刷新" : " · 已暂停"}</span></footer>
+    {visibleData?.truncated && <p className="runtime-log-hint">仅显示近期记录，更早内容请查看服务端日志。</p>}
   </section>;
 }

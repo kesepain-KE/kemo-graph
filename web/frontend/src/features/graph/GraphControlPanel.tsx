@@ -13,13 +13,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import type { GraphEdge, GraphNode, GraphVisualizationNode } from "../../types/api";
+import type { GraphVisualizationNode } from "../../types/api";
 import type { GraphCatalog } from "./data/GraphDataLoader";
-import { GraphDetails } from "./GraphDetails";
-import { GraphRelationDetails } from "./GraphRelationDetails";
 import { type GraphPreferences } from "./graphPreferences";
 import type { LayoutRuntimeStatus } from "./engine/layoutTypes";
-import type { ReadableRelationPath } from "./relationPaths";
 
 type GraphControlPanelProps = {
   preferences: GraphPreferences;
@@ -28,13 +25,6 @@ type GraphControlPanelProps = {
   activeNodes: GraphVisualizationNode[];
   activeRelationTypes: string[];
   highlightedNodes: GraphVisualizationNode[];
-  selected: GraphVisualizationNode | null;
-  selectedEdge: GraphEdge | null;
-  relatedRelationEdges: GraphEdge[];
-  nodesById: Map<string, GraphNode>;
-  selectedPaths: ReadableRelationPath[];
-  selectedRelationCount: number;
-  selectedIsCore: boolean;
   sourceLabels: Map<string, string>;
   rendererBackend: string;
   layoutStatus: LayoutRuntimeStatus | null;
@@ -45,6 +35,7 @@ type GraphControlPanelProps = {
   fullscreen?: boolean;
   visible?: boolean;
   onRequestClose?: () => void;
+  onShowDetails: () => void;
 };
 
 export function GraphControlPanel({
@@ -54,13 +45,6 @@ export function GraphControlPanel({
   activeNodes,
   activeRelationTypes,
   highlightedNodes,
-  selected,
-  selectedEdge,
-  relatedRelationEdges,
-  nodesById,
-  selectedPaths,
-  selectedRelationCount,
-  selectedIsCore,
   sourceLabels,
   rendererBackend,
   layoutStatus,
@@ -71,22 +55,14 @@ export function GraphControlPanel({
   fullscreen = false,
   visible = true,
   onRequestClose,
+  onShowDetails,
 }: GraphControlPanelProps) {
-  const [fullscreenTab, setFullscreenTab] = useState<"controls" | "details">("controls");
   const sourceIds = useMemo(() => sortedUnique(
     (catalog?.nodes ?? []).flatMap((node) => node.source_ids),
   ), [catalog]);
   const tags = useMemo(() => sortedUnique(
     (catalog?.nodes ?? []).flatMap((node) => node.tags),
   ), [catalog]);
-
-  useEffect(() => {
-    if (fullscreen) setFullscreenTab("controls");
-  }, [fullscreen]);
-
-  useEffect(() => {
-    if (fullscreen && selectedEdge) setFullscreenTab("details");
-  }, [fullscreen, selectedEdge]);
 
   const setView = (patch: Partial<GraphPreferences["view"]>) => {
     onPreferencesChange({
@@ -126,7 +102,7 @@ export function GraphControlPanel({
 
   return (
     <aside
-      className={`graph-control-bubble card ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"} ${fullscreen ? "is-fullscreen-panel" : ""} ${visible ? "" : "is-fullscreen-hidden"}`}
+      className={`graph-control-bubble card is-fullscreen-panel ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"} ${visible ? "" : "is-fullscreen-hidden"}`}
       aria-label="图谱控制与详情"
       aria-hidden={fullscreen && !visible}
     >
@@ -134,14 +110,14 @@ export function GraphControlPanel({
         <header className="graph-control-bubble__header">
           <div className="graph-control-bubble__title">
             <span><Network size={19} /></span>
-            <div><p className="eyebrow">Graph studio</p><h2>图谱控制台</h2></div>
+            <div><h2>图谱控制台</h2></div>
           </div>
           <div className="graph-control-bubble__header-actions">
             <div className="graph-control-bubble__live">
               <i className={loading ? "is-loading" : ""} />
               {loading ? "载入中" : "本机实时"}
             </div>
-            {fullscreen && onRequestClose ? (
+            {onRequestClose ? (
               <>
                 <button
                   className="graph-control-bubble__close"
@@ -156,8 +132,8 @@ export function GraphControlPanel({
                   className="graph-control-bubble__close"
                   type="button"
                   onClick={onRequestClose}
-                  aria-label="收起图谱操作面板"
-                  title="收起操作面板"
+                  aria-label="返回节点详情"
+                  title="返回节点详情"
                 >
                   <X size={18} />
                 </button>
@@ -166,55 +142,27 @@ export function GraphControlPanel({
           </div>
         </header>
 
-        {fullscreen ? (
-          <div className="graph-fullscreen-tabs" role="tablist" aria-label="全屏图谱面板">
+          <div className="graph-fullscreen-tabs" role="tablist" aria-label="图谱面板">
             <button
               type="button"
               role="tab"
-              aria-selected={fullscreenTab === "controls"}
-              className={fullscreenTab === "controls" ? "is-active" : ""}
-              onClick={() => setFullscreenTab("controls")}
+              aria-selected
+              className="is-active"
             >图谱控制</button>
             <button
               type="button"
               role="tab"
-              aria-selected={fullscreenTab === "details"}
-              className={fullscreenTab === "details" ? "is-active" : ""}
-              onClick={() => setFullscreenTab("details")}
+              aria-selected={false}
+              onClick={onShowDetails}
             >详情</button>
           </div>
-        ) : null}
-
-        {!fullscreen || fullscreenTab === "details" ? (
-          <section className="graph-control-card graph-control-card--details">
-            {selectedEdge ? (
-              <GraphRelationDetails
-                selected={selectedEdge}
-                related={relatedRelationEdges}
-                nodesById={nodesById}
-                onSelectNode={onSelect}
-              />
-            ) : (
-              <GraphDetails
-                selected={selected}
-                paths={selectedPaths}
-                directRelationCount={selectedRelationCount}
-                isCore={selectedIsCore}
-                sourceLabels={sourceLabels}
-                onSelect={onSelect}
-              />
-            )}
-          </section>
-        ) : null}
-
-        {!fullscreen || fullscreenTab === "controls" ? (
           <div className="graph-control-sections">
 
         <ControlSection
           icon={<Filter size={17} />}
           title="筛选"
           description="范围、节点、来源与关系门槛"
-          defaultOpen={!fullscreen}
+          defaultOpen={false}
           resetKey={fullscreen}
         >
           <label className="graph-panel-search">
@@ -333,9 +281,6 @@ export function GraphControlPanel({
           description="按全局、局部与当前选择配置语义颜色"
           resetKey={fullscreen}
         >
-          <p className="graph-control-hint">
-            颜色不再依赖 Obsidian 分组规则；局部模式会强化相关内容，并按下方透明度虚化无关内容。
-          </p>
           <div className="graph-semantic-color-list">
             <ColorControl label="选中节点" value={preferences.appearance.colors.selectedNode} onChange={(selectedNode) => setColors({ selectedNode })} />
             <ColorControl label="相关节点" value={preferences.appearance.colors.relatedNode} onChange={(relatedNode) => setColors({ relatedNode })} />
@@ -359,7 +304,7 @@ export function GraphControlPanel({
           icon={<SlidersHorizontal size={17} />}
           title="外观"
           description="画布预设、节点、连线与标签"
-          defaultOpen={fullscreen}
+          defaultOpen
           resetKey={fullscreen}
         >
           <div className="graph-segmented" role="group" aria-label="画布预设">
@@ -424,7 +369,7 @@ export function GraphControlPanel({
           icon={<CircleGauge size={17} />}
           title="力度"
           description="本机实时物理模拟参数"
-          defaultOpen={fullscreen}
+          defaultOpen
           resetKey={fullscreen}
         >
           <div className="graph-layout-actions">
@@ -480,12 +425,8 @@ export function GraphControlPanel({
           {layoutStatus?.fallbackReason ? (
             <p className="graph-backend-warning">WebGPU 已回退：{layoutStatus.fallbackReason}</p>
           ) : null}
-          <p className="graph-control-hint">
-            优先使用 WebGPU 布局与 PixiJS WebGL 渲染；GPU 不可用时回退 Worker，SVG 仅作为最后兼容层。浏览器不能强制指定独立显卡。
-          </p>
         </ControlSection>
           </div>
-        ) : null}
       </div>
     </aside>
   );
@@ -510,9 +451,9 @@ function ControlSection({
   useEffect(() => setOpen(defaultOpen), [defaultOpen, resetKey]);
   return (
     <section className={`graph-control-card ${open ? "is-open" : ""}`}>
-      <button className="graph-control-card__toggle" type="button" onClick={() => setOpen((value) => !value)}>
+      <button className="graph-control-card__toggle" type="button" title={description} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <span className="graph-control-card__icon">{icon}</span>
-        <span><strong>{title}</strong><small>{description}</small></span>
+        <span><strong>{title}</strong></span>
         <ChevronDown size={16} />
       </button>
       {open ? <div className="graph-control-card__body">{children}</div> : null}

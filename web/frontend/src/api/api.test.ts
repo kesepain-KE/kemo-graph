@@ -200,19 +200,6 @@ describe("management API", () => {
     expect(new Headers(init.headers).has("Content-Type")).toBe(false);
   });
 
-  it("empties the recycle bin through the destructive maintenance endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      response({ deleted: 3, forced: true }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(api.emptyRecycle()).resolves.toEqual({ deleted: 3, forced: true });
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("/api/v1/maintenance/recycle");
-    expect(init.method).toBe("DELETE");
-  });
-
   it("checks and applies GitHub updates through the maintenance API", async () => {
     const updateStatus = {
       current_version: "1.0.0",
@@ -230,7 +217,7 @@ describe("management API", () => {
       restart_required: false,
       error: null,
       repository_url: "https://github.com/kesepain-KE/kemo-graph",
-      version_url: "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.json",
+      version_url: "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.yaml",
     };
     const updateJob = {
       job_id: "update-1",

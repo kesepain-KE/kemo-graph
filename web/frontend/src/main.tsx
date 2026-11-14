@@ -8,6 +8,7 @@ import { SearchSessionProvider } from "./context/SearchSessionContext";
 import "./styles/global.css";
 import "./styles/pages.css";
 import "./styles/graph.css";
+import "./styles/graph-studio.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

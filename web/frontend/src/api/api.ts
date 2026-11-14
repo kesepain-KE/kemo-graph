@@ -3,6 +3,7 @@ import type {
   QueryProgressData,
   ApiEnvelope,
   ConfigData,
+  ModelCatalogData,
   DeleteDocumentData,
   DocumentBatchDeleteData,
   DocumentContentData,
@@ -11,11 +12,14 @@ import type {
   LibraryData,
   LibraryEntry,
   OriginalPreview,
+  ProcessedDocument,
   LogCategory,
   RuntimeLogs,
   FullGraphData,
   GlobalQueryData,
   GraphNeighborhoodData,
+  GraphNodeDetails,
+  GraphNodeSearchData,
   GraphQueryData,
   GraphVisualizationEdgesData,
   GraphVisualizationMetaData,
@@ -27,7 +31,6 @@ import type {
   MaintenanceJob,
   MaintenanceJobListData,
   RagQueryData,
-  RecycleCleanupData,
   RestartData,
   RuntimeStatusData,
   SearchCacheClearData,
@@ -270,6 +273,16 @@ export const api = {
   },
   graphVisualizationMeta: () =>
     request<GraphVisualizationMetaData>("/graph/visualization/meta"),
+  searchGraphNodes: (query: string, offset = 0, signal?: AbortSignal) =>
+    request<GraphNodeSearchData>(`/graph/search?${new URLSearchParams({ query, offset: String(offset), limit: "20" })}`, { signal }),
+  getNode: (nodeId: string, signal?: AbortSignal) =>
+    request<GraphNodeDetails>(`/nodes/${encodeURIComponent(nodeId)}`, { signal }),
+  updateNodeSummary: (nodeId: string, summary: string, expectedSummary: string) =>
+    request<GraphNodeDetails>(`/nodes/${encodeURIComponent(nodeId)}`, {
+      method: "PATCH", body: JSON.stringify({ summary, expected_summary: expectedSummary }),
+    }),
+  deleteNode: (nodeId: string) =>
+    request<{ deleted_node_id: string }>(`/nodes/${encodeURIComponent(nodeId)}`, { method: "DELETE" }),
   graphVisualizationNodes: (
     page = 1,
     pageSize = 1000,
@@ -337,20 +350,20 @@ export const api = {
     request<LibraryEntry>("/library/entries", { method: "POST", body: JSON.stringify({ directory, name, kind }) }),
   moveLibraryEntry: (path: string, destination: string) =>
     request<{ path: string }>("/library/entries", { method: "PATCH", body: JSON.stringify({ path, destination }) }),
+  transferLibraryEntry: (path: string, directory: string, mode: "copy" | "cut", conflict: "error" | "keep_both" = "error") =>
+    request<{ path: string }>("/library/transfer", {
+      method: "POST", body: JSON.stringify({ path, directory, mode, conflict }), timeoutMs: null,
+    }),
   deleteLibraryEntry: (path: string) =>
     request<{ deleted: string }>("/library/entries", { method: "DELETE", body: JSON.stringify({ path }), timeoutMs: null }),
-  buildLibraryEntry: (path: string) =>
-    request<MaintenanceJob>("/library/build", { method: "POST", body: JSON.stringify({ path }), timeoutMs: null }),
+  buildLibraryEntry: (path: string, reprocess = false) =>
+    request<MaintenanceJob>("/library/build", { method: "POST", body: JSON.stringify({ path, reprocess }) }),
   previewOriginal: (path: string, signal?: AbortSignal) =>
     request<OriginalPreview>(`/library/preview?${new URLSearchParams({ path })}`, { signal }),
   originalUrl: (path: string, download = false) =>
     `${API_BASE}/library/original?${new URLSearchParams({ path, download: String(download) })}`,
   sourceLocation: (sourceId: string) =>
     request<{ path: string }>(`/documents/${encodeURIComponent(sourceId)}/source`),
-  emptyRecycle: () =>
-    request<RecycleCleanupData>("/maintenance/recycle", {
-      method: "DELETE",
-    }),
   getDocuments: (
     page = 1,
     pageSize = 20,
@@ -380,6 +393,17 @@ export const api = {
     request<DocumentContentData>(
       `/documents/${encodeURIComponent(sourceId)}/content`,
     ),
+  getProcessedDocument: (sourceId: string, signal?: AbortSignal) =>
+    request<ProcessedDocument>(`/documents/${encodeURIComponent(sourceId)}/processed`, { signal }),
+  updateProcessedDocument: (sourceId: string, content: string, expectedContentHash: string) =>
+    request<ProcessedDocument & { changed: boolean }>(`/documents/${encodeURIComponent(sourceId)}/processed`, {
+      method: "PUT",
+      body: JSON.stringify({ content, expected_content_hash: expectedContentHash }),
+    }),
+  rebuildDocument: (sourceId: string) =>
+    request<MaintenanceJob>(`/documents/${encodeURIComponent(sourceId)}/rebuild`, { method: "POST" }),
+  retryFailedBuilds: () =>
+    request<MaintenanceJob>("/build/retry-failed", { method: "POST" }),
   updateDocumentContent: (
     sourceId: string,
     content: string,
@@ -411,6 +435,8 @@ export const api = {
       },
     ),
   getConfig: () => request<ConfigData>("/config"),
+  getModels: (signal?: AbortSignal) =>
+    request<ModelCatalogData>("/config/models", { signal }),
   saveConfig: (config: ConfigData) =>
     request<ConfigData>("/config", {
       method: "PUT",

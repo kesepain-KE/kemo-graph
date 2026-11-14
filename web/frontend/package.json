@@ -1,7 +1,7 @@
 {
   "name": "kemo-graph-frontend",
   "private": true,
-  "version": "1.6.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@file-viewer/react": "^3.3.3",
+    "@file-viewer/renderer-pdf": "^3.3.3",
+    "@file-viewer/renderer-presentation": "^3.3.3",
+    "@file-viewer/renderer-word": "^3.3.3",
     "katex": "^0.16.47",
     "lucide-react": "^0.468.0",
     "mermaid": "^11.17.2",
@@ -27,6 +31,7 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
+    "@file-viewer/vite-plugin": "^3.3.3",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

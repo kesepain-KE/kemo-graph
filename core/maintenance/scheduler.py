@@ -12,7 +12,8 @@ LOGGER = logging.getLogger(__name__)
 class MaintenanceService(Protocol):
     """调度器依赖的最小知识库服务接口。"""
 
-    settings: AppConfig
+    @property
+    def settings(self) -> AppConfig: ...
 
     def generate_group_summaries(self) -> dict[str, Any]: ...
 

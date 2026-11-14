@@ -63,6 +63,7 @@ export class PixiGraphRenderer implements GraphRenderer {
   private scene: GraphRenderScene | null = null;
   private zoom = 1;
   private pan: ScreenPoint = { x: 0, y: 0 };
+  private panMode = false;
   private drag: DragState | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private readonly nodeContainers = new Map<string, Container>();
@@ -238,6 +239,10 @@ export class PixiGraphRenderer implements GraphRenderer {
     this.applyViewport();
   }
 
+  setPanMode(enabled: boolean): void {
+    this.panMode = enabled;
+  }
+
   destroy(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
@@ -312,7 +317,7 @@ export class PixiGraphRenderer implements GraphRenderer {
   };
 
   private readonly handleStagePointerTap = (event: FederatedPointerEvent) => {
-    if (!this.scene || !this.callbacks?.onSelectEdge || !this.app) return;
+    if (this.panMode || !this.scene || !this.callbacks?.onSelectEdge || !this.app) return;
     const point = this.world.toLocal(event.global);
     const positions = this.positions();
     const worldScale = Math.max(0.0001, this.world.scale.x);
@@ -625,6 +630,7 @@ export class PixiGraphRenderer implements GraphRenderer {
       container.addChild(label);
     }
     container.on("pointerdown", (event: FederatedPointerEvent) => {
+      if (this.panMode) return;
       event.stopPropagation();
       this.drag = { kind: "node", nodeId: node.node_id };
       const activePosition = this.manualPositions.get(node.node_id)

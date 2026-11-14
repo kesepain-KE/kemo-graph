@@ -93,6 +93,28 @@ export type GraphVisualizationNode = GraphNode & {
   group_ids: string[];
 };
 
+export type GraphNodeDetails = GraphNode & {
+  sources: Array<{
+    source_id: string;
+    source_path: string | null;
+    original_path: string | null;
+    relative_path: string | null;
+    exists_status: string | null;
+    evidence: string | null;
+  }>;
+  relations: GraphEdge[];
+  groups: GraphGroup[];
+};
+
+export type GraphNodeSearchData = {
+  query: string;
+  engine: string;
+  total: number;
+  limit: number;
+  offset: number;
+  nodes: Array<GraphNode & { rank: number; snippet: string }>;
+};
+
 export type GraphVisualizationMetaData = {
   revision: string;
   node_count: number;
@@ -237,14 +259,8 @@ export type IngestData = {
 export type DeleteDocumentData = {
   deleted_source_id: string;
   relative_path: string;
-  recycled_path: string | null;
   graph_deleted: boolean;
   rag_deleted: boolean;
-};
-
-export type RecycleCleanupData = {
-  deleted: number;
-  forced: boolean;
 };
 
 export type QueryProgressStep = {
@@ -257,6 +273,20 @@ export type QueryProgressData = {
   available: boolean;
   status?: "running" | "completed" | "failed";
   steps: QueryProgressStep[];
+};
+
+export type DocumentBuildStep = {
+  step: string;
+  label: string;
+  status: "processing" | "completed" | "failed";
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type DocumentBuild = {
+  content_hash: string;
+  steps: DocumentBuildStep[];
 };
 
 export type DocumentRecord = {
@@ -273,6 +303,21 @@ export type DocumentRecord = {
   exists_status?: "active" | "missing" | "deleted";
   created_at?: string | null;
   updated_at?: string | null;
+  builds?: Partial<Record<"graph" | "rag", DocumentBuild>>;
+};
+
+export type ProcessedDocument = {
+  source_id: string;
+  source_path: string | null;
+  original_path: string;
+  relative_path: string;
+  processed_path: string;
+  size: number;
+  modified_at: string;
+  content_hash: string;
+  content: string;
+  graph_status: DocumentRecord["graph_status"];
+  rag_status: DocumentRecord["rag_status"];
 };
 
 export type DocumentListData = {
@@ -348,13 +393,24 @@ export type ImportData = {
 
 export type ConfigData = Record<string, unknown>;
 
+export type ModelTask = "llm" | "embedding" | "rerank";
+
+export type GatewayModel = {
+  id: string;
+  provider_id: string;
+  task: ModelTask | "unknown";
+};
+
+export type ModelCatalogData = {
+  models: GatewayModel[];
+};
+
 export type MaintenanceJobKind =
   | "ingest"
   | "organize_graph"
   | "rebuild_knowledge_base"
   | "rebuild_all"
   | "summarize"
-  | "cleanup_recycle"
   | "update";
 
 export type UpdateStatusData = {
@@ -439,7 +495,8 @@ export type OriginalPreview = {
   name: string;
   size: number;
   editable: boolean;
-  mode: "markdown" | "text" | "html" | "pdf" | "image" | "download";
+  mode: "markdown" | "text" | "html" | "pdf" | "office" | "image" | "download";
+  format?: string;
   content?: string;
   content_hash?: string;
   html?: string;

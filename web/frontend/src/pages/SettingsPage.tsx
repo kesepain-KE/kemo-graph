@@ -1,6 +1,7 @@
 import {
   CheckCircle2,
-  ChevronRight,
+  CircleHelp,
+  Cpu,
   Database,
   Download,
   History,
@@ -10,19 +11,22 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Scissors,
   ServerCog,
   Tag,
-  Trash2,
+  TextSearch,
+  Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api/api";
 import { ErrorNotice, InfoNotice, LoadingState } from "../components/Feedback";
+import { ModelPicker } from "../components/ModelPicker";
 import { PageIntro } from "../components/PageIntro";
 import { ThemedSelect } from "../components/ThemedSelect";
-import type { ConfigData, UpdateStatusData } from "../types/api";
+import type { ConfigData, ModelCatalogData, ModelTask, UpdateStatusData } from "../types/api";
 
-type FieldKind = "boolean" | "number" | "password" | "select" | "text" | "time";
+type FieldKind = "boolean" | "model" | "number" | "password" | "select" | "text" | "time";
 
 type FieldOption = {
   label: string;
@@ -42,6 +46,7 @@ type ConfigField = {
   optional?: boolean;
   readOnly?: boolean;
   placeholder?: string;
+  modelTask?: ModelTask;
 };
 
 const BOOLEAN_OPTIONS = [
@@ -51,7 +56,7 @@ const BOOLEAN_OPTIONS = [
 
 type ConfigSection = {
   title: string;
-  description: string;
+  description?: string;
   fields: ConfigField[];
 };
 
@@ -60,34 +65,98 @@ type ConfigGroup = {
   title: string;
   description: string;
   icon: typeof Network;
-  tone: "cyan" | "amber" | "purple" | "blue";
   sections: ConfigSection[];
 };
 
 const groups: ConfigGroup[] = [
   {
-    id: "graph",
-    title: "图谱参数",
-    description: "检索深度、实体抽取与智能体限制",
-    icon: Network,
-    tone: "cyan",
+    id: "gateway",
+    title: "网关连接",
+    description: "地址、密钥与超时",
+    icon: KeyRound,
     sections: [
       {
-        title: "图谱检索与展示",
-        description: "控制查询扩展范围、命中门槛和前端图谱的加载规模。",
+        title: "连接设置",
         fields: [
-          { path: "max_query_depth", label: "最大查询深度", description: "图谱查询允许扩展的最大 BFS 层数。", kind: "number", min: 1, max: 10, step: 1, suffix: "层" },
-          { path: "default_confidence", label: "默认置信度", description: "实体匹配与图谱检索的默认最低置信度。", kind: "number", min: 0, max: 1, step: 0.05 },
-          { path: "web_node_load_depth", label: "网页节点加载深度", description: "打开图谱页面时默认加载的邻居层数。", kind: "number", min: 0, max: 10, step: 1, suffix: "层" },
-          { path: "web_node_label_threshold", label: "节点标签阈值", description: "达到此引用次数的节点优先显示标签。", kind: "number", min: 0, step: 1, suffix: "次引用" },
+          { path: "kemo.base_url", label: "网关 Base URL", description: "Kemo Gateway 的根地址。", kind: "text" },
+          { path: "kemo.request_timeout", label: "请求超时", description: "单次 Kemo 模型请求的最长等待时间。", kind: "number", min: 1, step: 1, suffix: "秒" },
         ],
       },
       {
-        title: "实体抽取智能体",
-        description: "控制文档整理时的实体抽取方式和工具调用上限。",
+        title: "访问认证",
+        fields: [
+          { path: "kemo.api_key", label: "API Key", description: "配置网关访问密钥；已保存的密钥以掩码显示。", kind: "password", optional: true, placeholder: "输入 API Key" },
+          { path: "kemo.protocol_version", label: "协议版本", description: "当前网关严格使用 Kemo 2.0 协议，只读显示。", kind: "text", readOnly: true },
+        ],
+      },
+    ],
+  },
+  {
+    id: "models",
+    title: "模型配置",
+    description: "模型、维度与批量",
+    icon: Cpu,
+    sections: [
+      {
+        title: "模型选择",
+        description: "保存网关后自动获取模型，也可手动填写。",
+        fields: [
+          { path: "models.llm", label: "LLM 模型", description: "用于实体抽取、图谱构建和总结生成。", kind: "model", modelTask: "llm" },
+          { path: "models.embedding", label: "Embedding 模型", description: "用于生成文档和查询向量。", kind: "model", modelTask: "embedding" },
+          { path: "models.rerank", label: "Rerank 模型", description: "用于对向量召回候选进行相关性重排。", kind: "model", modelTask: "rerank" },
+        ],
+      },
+      {
+        title: "向量生成",
+        description: "修改向量维度后需重建索引。",
+        fields: [
+          { path: "models.embedding_dimensions", label: "向量维度", description: "模型返回的向量长度；修改后需要重建向量索引。", kind: "number", min: 1, step: 1, suffix: "维" },
+          { path: "embedding_batch_size", label: "Embedding 单批数量", description: "每次发送给网关的最大切片数；实际值不会超过模型能力上限。", kind: "number", min: 1, max: 256, step: 1, suffix: "条" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "chunking",
+    title: "文档切片",
+    description: "切分方式与粒度",
+    icon: Scissors,
+    sections: [
+      {
+        title: "切分方式",
+        fields: [
+          { path: "chunking_mode", label: "切片模式", description: "语义分层模式以 LLM 边界为叶子，再建立中、大粒度父级。", kind: "select", options: [{ label: "LLM 语义分层（推荐）", value: "semantic_hierarchical" }, { label: "LLM 单层语义切片", value: "llm" }, { label: "机械分层切片", value: "hierarchical" }, { label: "固定切片", value: "fixed" }] },
+          { path: "chunking_llm_max_input_chars", label: "LLM 切分输入上限", description: "长文档会先按自然边界预切，再逐段请求 LLM 选择语义边界。", kind: "number", min: 2000, max: 50000, step: 100, suffix: "字符" },
+        ],
+      },
+      {
+        title: "片段大小与重叠",
+        description: "分层切片需满足：小 < 中 < 大。",
+        fields: [
+          { path: "chunk_small_size", label: "小粒度切片", description: "负责关键词、实体和精确片段召回。", kind: "number", min: 64, max: 2048, step: 1, suffix: "tokens" },
+          { path: "chunk_size", label: "中粒度切片", description: "负责段落级语义与命中后的主要上下文。", kind: "number", min: 128, max: 4096, step: 1, suffix: "tokens" },
+          { path: "chunk_large_size", label: "大粒度切片", description: "负责章节主题召回和较完整的上下文。", kind: "number", min: 256, max: 8192, step: 1, suffix: "tokens" },
+          { path: "chunk_overlap", label: "中粒度重叠", description: "中粒度的重叠 token 数；分层模式会按相同比例计算其他层级。", kind: "number", min: 0, max: 512, step: 1, suffix: "tokens" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "graph-build",
+    title: "图谱构建",
+    description: "实体、关系与摘要",
+    icon: Workflow,
+    sections: [
+      {
+        title: "实体抽取",
         fields: [
           { path: "entity_extraction.method", label: "实体抽取方式", description: "LLM 模式使用模型理解语义；规则模式适合轻量处理。", kind: "select", options: [{ label: "LLM 智能抽取", value: "llm" }, { label: "规则抽取", value: "rule" }] },
           { path: "entity_extraction.max_entities", label: "单次最大实体数", description: "每次查询或抽取最多保留的实体数量。", kind: "number", min: 1, max: 100, step: 1, suffix: "个" },
+        ],
+      },
+      {
+        title: "构建策略",
+        fields: [
           { path: "graph_build_mode", label: "图谱构建模式", description: "自动模式优先使用结构化输出；工具模式适合需要逐步检索和写入的网关。", kind: "select", options: [{ label: "自动（推荐）", value: "auto" }, { label: "结构化输出", value: "structured" }, { label: "工具调用", value: "tools" }] },
           { path: "graph_extract_granularity", label: "图谱抽取颗粒度", description: "默认采用粗粒度，只保留稳定主题和关键关系；细粒度会显著增加节点与关系数量。", kind: "select", options: [{ label: "粗粒度（推荐，较少节点）", value: "large" }, { label: "标准", value: "medium" }, { label: "细粒度（更多节点）", value: "small" }] },
           { path: "graph_extract_chunk_size", label: "图谱基准分段大小", description: "颗粒度档位以此字符数为基准；调整后需要重新整理文档才能生效。", kind: "number", min: 2000, max: 100000, step: 500, suffix: "字符" },
@@ -95,49 +164,58 @@ const groups: ConfigGroup[] = [
           { path: "graph_tool_max_iterations", label: "工具调用最大轮次", description: "图谱构建智能体在单篇文档中的最大工具循环次数。", kind: "number", min: 1, max: 200, step: 1, suffix: "轮" },
         ],
       },
+      {
+        title: "节点群摘要",
+        fields: [
+          { path: "summary_trigger_file_count", label: "摘要触发文件数", description: "累计达到此数量后触发群组摘要生成。", kind: "number", min: 1, step: 1, suffix: "篇" },
+          { path: "summary_trigger_time", label: "每日摘要时间", description: "后台调度器每日运行群组摘要任务的本地时间。", kind: "time" },
+        ],
+      },
     ],
   },
   {
-    id: "rag",
-    title: "RAG 参数",
-    description: "切片、向量召回、重排与混合增强",
-    icon: Database,
-    tone: "amber",
+    id: "query-planning",
+    title: "查询规划",
+    description: "改写、拆分与融合",
+    icon: TextSearch,
     sections: [
       {
-        title: "切片与向量召回",
-        description: "定义固定、分层或 LLM 保真语义切片，以及向量候选参数。",
-        fields: [
-          { path: "chunking_mode", label: "切片模式", description: "语义分层模式以 LLM 边界为叶子，再建立中、大粒度父级。", kind: "select", options: [{ label: "LLM 语义分层（推荐）", value: "semantic_hierarchical" }, { label: "LLM 单层语义切片", value: "llm" }, { label: "机械分层切片", value: "hierarchical" }, { label: "固定切片", value: "fixed" }] },
-          { path: "chunking_llm_max_input_chars", label: "LLM 切分输入上限", description: "长文档会先按自然边界预切，再逐段请求 LLM 选择语义边界。", kind: "number", min: 2000, max: 50000, step: 100, suffix: "字符" },
-          { path: "chunk_small_size", label: "小粒度切片", description: "负责关键词、实体和精确片段召回。", kind: "number", min: 64, max: 2048, step: 1, suffix: "tokens" },
-          { path: "chunk_size", label: "中粒度切片", description: "负责段落级语义与命中后的主要上下文。", kind: "number", min: 128, max: 4096, step: 1, suffix: "tokens" },
-          { path: "chunk_large_size", label: "大粒度切片", description: "负责章节主题召回和较完整的上下文。", kind: "number", min: 256, max: 8192, step: 1, suffix: "tokens" },
-          { path: "chunk_overlap", label: "中粒度重叠", description: "中粒度的重叠 token 数；分层模式会按相同比例计算其他层级。", kind: "number", min: 0, max: 512, step: 1, suffix: "tokens" },
-          { path: "embedding_batch_size", label: "Embedding 单批数量", description: "每次发送给网关的最大切片数；实际值不会超过模型能力上限。", kind: "number", min: 1, max: 256, step: 1, suffix: "条" },
-          { path: "default_top_k", label: "默认召回数量", description: "向量检索默认取回的候选片段数量。", kind: "number", min: 1, step: 1, suffix: "条" },
-          { path: "rag_similarity_threshold", label: "相似度阈值", description: "低于该分数的向量候选不会进入结果集。", kind: "number", min: 0, max: 1, step: 0.05 },
-        ],
-      },
-      {
-        title: "查询理解与扩展",
-        description: "由 LLM 拆分复杂问题、生成受控同义表达，并通过多路向量召回提升命中率。",
+        title: "问题理解与扩展",
         fields: [
           { path: "query_planning.mode", label: "查询规划模式", description: "自动模式优先使用 LLM，失败时保留原始查询安全降级。", kind: "select", options: [{ label: "自动（推荐）", value: "auto" }, { label: "始终使用 LLM", value: "llm" }, { label: "仅规则规范化", value: "rule" }, { label: "关闭扩展", value: "off" }] },
           { path: "query_planning.max_rewrites", label: "最大改写数量", description: "最多生成的同义表达、别名和相关概念数量。", kind: "number", min: 0, max: 12, step: 1, suffix: "条" },
           { path: "query_planning.max_subqueries", label: "最大子问题数", description: "复杂多意图问题最多拆分出的独立检索问题数量。", kind: "number", min: 0, max: 8, step: 1, suffix: "条" },
           { path: "query_planning.max_total_queries", label: "查询总数上限", description: "包含原始问题在内，一次检索允许使用的查询向量总数。", kind: "number", min: 1, max: 16, step: 1, suffix: "条" },
           { path: "query_planning.semantic_drift_threshold", label: "语义漂移阈值", description: "扩展词与原始问题向量低于此相似度时会被丢弃。", kind: "number", min: -1, max: 1, step: 0.05 },
+        ],
+      },
+      {
+        title: "多路候选控制",
+        fields: [
           { path: "query_planning.candidate_pool_size", label: "候选池大小", description: "多路召回融合后送入 Rerank 的最大候选规模。", kind: "number", min: 5, max: 200, step: 5, suffix: "条" },
           { path: "query_planning.rrf_k", label: "RRF 平滑常数", description: "控制多路排名融合的平滑程度，普通用户建议保持默认。", kind: "number", min: 1, max: 1000, step: 1 },
           { path: "query_planning.low_confidence_rescue_count", label: "低置信度兜底数", description: "严格阈值无命中时最多保留的候选数量。", kind: "number", min: 0, max: 10, step: 1, suffix: "条" },
         ],
       },
+    ],
+  },
+  {
+    id: "retrieval",
+    title: "召回与重排",
+    description: "阈值、排序与增强",
+    icon: Database,
+    sections: [
       {
-        title: "重排与混合检索",
-        description: "控制 Rerank 结果规模和图谱锚定片段的增强幅度。",
+        title: "文档片段检索",
         fields: [
+          { path: "default_top_k", label: "默认召回数量", description: "向量检索默认取回的候选片段数量。", kind: "number", min: 1, step: 1, suffix: "条" },
+          { path: "rag_similarity_threshold", label: "相似度阈值", description: "低于该分数的向量候选不会进入结果集。", kind: "number", min: 0, max: 1, step: 0.05 },
           { path: "rerank_top_n", label: "重排保留数量", description: "Rerank 后最终保留的候选片段数量。", kind: "number", min: 1, step: 1, suffix: "条" },
+        ],
+      },
+      {
+        title: "混合与全局检索",
+        fields: [
           { path: "hybrid_enhancement_factor", label: "混合增强系数", description: "图谱锚定 chunk 的 FAISS 分数增强倍率。", kind: "number", min: 0, step: 0.1, suffix: "倍" },
           { path: "vector_search.entity_weight", label: "实体向量权重", description: "混合检索中实体摘要向量分数的乘数。", kind: "number", min: 0, max: 2, step: 0.1, suffix: "倍" },
           { path: "vector_search.entity_top_k", label: "实体召回数量", description: "混合检索最多返回的实体语义结果数。", kind: "number", min: 1, max: 100, step: 1, suffix: "个" },
@@ -148,32 +226,40 @@ const groups: ConfigGroup[] = [
     ],
   },
   {
-    id: "models",
-    title: "网关与模型",
-    description: "统一 Kemo 网关与三类模型选择",
-    icon: KeyRound,
-    tone: "purple",
+    id: "graph-view",
+    title: "图谱查询与展示",
+    description: "遍历范围与标签",
+    icon: Network,
     sections: [
       {
-        title: "Kemo 网关",
-        description: "所有模型能力统一通过此网关调用；配置文件密钥优先于环境变量。",
+        title: "图谱查询",
         fields: [
-          { path: "kemo.base_url", label: "网关 Base URL", description: "Kemo Gateway 的根地址。", kind: "text" },
-          { path: "kemo.api_key", label: "API Key", description: "显式密钥优先使用；已配置时显示掩码，清空并保存可回退到环境变量。", kind: "password", optional: true, placeholder: "未设置显式密钥" },
-          { path: "kemo.api_key_env", label: "API Key 环境变量", description: "显式密钥为空时，从此环境变量读取密钥。", kind: "text" },
-          { path: "kemo.api_key_source", label: "当前密钥来源", description: "由服务端根据实际可用密钥计算，只读显示。", kind: "text", readOnly: true },
-          { path: "kemo.protocol_version", label: "协议版本", description: "当前网关严格使用 Kemo 2.0 协议，只读显示。", kind: "text", readOnly: true },
-          { path: "kemo.request_timeout", label: "请求超时", description: "单次 Kemo 模型请求的最长等待时间。", kind: "number", min: 1, step: 1, suffix: "秒" },
+          { path: "max_query_depth", label: "最大查询深度", description: "图谱查询允许扩展的最大 BFS 层数。", kind: "number", min: 1, max: 10, step: 1, suffix: "层" },
+          { path: "default_confidence", label: "默认置信度", description: "实体匹配与图谱检索的默认最低置信度。", kind: "number", min: 0, max: 1, step: 0.05 },
         ],
       },
       {
-        title: "模型选择",
-        description: "三类模型共享上方网关和密钥，仅分别配置模型标识。",
+        title: "网页图谱展示",
         fields: [
-          { path: "models.llm", label: "LLM 模型", description: "用于实体抽取、图谱构建和总结生成。", kind: "text" },
-          { path: "models.embedding", label: "Embedding 模型", description: "用于生成文档和查询向量。", kind: "text" },
-          { path: "models.embedding_dimensions", label: "向量维度", description: "模型返回的向量长度；修改后需要重建向量索引。", kind: "number", min: 1, step: 1, suffix: "维" },
-          { path: "models.rerank", label: "Rerank 模型", description: "用于对向量召回候选进行相关性重排。", kind: "text" },
+          { path: "web_node_load_depth", label: "网页节点加载深度", description: "打开图谱页面时默认加载的邻居层数。", kind: "number", min: 0, max: 10, step: 1, suffix: "层" },
+          { path: "web_node_label_threshold", label: "节点标签阈值", description: "达到此引用次数的节点优先显示标签。", kind: "number", min: 0, step: 1, suffix: "次引用" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "cache",
+    title: "搜索缓存",
+    description: "复用、容量与清理",
+    icon: History,
+    sections: [
+      {
+        title: "缓存策略",
+        description: "清理缓存不影响知识文件。",
+        fields: [
+          { path: "search_cache_enabled", label: "启用搜索缓存", description: "CLI、API 与网页端共享同一份服务端搜索缓存。", kind: "boolean" },
+          { path: "search_cache_max_entries", label: "缓存记录上限", description: "超过上限时优先裁剪最久未访问的搜索结果。", kind: "number", min: 100, max: 100000, step: 100, suffix: "条" },
+          { path: "search_cache_max_bytes", label: "缓存空间上限", description: "缓存结果正文允许占用的最大总字节数。", kind: "number", min: 1048576, step: 1048576, suffix: "字节" },
         ],
       },
     ],
@@ -181,26 +267,27 @@ const groups: ConfigGroup[] = [
   {
     id: "system",
     title: "系统维护",
-    description: "文档容量、定时任务、回收站与日志",
+    description: "存储、日志与服务",
     icon: ServerCog,
-    tone: "blue",
     sections: [
       {
-        title: "知识库维护",
-        description: "控制文档容量以及摘要和回收站后台任务。",
+        title: "文档容量",
         fields: [
           { path: "max_documents", label: "最大文档数", description: "知识库允许管理的最大文档数量。", kind: "number", min: 1, step: 1, suffix: "篇" },
-          { path: "summary_trigger_file_count", label: "摘要触发文件数", description: "累计达到此数量后触发群组摘要生成。", kind: "number", min: 1, step: 1, suffix: "篇" },
-          { path: "summary_trigger_time", label: "每日摘要时间", description: "后台调度器每日运行群组摘要任务的本地时间。", kind: "time" },
-          { path: "recycle_life_days", label: "回收站保留时间", description: "过期文件将在后台调度任务中自动清理。", kind: "number", min: 0, step: 1, suffix: "天" },
-          { path: "search_cache_enabled", label: "启用搜索缓存", description: "CLI、API 与网页端共享同一份服务端搜索缓存。", kind: "boolean" },
-          { path: "search_cache_max_entries", label: "缓存记录上限", description: "超过上限时优先裁剪最久未访问的搜索结果。", kind: "number", min: 100, max: 100000, step: 100, suffix: "条" },
-          { path: "search_cache_max_bytes", label: "缓存空间上限", description: "缓存结果正文允许占用的最大总字节数。", kind: "number", min: 1048576, step: 1048576, suffix: "字节" },
+        ],
+      },
+      {
+        title: "运行路径与监听地址",
+        description: "相对路径以项目目录为准；修改后需重启服务。",
+        fields: [
+          { path: "data_dir", label: "索引与数据目录", description: "保存数据库、索引及任务状态。修改后请重启服务。", kind: "text" },
+          { path: "external_dir", label: "预处理文档目录", description: "保存用于构建的 Markdown 映射文件。修改后请重启服务。", kind: "text" },
+          { path: "web.host", label: "监听地址", description: "Web 服务绑定的主机地址。", kind: "text" },
+          { path: "web.port", label: "监听端口", description: "Web 服务端口，范围 1–65535。", kind: "number", min: 1, max: 65535, step: 1 },
         ],
       },
       {
         title: "运行日志",
-        description: "设置日志目录和最低记录级别。",
         fields: [
           { path: "log_dir", label: "日志目录", description: "相对于项目根目录的日志输出位置。", kind: "text" },
           { path: "log_level", label: "日志级别", description: "只记录此级别及以上的运行信息。", kind: "select", options: ["DEBUG", "INFO", "WARNING", "ERROR"].map((value) => ({ label: value, value })) },
@@ -215,17 +302,6 @@ function getConfigValue(config: ConfigData, path: string): unknown {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     return (value as Record<string, unknown>)[key];
   }, config);
-}
-
-function getFieldDisplayValue(config: ConfigData, field: ConfigField): unknown {
-  const value = getConfigValue(config, field.path);
-  if (field.path !== "kemo.api_key_source") return value;
-  if (value === "config") return "配置文件（优先）";
-  if (value === "environment") {
-    const environmentName = getConfigValue(config, "kemo.api_key_env");
-    return `环境变量 ${typeof environmentName === "string" ? environmentName : ""}`.trim();
-  }
-  return "未配置";
 }
 
 function setConfigValue(config: ConfigData, path: string, value: unknown): ConfigData {
@@ -293,10 +369,13 @@ function validateConfig(config: ConfigData): string | null {
 export function SettingsPage() {
   const [config, setConfig] = useState<ConfigData | null>(null);
   const [savedConfig, setSavedConfig] = useState<ConfigData | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogData | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsRevision, setModelsRevision] = useState(0);
   const [activeGroupId, setActiveGroupId] = useState(groups[0].id);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [emptyingRecycle, setEmptyingRecycle] = useState(false);
   const [clearingCache, setClearingCache] = useState<"all" | "stale" | null>(null);
   const [restartingService, setRestartingService] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatusData | null>(null);
@@ -312,6 +391,9 @@ export function SettingsPage() {
     () => Boolean(config && savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig)),
     [config, savedConfig],
   );
+  const gatewayDirty = Boolean(config && savedConfig
+    && JSON.stringify(config.kemo) !== JSON.stringify(savedConfig.kemo));
+  const catalogError = gatewayDirty ? "网关连接有未保存的修改，请保存配置后更新模型列表。" : modelsError;
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -334,6 +416,27 @@ export function SettingsPage() {
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    if (!savedConfig) return;
+    const controller = new AbortController();
+    setModelCatalog(null);
+    setModelsError(null);
+    if (getConfigValue(savedConfig, "kemo.api_key_source") === "none") {
+      setModelsLoading(false);
+      setModelsError("请先在「网关连接」中配置并保存 API Key。");
+      return;
+    }
+    setModelsLoading(true);
+    void api.getModels(controller.signal).then((data) => {
+      if (!controller.signal.aborted) setModelCatalog(data);
+    }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) setModelsError(caught instanceof Error ? caught.message : "无法读取上游模型列表");
+    }).finally(() => {
+      if (!controller.signal.aborted) setModelsLoading(false);
+    });
+    return () => controller.abort();
+  }, [savedConfig, modelsRevision]);
 
 
   useEffect(() => {
@@ -368,7 +471,7 @@ export function SettingsPage() {
       const responseConfig = await api.saveConfig(config);
       setConfig(responseConfig);
       setSavedConfig(responseConfig);
-      setNotice("配置已写入后端 config.json，新请求将使用最新参数。");
+      setNotice("配置已写入后端 config.yaml，新请求将使用最新参数。");
       setSaved(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "保存配置失败");
@@ -383,24 +486,6 @@ export function SettingsPage() {
     setSaved(false);
     setNotice(null);
     setError(null);
-  };
-
-  const emptyRecycle = async () => {
-    if (!window.confirm("确认永久清空回收站？其中的全部文件将被删除，且无法恢复。")) {
-      return;
-    }
-
-    setEmptyingRecycle(true);
-    setNotice(null);
-    setError(null);
-    try {
-      const result = await api.emptyRecycle();
-      setNotice(`回收站已清空，共永久删除 ${result.deleted} 个文件。`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "清空回收站失败");
-    } finally {
-      setEmptyingRecycle(false);
-    }
   };
 
   const clearSearchCache = async (staleOnly: boolean) => {
@@ -501,7 +586,6 @@ export function SettingsPage() {
     <section className="settings-page page-stack">
       <PageIntro
         title="系统配置"
-        description="通过结构化字段管理图谱、RAG、Kemo 网关、模型与系统维护参数。"
         actions={
           <button className="button button--secondary" disabled={loading || saving} onClick={() => void loadConfig()}>
             <RotateCcw className={loading ? "spin" : ""} size={16} />重新读取
@@ -516,60 +600,86 @@ export function SettingsPage() {
             {error ? <ErrorNotice message={error} /> : null}
           </div>
         ) : null}
-        {loading ? <div className="card"><LoadingState label="正在读取 config.json…" /></div> : null}
+        {loading ? <div className="card"><LoadingState label="正在读取配置…" /></div> : null}
 
         {!loading && config ? (
           <div className="settings-layout">
-          <aside className="settings-nav card" aria-label="配置分组">
-            {groups.map(({ id, title, description, icon: Icon, tone }) => (
-              <button
-                className={`settings-nav__item tone-${tone} ${activeGroup.id === id ? "is-active" : ""}`}
-                key={id}
-                onClick={() => setActiveGroupId(id)}
-              >
-                <span className="settings-nav__icon"><Icon size={18} /></span>
-                <span><strong>{title}</strong><small>{description}</small></span>
-                <ChevronRight size={15} />
-              </button>
-            ))}
+          <aside className="settings-nav" aria-label="配置分组">
+            <div className="settings-nav__header"><strong>配置分组</strong><small>{groups.length} 组</small></div>
+            <div className="settings-nav__list">
+              {groups.map(({ id, title, description, icon: Icon, sections }) => (
+                <button
+                  className={`settings-nav__item ${activeGroup.id === id ? "is-active" : ""}`}
+                  key={id}
+                  type="button"
+                  aria-label={title}
+                  aria-pressed={activeGroup.id === id}
+                  aria-controls="settings-panel"
+                  onClick={() => setActiveGroupId(id)}
+                >
+                  <span className="settings-nav__icon"><Icon size={17} /></span>
+                  <span><strong>{title}</strong><small>{description}</small></span>
+                  <span className="settings-nav__count" aria-hidden="true">{sections.reduce((count, section) => count + section.fields.length, 0)}</span>
+                </button>
+              ))}
+            </div>
           </aside>
 
-          <div className="settings-content card">
+          <div className="settings-content">
             <div className="settings-save-bar">
               <div>
-                <strong>{dirty ? "有尚未保存的修改" : "配置已与服务端同步"}</strong>
-                <span>{dirty ? "检查修改后保存，未知配置字段会原样保留。" : "选择左侧分组以查看和调整参数。"}</span>
+                <h2 id="settings-active-title">{activeGroup.title}</h2>
+                <span role="status">{dirty ? "有未保存修改" : "已保存"}</span>
               </div>
               <div className="settings-save-actions">
-                <button className="button button--secondary" disabled={saving || !dirty} onClick={reset}>
+                <button className="button button--secondary" disabled={saving || !dirty} onClick={reset} title="恢复所有分组到上次保存的配置">
                   <RotateCcw size={16} />恢复已保存
                 </button>
-                <button className="button button--primary" disabled={saving || !dirty} onClick={() => void save()}>
+                <button className="button button--primary" disabled={saving || !dirty} onClick={() => void save()} title="保存全部分组的配置">
                   {saved ? <CheckCircle2 size={16} /> : <Save size={16} />}
-                  {saving ? "保存中" : saved ? "已保存" : "保存配置"}
+                  {saving ? "保存中" : saved ? "已保存" : "保存全部"}
                 </button>
               </div>
             </div>
 
-            <section ref={panelRef} className={`settings-panel tone-${activeGroup.tone}`}>
+            <section ref={panelRef} className="settings-panel" id="settings-panel" aria-labelledby="settings-active-title">
               {activeGroup.sections.map((section) => (
                 <div className="settings-section" key={section.title}>
                   <div className="settings-section__title">
                     <h3>{section.title}</h3>
-                    <p>{section.description}</p>
+                    {section.description && <p>{section.description}</p>}
+                    {activeGroup.id === "models" && section.title === "模型选择" ? (
+                      <small className={`settings-model-summary ${catalogError ? "is-error" : ""}`} role="status">
+                        {catalogError ?? (modelsLoading ? "正在获取模型…" : `${modelCatalog?.models.length ?? 0} 个可用模型`)}
+                      </small>
+                    ) : null}
                   </div>
                   <div className="settings-field-list">
                     {section.fields.map((field) => {
-                      const value = getFieldDisplayValue(config, field);
+                      const value = getConfigValue(config, field.path);
                       return (
                         <div className={`settings-field ${field.readOnly ? "is-readonly" : ""}`} key={field.path}>
-                          <span className="settings-field__meta">
-                            <strong>{field.label}</strong>
-                            <small>{field.description}</small>
-                            <code>{field.path}</code>
-                          </span>
-                          <span className="settings-control">
-                            {field.kind === "select" || field.kind === "boolean" ? (
+                          <div className="settings-field__meta">
+                            <details className="settings-field-help">
+                              <summary aria-label={`${field.label}说明`} title="查看参数说明">
+                                <strong>{field.label}</strong><CircleHelp size={14} aria-hidden="true" />
+                              </summary>
+                              <p>{field.description}</p>
+                            </details>
+                          </div>
+                          <div className={`settings-control ${field.suffix ? "has-suffix" : ""}`}>
+                            {field.kind === "model" && field.modelTask ? (
+                              <ModelPicker
+                                label={field.label}
+                                task={field.modelTask}
+                                value={typeof value === "string" ? value : ""}
+                                models={gatewayDirty ? [] : modelCatalog?.models ?? []}
+                                loading={modelsLoading && !gatewayDirty}
+                                error={catalogError}
+                                onChange={(nextValue) => updateField(field, nextValue)}
+                                onRefresh={gatewayDirty ? undefined : () => setModelsRevision((revision) => revision + 1)}
+                              />
+                            ) : field.kind === "select" || field.kind === "boolean" ? (
                               <ThemedSelect
                                 ariaLabel={field.label}
                                 value={field.kind === "boolean" ? String(Boolean(value)) : typeof value === "string" ? value : ""}
@@ -595,15 +705,44 @@ export function SettingsPage() {
                               />
                             )}
                             {field.suffix ? <em>{field.suffix}</em> : null}
-                          </span>
+                          </div>
                         </div>
                       );
                     })}
                   </div>
                 </div>
               ))}
+              {activeGroup.id === "cache" ? (
+                <div className="settings-cache-zone" role="group" aria-label="搜索缓存维护">
+                  <span className="settings-cache-zone__icon"><History size={17} /></span>
+                  <span>
+                    <strong>搜索缓存维护</strong>
+                  </span>
+                  <span className="settings-cache-zone__actions">
+                    <button
+                      className="button button--secondary"
+                      disabled={Boolean(clearingCache)}
+                      onClick={() => void clearSearchCache(true)}
+                      type="button"
+                    >
+                      {clearingCache === "stale" ? "清理中" : "清理过期"}
+                    </button>
+                    <button
+                      className="button button--danger"
+                      disabled={Boolean(clearingCache)}
+                      onClick={() => void clearSearchCache(false)}
+                      type="button"
+                    >
+                      {clearingCache === "all" ? "清空中" : "清空缓存"}
+                    </button>
+                  </span>
+                </div>
+              ) : null}
               {activeGroup.id === "system" ? (
-                <>
+                <div className="settings-maintenance settings-section">
+                  <div className="settings-section__title">
+                    <h3>维护操作</h3>
+                  </div>
                   <div className="settings-update-zone settings-version-zone">
                     <span className="settings-update-zone__icon"><Tag size={18} /></span>
                     <span className="settings-update-zone__content">
@@ -632,7 +771,7 @@ export function SettingsPage() {
                     <span className="settings-update-zone__icon"><Power size={18} /></span>
                     <span className="settings-update-zone__content">
                       <strong>服务重启</strong>
-                      <small>完整退出当前服务并启动新进程，期间会暂时断开连接。请先保存配置，并等待正在运行的任务完成。</small>
+                      <small>重启会短暂断开连接，请先保存并等待任务完成。</small>
                     </span>
                     <button
                       className="button button--secondary"
@@ -644,47 +783,7 @@ export function SettingsPage() {
                       {restartingService ? "重启中" : "重启服务"}
                     </button>
                   </div>
-                  <div className="settings-cache-zone">
-                    <span className="settings-cache-zone__icon"><History size={17} /></span>
-                    <span>
-                      <strong>搜索缓存维护</strong>
-                      <small>过期缓存不会参与查询；可以保留查询历史，也可以在此集中清理。</small>
-                    </span>
-                    <span className="settings-cache-zone__actions">
-                      <button
-                        className="button button--secondary"
-                        disabled={Boolean(clearingCache)}
-                        onClick={() => void clearSearchCache(true)}
-                        type="button"
-                      >
-                        {clearingCache === "stale" ? "清理中" : "清理过期"}
-                      </button>
-                      <button
-                        className="button button--danger"
-                        disabled={Boolean(clearingCache)}
-                        onClick={() => void clearSearchCache(false)}
-                        type="button"
-                      >
-                        {clearingCache === "all" ? "清空中" : "清空缓存"}
-                      </button>
-                    </span>
-                  </div>
-                  <div className="settings-danger-zone">
-                    <span>
-                      <strong>清空回收站</strong>
-                      <small>永久删除回收站中的全部文件，此操作不可恢复。</small>
-                    </span>
-                    <button
-                      className="button button--danger"
-                      disabled={emptyingRecycle}
-                      onClick={() => void emptyRecycle()}
-                      type="button"
-                    >
-                      <Trash2 size={16} />
-                      {emptyingRecycle ? "正在清空" : "清空回收站"}
-                    </button>
-                  </div>
-                </>
+                </div>
               ) : null}
             </section>
           </div>

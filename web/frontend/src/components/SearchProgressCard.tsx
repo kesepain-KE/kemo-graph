@@ -14,11 +14,11 @@ export type SearchProgress = {
 };
 
 export const searchModeHelp: Record<SearchMode, { label: string; description: string; processing: string }> = {
-  answer: { label: "LLM 回答", description: "先结合图谱关系与文档片段查找依据，再由模型整理回答。适合直接提问。", processing: "本次流程包含混合检索与模型回答生成；正在等待服务端返回。" },
-  graph: { label: "图谱检索", description: "查找知识节点、关联实体和关系路径。适合了解“谁与谁有什么关系”。", processing: "本次流程包含实体匹配与关联关系查询；正在等待图谱结果。" },
-  rag: { label: "向量检索", description: "按语义查找原文片段与上下文。即使措辞不同，也可以尝试查找相关资料。", processing: "本次流程包含语义召回、排序与筛选；正在等待文档片段。" },
-  hybrid: { label: "混合检索", description: "同时查看图谱关系和文档片段，不额外生成综合回答。适合核对资料。", processing: "本次流程包含图谱与向量检索；正在等待两类检索结果。" },
-  global: { label: "全局检索", description: "基于节点群总结回答跨主题问题。使用前，请在知识图谱页点击“总结节点群”。", processing: "本次流程包含节点群摘要检索与综合回答；正在等待服务端返回。" },
+  answer: { label: "LLM 回答", description: "结合图谱与原文生成回答", processing: "本次流程包含混合检索与模型回答生成；正在等待服务端返回。" },
+  graph: { label: "图谱检索", description: "查找节点与关系路径", processing: "本次流程包含实体匹配与关联关系查询；正在等待图谱结果。" },
+  rag: { label: "向量检索", description: "按语义查找原文片段", processing: "本次流程包含语义召回、排序与筛选；正在等待文档片段。" },
+  hybrid: { label: "混合检索", description: "同时检索图谱与原文", processing: "本次流程包含图谱与向量检索；正在等待两类检索结果。" },
+  global: { label: "全局检索", description: "基于节点群摘要回答；请先在图谱页总结节点群", processing: "本次流程包含节点群摘要检索与综合回答；正在等待服务端返回。" },
 };
 
 export function SearchProgressCard({ progress }: { progress: SearchProgress }) {
@@ -62,9 +62,9 @@ export function SearchProgressCard({ progress }: { progress: SearchProgress }) {
           {!running && !failed ? <CheckCircle2 size={16} /> : <Circle size={16} />}<span>{failed ? "无结果" : running ? "待展示" : "已展示"}</span>
         </li>
       </ol>}
-      <p className="search-progress__hint">
-        {running ? `${elapsed >= 30 ? "等待较久，请稍候。" : ""}可切换页面，请勿刷新或关闭网页。` : failed ? "请查看错误信息后重试。" : restored ? "历史缓存，点击“重新检索”可更新。" : "结果与来源见下方。"}
-      </p>
+      {(running || failed || restored) && <p className="search-progress__hint">
+        {running ? "可切换页面，请勿刷新或关闭网页。" : failed ? "请查看错误信息后重试。" : "历史缓存，点击“重新检索”可更新。"}
+      </p>}
     </section>
   );
 }

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import unicodedata
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,7 +17,9 @@ from fastapi.testclient import TestClient
 from api import create_app
 from core.settings import AppConfig
 from core.observability import DailyTSVLogger, redact_log_text
-from core.observability.logger import LOG_COLUMNS, TSVFormatter, TSVStreamHandler
+from core.observability.logger import (
+    LOG_COLUMNS, ConsoleTableFormatter, TSVFormatter, TSVStreamHandler,
+)
 from core.observability import read_logs
 from core.observability import trace_query
 from core.observability.terminal_logging import TerminalLogHandler
@@ -195,6 +198,99 @@ def test_console_logs_are_parseable_tables_with_full_levels_and_redacted_traceba
     assert rows[1][-1] == "12.5"
     assert "RuntimeError" in rows[2][4]
     assert "private-value" not in text
+
+
+def test_readable_console_aligns_chinese_wraps_details_and_redacts_tracebacks(monkeypatch):
+    monkeypatch.setattr(
+        "core.observability.logger.shutil.get_terminal_size",
+        lambda **kwargs: os.terminal_size((120, 24)),
+    )
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(ConsoleTableFormatter(secrets=("private-value",)))
+    message = "中文预览mixed-text" * 8
+    handler.handle(logging.makeLogRecord({
+        "name": "core.maintenance.scheduler",
+        "levelno": logging.DEBUG, "levelname": "DEBUG",
+        "msg": message + " private-value", "action": "step", "elapsed_ms": 12.5,
+    }))
+    try:
+        raise RuntimeError("private-value")
+    except RuntimeError:
+        handler.handle(logging.makeLogRecord({
+            "name": "uvicorn.error", "levelno": logging.ERROR, "levelname": "ERROR",
+            "msg": "failed", "exc_info": sys.exc_info(),
+        }))
+
+    text = stream.getvalue()
+    lines = text.splitlines()
+    assert [cell.strip() for cell in lines[0].split(" │ ")] == [
+        "时间 UTC", "级别", "来源", "详情",
+    ]
+    assert len(lines) > 4  # 两条日志都允许在详情列内折行。
+    for line in lines:
+        width = sum(
+            0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in "WF" else 1
+            for char in line
+        )
+        assert width == 120
+    rows = [[cell.strip() for cell in line.split(" │ ")] for line in lines[2:]]
+    starts = [row for row in rows if row[1]]
+    assert starts[0][1:3] == ["DEBUG", "maintenance.scheduler"]
+    assert starts[0][3].startswith("[step]")
+    assert starts[1][1:3] == ["ERROR", "uvicorn"]
+    details = "".join(row[3] for row in rows)
+    assert "(12.5 ms)" in details
+    assert message in details
+    assert "RuntimeError" in details
+    assert "private-value" not in text
+    assert "\t" not in text
+
+
+def test_yaml_console_filter_keeps_failures_and_does_not_filter_persisted_jobs(settings):
+    root = Path(__file__).resolve().parents[1]
+    script = """
+import logging
+import sys
+from core.settings import AppConfig
+from core.observability import capture_terminal_logs
+from core.observability.terminal_logging import configure_console_logging
+
+settings = AppConfig(log_dir=sys.argv[1])
+configure_console_logging(settings)
+access = logging.getLogger("uvicorn.access")
+with capture_terminal_logs(settings):
+    for method, target, status, level in (
+        ("GET", "/api/v1/jobs?case=hidden-job", 200, logging.INFO),
+        ("HEAD", "/assets/vendor.js?case=hidden-asset", 304, logging.INFO),
+        ("GET", "/api/v1/system/runtime?case=hidden-runtime", 200, logging.INFO),
+        ("GET", "/api/v1/system/logs?case=hidden-logs", 200, logging.INFO),
+        ("GET", "/api/v1/query/progress/id?case=hidden-progress", 200, logging.INFO),
+        ("GET", "/kemo-graph-logo.png?case=hidden-logo", 200, logging.INFO),
+        ("GET", "/api/v1/jobs?case=failed-job", 500, logging.INFO),
+        ("GET", "/assets/missing.js?case=missing-asset", 404, logging.INFO),
+        ("POST", "/api/v1/jobs/ingest?case=write-job", 202, logging.INFO),
+        ("GET", "/api/v1/status?case=normal-read", 200, logging.INFO),
+        ("GET", "/api/v1/jobs?case=warning-job", 200, logging.WARNING),
+    ):
+        access.log(level, '%s - "%s %s HTTP/%s" %d',
+                   "127.0.0.1:12345", method, target, "1.1", status)
+    logging.getLogger("application").error("poll failed: /api/v1/jobs")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, settings.log_dir],
+        cwd=root, capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "COLUMNS": "160"},
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "hidden-" not in result.stderr
+    for marker in ("failed-job", "missing-asset", "write-job", "normal-read", "warning-job", "poll failed"):
+        assert marker in result.stderr
+    persisted = str(read_logs(settings, category="terminal"))
+    assert "hidden-job" in persisted
+    assert "failed-job" in persisted
 
 
 def test_restart_logs_use_the_same_table_columns(tmp_path, monkeypatch):

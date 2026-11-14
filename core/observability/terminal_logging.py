@@ -11,7 +11,7 @@ from core.observability.logger import DailyTSVLogger, redact_log_text
 from core.common.cache import file_revision
 
 def configure_console_logging(settings) -> None:
-    """使用 YAML 中的标准 logging 配置输出 TSV 终端日志。"""
+    """使用 YAML 中的标准 logging 配置输出可读终端表格。"""
     config = yaml.safe_load((PROJECT_ROOT / "config" / "logging.yaml").read_text(encoding="utf-8"))
     config["root"]["level"] = settings.log_level
     config["formatters"]["table"]["secrets"] = (

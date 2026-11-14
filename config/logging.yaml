@@ -2,11 +2,15 @@ version: 1
 disable_existing_loggers: false
 formatters:
   table:
-    (): core.observability.logger.TSVFormatter
+    (): core.observability.logger.ConsoleTableFormatter
+filters:
+  quiet_access:
+    (): core.observability.logger.ConsoleAccessFilter
 handlers:
   console:
-    class: core.observability.logger.TSVStreamHandler
+    class: logging.StreamHandler
     formatter: table
+    filters: [quiet_access]
     stream: ext://sys.stderr
 root:
   level: INFO

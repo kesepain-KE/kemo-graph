@@ -1,18 +1,14 @@
 import {
-  Focus,
   Globe2,
-  Hand,
   Maximize2,
-  Minus,
   Minimize2,
   Network,
-  PanelRightOpen,
-  Plus,
+  Settings2,
   RefreshCw,
-  RotateCcw,
 } from "lucide-react";
 import {
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -27,6 +23,8 @@ import { PageIntro } from "../components/PageIntro";
 import { useRuntimeTasks } from "../context/RuntimeTasksContext";
 import { GraphControlPanel } from "../features/graph/GraphControlPanel";
 import { GraphDetails } from "../features/graph/GraphDetails";
+import { GraphCanvasTools } from "../features/graph/GraphCanvasTools";
+import { GraphNodeSearch } from "../features/graph/GraphNodeSearch";
 import { GraphRelationDetails } from "../features/graph/GraphRelationDetails";
 import {
   GraphViewport,
@@ -95,17 +93,22 @@ function GraphCanvas({
   scene,
   onSelect,
   onSelectEdge,
+  controlsRef,
+  focusRequest,
 }: {
   nodes: PositionedNode[];
   edges: GraphEdge[];
   scene: GraphRenderScene;
   onSelect: (nodeId: string) => void;
   onSelectEdge: (edgeId: string) => void;
+  controlsRef: React.RefObject<Pick<GraphViewportHandle, "focusSelected" | "resetView">>;
+  focusRequest: number;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const interactionRef = useRef<Interaction | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
+  const [panMode, setPanMode] = useState(false);
   const [manualPositions, setManualPositions] = useState<Map<string, Point>>(new Map());
   const layoutWorld = useMemo(() => calculateLayoutWorld(new Float32Array(
     nodes.map((node) => graphNodeCollisionRadius(
@@ -174,6 +177,12 @@ function GraphCanvas({
     setPan({ x: 0, y: 0 });
     setManualPositions(new Map());
   };
+  const focusSelected = () => {
+    const point = scene.selectedId ? positions.get(scene.selectedId) : null;
+    if (point) setPan({ x: layoutWorld.centerX - point.x * zoom, y: layoutWorld.centerY - point.y * zoom });
+  };
+  useImperativeHandle(controlsRef, () => ({ focusSelected, resetView }));
+  useEffect(() => { if (focusRequest > 0) focusSelected(); }, [focusRequest]);
 
   const handleWheel = (event: WheelEvent<SVGSVGElement>) => {
     event.preventDefault();
@@ -316,6 +325,7 @@ function GraphCanvas({
                   tabIndex={0}
                   aria-label={`${nodeLabels.get(edge.source_node_id) ?? edge.source_node_id} 到 ${nodeLabels.get(edge.target_node_id) ?? edge.target_node_id} 的关系：${edge.relation}`}
                   onPointerDown={(event) => {
+                    if (panMode) return;
                     event.stopPropagation();
                     onSelectEdge(edge.edge_id);
                   }}
@@ -344,6 +354,7 @@ function GraphCanvas({
                 aria-label={`${node.keyword}，引用 ${node.ref_count} 次`}
                 style={{ opacity: visualStyle?.alpha ?? 1 }}
                 onPointerDown={(event) => {
+                  if (panMode) return;
                   event.stopPropagation();
                   interactionRef.current = { kind: "node", nodeId: node.node_id };
                   svgRef.current?.setPointerCapture(event.pointerId);
@@ -379,30 +390,9 @@ function GraphCanvas({
         </g>
       </svg>
 
-      <div className="graph-legend">
-        <span><i className="legend-dot legend-dot--core" />核心概念</span>
-        <span><i className="legend-dot legend-dot--concept" />一般概念</span>
-        <span><i className="legend-dot legend-dot--group" />真实群组配色</span>
-      </div>
-
-      <div className="canvas-tools">
-        <button className="icon-button" title="拖拽画布"><Hand size={17} /></button>
-        <button className="icon-button" title="聚焦所选节点" onClick={() => setPan({ x: 0, y: 0 })}>
-          <Focus size={17} />
-        </button>
-        <div className="zoom-control">
-          <button onClick={() => setZoom((value) => Math.max(0.55, value - 0.12))} aria-label="缩小">
-            <Minus size={15} />
-          </button>
-          <span>{Math.round(zoom * 100)}%</span>
-          <button onClick={() => setZoom((value) => Math.min(2.2, value + 0.12))} aria-label="放大">
-            <Plus size={15} />
-          </button>
-        </div>
-      </div>
-      <button className="reset-view" onClick={resetView}>
-        <RotateCcw size={15} /> 重置视图
-      </button>
+      <GraphCanvasTools scene={scene} panMode={panMode} onPanMode={() => setPanMode((current) => !current)}
+        onFocus={focusSelected} onReset={resetView} zoomLabel={`${Math.round(zoom * 100)}%`}
+        onZoom={(delta) => setZoom((current) => Math.min(2.2, Math.max(0.55, current + delta)))} />
     </div>
   );
 }
@@ -411,10 +401,14 @@ function SvgGraphFallback({
   scene,
   onSelect,
   onSelectEdge,
+  controlsRef,
+  focusRequest,
 }: {
   scene: GraphRenderScene;
   onSelect: (nodeId: string) => void;
   onSelectEdge: (edgeId: string) => void;
+  controlsRef: React.RefObject<Pick<GraphViewportHandle, "focusSelected" | "resetView">>;
+  focusRequest: number;
 }) {
   const positioned = useMemo(
     () => computeForceLayout(
@@ -432,6 +426,8 @@ function SvgGraphFallback({
       scene={{ ...scene, nodes: positioned }}
       onSelect={onSelect}
       onSelectEdge={onSelectEdge}
+      controlsRef={controlsRef}
+      focusRequest={focusRequest}
     />
   );
 }
@@ -469,6 +465,7 @@ function shouldShowSvgNodeLabel(
 
 export function GraphPage() {
   const viewportRef = useRef<GraphViewportHandle>(null);
+  const fallbackRef = useRef<Pick<GraphViewportHandle, "focusSelected" | "resetView">>(null);
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const { refreshServerTasks } = useRuntimeTasks();
@@ -484,7 +481,11 @@ export function GraphPage() {
   const [layoutStatus, setLayoutStatus] = useState<LayoutRuntimeStatus | null>(null);
   const [fps, setFps] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [fullscreenPanelOpen, setFullscreenPanelOpen] = useState(true);
+  const [panelMode, setPanelMode] = useState<"details" | "controls">("details");
+  const [detailsDirty, setDetailsDirty] = useState(false);
+  const [detailEpoch, setDetailEpoch] = useState(0);
+  const [searchResultIds, setSearchResultIds] = useState<string[]>([]);
+  const [focusRequest, setFocusRequest] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("node"));
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [summarySubmitting, setSummarySubmitting] = useState(false);
@@ -498,9 +499,6 @@ export function GraphPage() {
     const syncFullscreenState = () => {
       const active = document.fullscreenElement === fullscreenRef.current;
       setIsFullscreen(active);
-      if (active) {
-        setFullscreenPanelOpen(true);
-      }
       requestAnimationFrame(() => viewportRef.current?.reheat());
     };
     document.addEventListener("fullscreenchange", syncFullscreenState);
@@ -521,6 +519,7 @@ export function GraphPage() {
       setLocalGraph(null);
       setGlobalEdges(edges);
       setSelectedEdgeId(null);
+      setDetailEpoch((current) => current + 1);
       const requestedNode = searchParams.get("node");
       if (requestedNode && graph.nodes.some((node) => node.node_id === requestedNode)) {
         setSelectedId(requestedNode);
@@ -625,14 +624,9 @@ export function GraphPage() {
   ), [activeLocalGraph, viewMode]);
 
   const highlightedNodes = useMemo(() => {
-    const keyword = preferences.filters.query.trim().toLocaleLowerCase();
-    if (!keyword || !catalog) return [];
-    return catalog.nodes.filter((node) => (
-      [node.keyword, node.summary, ...node.aliases, ...node.tags].some(
-        (value) => value.toLocaleLowerCase().includes(keyword),
-      )
-    ));
-  }, [catalog, preferences.filters.query]);
+    const ids = new Set(searchResultIds);
+    return (catalog?.nodes ?? []).filter((node) => ids.has(node.node_id));
+  }, [catalog, searchResultIds]);
   const highlightedIds = useMemo(
     () => new Set(highlightedNodes.map((node) => node.node_id)),
     [highlightedNodes],
@@ -828,18 +822,22 @@ export function GraphPage() {
   ]);
 
   const selectNode = (nodeId: string) => {
+    if (nodeId !== selectedId && detailsDirty && !window.confirm("放弃尚未保存的摘要修改并切换节点？")) return false;
     setSelectedId(nodeId);
     setSelectedEdgeId(null);
+    setPanelMode("details");
     setPreferences((current) => ({
       ...current,
       view: { ...current.view, mode: "local" },
     }));
     setSearchParams({ node: nodeId }, { replace: true });
+    return true;
   };
 
   const selectEdge = (edgeId: string) => {
+    if (detailsDirty && !window.confirm("放弃尚未保存的摘要修改并查看关系？")) return;
     setSelectedEdgeId(edgeId);
-    if (isFullscreen) setFullscreenPanelOpen(true);
+    setPanelMode("details");
   };
 
   const returnToGlobal = () => {
@@ -851,6 +849,7 @@ export function GraphPage() {
   };
 
   const toggleFullscreen = async () => {
+    setError(null);
     try {
       if (document.fullscreenElement === fullscreenRef.current) {
         await document.exitFullscreen();
@@ -871,7 +870,20 @@ export function GraphPage() {
         title="知识图谱"
         actions={
           <>
-            <button className="button button--secondary" type="button" onClick={loadGraph} disabled={loading}>
+            <GraphNodeSearch query={preferences.filters.query} revision={catalog?.revision}
+              onQueryChange={(query) => setPreferences((current) => ({ ...current, filters: { ...current.filters, query } }))}
+              onResults={setSearchResultIds} onSelect={(nodeId) => {
+                if (!selectNode(nodeId)) return;
+                setPreferences((current) => ({
+                  ...current, filters: { ...current.filters, groupId: "all", sourceId: "all", tag: "all", minNodeWeight: 0, minRefCount: 0 },
+                }));
+                setFocusRequest((current) => current + 1);
+              }} />
+            <div className="graph-page-actions">
+            <button className="button button--secondary" type="button" onClick={() => {
+              if (detailsDirty && !window.confirm("放弃尚未保存的摘要修改并刷新图谱？")) return;
+              setDetailsDirty(false); void loadGraph();
+            }} disabled={loading}>
               <RefreshCw className={loading ? "spin" : ""} size={16} />刷新图谱
             </button>
             <button
@@ -884,6 +896,7 @@ export function GraphPage() {
               <Network className={summarySubmitting ? "spin" : ""} size={16} />
               {summarySubmitting ? "正在提交" : "总结节点群"}
             </button>
+            </div>
           </>
         }
       />
@@ -891,12 +904,13 @@ export function GraphPage() {
 
       <div
         ref={fullscreenRef}
-        className={`graph-layout graph-layout--studio ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"} ${isFullscreen ? "is-fullscreen-mode" : ""} ${isFullscreen && !fullscreenPanelOpen ? "is-panel-collapsed" : ""}`}
+        className={`graph-layout graph-layout--studio ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"} ${isFullscreen ? "is-fullscreen-mode" : ""}`}
       >
         <section className={`graph-canvas card ${preferences.appearance.canvasPreset === "obsidian" ? "is-obsidian" : ""}`}>
           {loading ? <LoadingState label="正在加载一致图谱快照…" /> : null}
           {!loading ? (
             <GraphViewport
+              key={preferences.performance.mode}
               ref={viewportRef}
               scene={graphScene}
               onSelect={selectNode}
@@ -909,7 +923,9 @@ export function GraphPage() {
               onFpsChange={setFps}
               layoutKey={layoutKey}
               forceSettings={preferences.force}
-              fallback={<SvgGraphFallback scene={graphScene} onSelect={selectNode} onSelectEdge={selectEdge} />}
+              focusRequest={focusRequest}
+              fallbackRef={fallbackRef}
+              fallback={<SvgGraphFallback scene={graphScene} onSelect={selectNode} onSelectEdge={selectEdge} controlsRef={fallbackRef} focusRequest={focusRequest} />}
             />
           ) : null}
           <div className="graph-fullscreen-toolbar" aria-label="图谱全屏工具">
@@ -923,17 +939,6 @@ export function GraphPage() {
               <Globe2 size={16} />
               <span>回归全局</span>
             </button>
-            {isFullscreen && !fullscreenPanelOpen ? (
-              <button
-                className="graph-fullscreen-button"
-                type="button"
-                onClick={() => setFullscreenPanelOpen(true)}
-                title="打开图谱操作面板"
-              >
-                <PanelRightOpen size={16} />
-                <span>操作面板</span>
-              </button>
-            ) : null}
             <button
               className="graph-fullscreen-button"
               type="button"
@@ -946,10 +951,15 @@ export function GraphPage() {
               <span>{isFullscreen ? "退出全屏" : "全屏图谱"}</span>
             </button>
           </div>
+          <button className="graph-settings-button graph-fullscreen-button" type="button" aria-label="图谱设置"
+            aria-pressed={panelMode === "controls"} onClick={() => {
+              if (panelMode === "details" && detailsDirty && !window.confirm("放弃尚未保存的摘要修改并打开设置？")) return;
+              setPanelMode((current) => current === "controls" ? "details" : "controls");
+            }}><Settings2 size={15} /><span>图谱设置</span></button>
 
         </section>
 
-        {!isFullscreen ? (
+        {panelMode === "details" ? (
           <aside
             className={`graph-node-detail-card card ${preferences.appearance.canvasPreset === "obsidian" ? "is-theme-dark" : "is-theme-light"}`}
             aria-label="节点或关系详情"
@@ -964,19 +974,22 @@ export function GraphPage() {
                 />
               ) : (
                 <GraphDetails
+                  key={detailEpoch}
                   selected={selected}
                   paths={selectedPaths}
                   directRelationCount={selectedEdges.length}
                   isCore={selectedIsCore}
                   sourceLabels={sourceLabels}
                   onSelect={selectNode}
+                  onChanged={loadGraph}
+                  onDirtyChange={setDetailsDirty}
                 />
               )}
             </div>
           </aside>
         ) : null}
 
-        {isFullscreen ? (
+        {panelMode === "controls" ? (
           <GraphControlPanel
             preferences={preferences}
             onPreferencesChange={setPreferences}
@@ -984,13 +997,6 @@ export function GraphPage() {
             activeNodes={visibleNodes}
             activeRelationTypes={activeRelationTypes}
             highlightedNodes={highlightedNodes}
-            selected={selected}
-            selectedEdge={selectedEdge}
-            relatedRelationEdges={relatedRelationEdges}
-            nodesById={nodesById}
-            selectedPaths={selectedPaths}
-            selectedRelationCount={selectedEdges.length}
-            selectedIsCore={selectedIsCore}
             sourceLabels={sourceLabels}
             rendererBackend={rendererBackend}
             layoutStatus={layoutStatus}
@@ -998,9 +1004,9 @@ export function GraphPage() {
             loading={loading || graphLoading}
             onSelect={selectNode}
             onReheat={() => viewportRef.current?.reheat()}
-            fullscreen
-            visible={fullscreenPanelOpen}
-            onRequestClose={() => setFullscreenPanelOpen(false)}
+            fullscreen={isFullscreen}
+            onShowDetails={() => setPanelMode("details")}
+            onRequestClose={() => setPanelMode("details")}
           />
         ) : null}
       </div>

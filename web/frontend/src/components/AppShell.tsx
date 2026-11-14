@@ -163,7 +163,7 @@ export function AppShell() {
         <div className="sidebar-footer"><Network size={15} /><span>本地知识工作台</span></div>
       </aside>
 
-      <div className={`app-workspace ${location.pathname === "/settings" ? "is-settings" : ""} ${location.pathname === "/documents" ? "is-documents" : ""} ${location.pathname === "/graph" ? "is-graph" : ""}`}>
+      <div className={`app-workspace ${location.pathname === "/settings" ? "is-settings" : ""} ${location.pathname === "/documents" ? "is-documents" : ""} ${location.pathname === "/graph" ? "is-graph" : ""} ${location.pathname === "/build-status" ? "is-build-status" : ""}`}>
         <header className="topbar">
           <nav className="breadcrumb" aria-label="当前位置">
             <span>Kemo Graph</span><span aria-hidden="true">/</span><strong>{meta.title}</strong>

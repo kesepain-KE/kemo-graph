@@ -9,6 +9,7 @@ import {
   GitBranch,
   Network,
   RefreshCw,
+  ScrollText,
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -21,6 +22,10 @@ import { loadIngestHistory, type IngestHistoryItem } from "../lib/history";
 import type { StatusData } from "../types/api";
 
 const HISTORY_PAGE_SIZE = 6;
+const sections = [
+  { id: "status", label: "状态", description: "规模、健康与整理记录", icon: Activity },
+  { id: "logs", label: "日志", description: "终端、查询与内部运行", icon: ScrollText },
+] as const;
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -32,6 +37,7 @@ function formatTime(value: string): string {
 }
 
 export function StatusPage() {
+  const [activeSection, setActiveSection] = useState<"status" | "logs">("status");
   const [status, setStatus] = useState<StatusData | null>(null);
   const [history, setHistory] = useState<IngestHistoryItem[]>(loadIngestHistory());
   const [historyPage, setHistoryPage] = useState(1);
@@ -73,79 +79,150 @@ export function StatusPage() {
 
   const metrics = status
     ? [
-        { label: "活动文档", value: status.sources.active, icon: FileText, tone: "amber", note: `共 ${status.sources.total} 条记录` },
-        { label: "知识节点", value: status.graph.total_nodes, icon: Network, tone: "cyan", note: `${status.sources.pending_graph} 个待更新来源` },
-        { label: "关系边", value: status.graph.total_edges, icon: GitBranch, tone: "purple", note: "有向关系与证据权重" },
-        { label: "向量", value: status.rag.total_vectors, icon: Database, tone: "blue", note: `${status.rag.total_chunks} 个文本切片` },
-        { label: "群组", value: status.graph.total_groups, icon: Activity, tone: "green", note: "连通知识群摘要" },
+        { label: "活动文档", value: status.sources.active, icon: FileText, note: `共 ${status.sources.total} 条来源记录` },
+        { label: "知识节点", value: status.graph.total_nodes, icon: Network, note: `${status.sources.pending_graph} 个待更新来源` },
+        { label: "关系边", value: status.graph.total_edges, icon: GitBranch },
+        { label: "向量", value: status.rag.total_vectors, icon: Database, note: `${status.rag.total_chunks} 个文本切片` },
+        { label: "群组", value: status.graph.total_groups, icon: Activity },
       ]
     : [];
 
   return (
     <section className="status-page page-stack">
-      <PageIntro
-        title="运行状态"
-        description="检查知识库健康与整理记录，按标签查看终端启动、查询和内部运行日志。"
-        actions={<button className="button button--secondary" onClick={load} disabled={loading}><RefreshCw className={loading ? "spin" : ""} size={16} />刷新状态</button>}
-      />
-      {error ? <ErrorNotice message={error} /> : null}
-      {loading ? <div className="card"><LoadingState label="正在检查数据库与 FAISS…" /></div> : null}
-
-      {status ? (
-        <>
-          <div className="metric-grid">
-            {metrics.map(({ label, value, icon: Icon, tone, note }) => (
-              <article className={`metric-card card tone-${tone}`} key={label}>
-                <span className="metric-icon"><Icon size={20} /></span>
-                <div><span>{label}</span><strong>{value.toLocaleString()}</strong><small>{note}</small></div>
-              </article>
+      <PageIntro title="运行状态" />
+      <div className="status-layout">
+        <aside className="status-nav card" aria-label="运行状态分类">
+          <header><strong>运行监控</strong></header>
+          <div className="status-nav__list" role="tablist" aria-label="运行状态分类" aria-orientation="vertical">
+            {sections.map(({ id, label, description, icon: Icon }, index) => (
+              <button type="button" role="tab" key={id} id={`status-tab-${id}`}
+                className="status-nav__item" aria-label={label} aria-selected={activeSection === id}
+                aria-controls={`status-panel-${id}`} tabIndex={activeSection === id ? 0 : -1}
+                onClick={() => setActiveSection(id)}
+                onKeyDown={(event) => {
+                  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? sections.length - 1
+                    : (index + (event.key === "ArrowUp" ? -1 : 1) + sections.length) % sections.length;
+                  setActiveSection(sections[next].id);
+                  document.getElementById(`status-tab-${sections[next].id}`)?.focus();
+                }}>
+                <Icon size={18} aria-hidden="true" /><span><strong>{label}</strong><small>{description}</small></span>
+              </button>
             ))}
           </div>
-
-          <div className="status-lower-grid">
-            <section className="health-panel card">
-              <div className="panel-title-row"><div><p className="eyebrow">Health checks</p><h3>服务健康</h3></div></div>
-              <div className="health-list">
-                <div><span className={`health-icon ${status.initialized ? "is-good" : "is-warn"}`}>{status.initialized ? <CheckCircle2 size={17} /> : <TriangleAlert size={17} />}</span><span><strong>知识库初始化</strong><small>{status.initialized ? "sources.db 已就绪" : "尚未创建知识库"}</small></span><b>{status.initialized ? "正常" : "待初始化"}</b></div>
-                <div><span className={`health-icon ${status.rag.faiss_healthy ? "is-good" : "is-warn"}`}>{status.rag.faiss_healthy ? <CheckCircle2 size={17} /> : <TriangleAlert size={17} />}</span><span><strong>FAISS 索引</strong><small>索引 ID 与 rag.db 一致性</small></span><b>{status.rag.faiss_healthy ? "健康" : "需检查"}</b></div>
-                <div><span className={`health-icon ${status.sources.pending_graph + status.sources.pending_rag === 0 ? "is-good" : "is-warn"}`}><Clock3 size={17} /></span><span><strong>增量整理队列</strong><small>Graph {status.sources.pending_graph} · RAG {status.sources.pending_rag}</small></span><b>{status.sources.pending_graph + status.sources.pending_rag}</b></div>
-              </div>
-            </section>
-
-            <section className="history-panel card">
-              <div className="panel-title-row"><div><p className="eyebrow">Recent ingest</p><h3>最近整理</h3></div><span className="count-chip">{history.length}</span></div>
-              <div className="history-list">
-                {visibleHistory.map((item) => (
-                  <article key={item.id}>
-                    <span className={`history-dot ${item.failed ? "is-failed" : ""}`} />
-                    <div><strong>{item.failed ? "整理部分失败" : "整理完成"}</strong><small>{formatTime(item.createdAt)}</small></div>
-                    <p>处理 {item.processed} · Graph {item.graphUpdated} · RAG {item.ragUpdated}</p>
+        </aside>
+        <div className="status-content">
+          <section className="status-panel" role="tabpanel" id="status-panel-status"
+            aria-labelledby="status-tab-status" hidden={activeSection !== "status"} tabIndex={0}>
+            <header className="status-panel__header">
+              <div><h2>状态概览</h2></div>
+              <button type="button" className="button button--secondary" onClick={load} disabled={loading}>
+                <RefreshCw className={loading ? "spin" : ""} size={16} />刷新状态
+              </button>
+            </header>
+            {error ? <ErrorNotice message={error} /> : null}
+            {loading && !status ? <div className="card"><LoadingState label="正在检查服务…" /></div> : null}
+            {status ? <div className="status-overview" aria-busy={loading}>
+              <section className="status-metrics card" aria-label="知识库规模">
+                {metrics.map(({ label, value, icon: Icon, note }) => (
+                  <article className="status-metric" key={label}>
+                    <div className="status-metric__label"><span>{label}</span><Icon size={17} aria-hidden="true" /></div>
+                    <strong>{value.toLocaleString()}</strong>
+                    {note && <small>{note}</small>}
                   </article>
                 ))}
-                {!history.length ? <div className="empty-compact"><Clock3 size={25} /><strong>暂无本地记录</strong><span>从文档管理页触发整理后会记录在这里。</span></div> : null}
+              </section>
+              <div className="status-details">
+                <section className="status-health card" aria-labelledby="status-health-title">
+                  <h2 id="status-health-title">服务健康</h2>
+                  <div className="status-health-list">
+                    <div className="status-health-item">
+                      <span className={`status-health-icon ${status.initialized ? "is-good" : "is-warn"}`}>
+                        {status.initialized ? <CheckCircle2 size={17} /> : <TriangleAlert size={17} />}
+                      </span>
+                      <div>
+                        <div className="status-health-item__title"><strong>知识库初始化</strong><span className={status.initialized ? "is-good" : "is-warn"}>{status.initialized ? "正常" : "待初始化"}</span></div>
+                        {!status.initialized && <small>尚未创建知识库</small>}
+                      </div>
+                    </div>
+                    <div className="status-health-item">
+                      <span className={`status-health-icon ${status.rag.faiss_healthy ? "is-good" : "is-warn"}`}>
+                        {status.rag.faiss_healthy ? <CheckCircle2 size={17} /> : <TriangleAlert size={17} />}
+                      </span>
+                      <div>
+                        <div className="status-health-item__title"><strong title="FAISS 向量索引">向量索引</strong><span className={status.rag.faiss_healthy ? "is-good" : "is-warn"}>{status.rag.faiss_healthy ? "健康" : "需检查"}</span></div>
+                      </div>
+                    </div>
+                    <div className="status-health-item">
+                      <span className={`status-health-icon ${status.sources.pending_graph + status.sources.pending_rag === 0 ? "is-good" : "is-warn"}`}><Clock3 size={17} /></span>
+                      <div>
+                        <div className="status-health-item__title"><strong>增量整理队列</strong><span className={status.sources.pending_graph + status.sources.pending_rag === 0 ? "is-good" : "is-warn"}>{status.sources.pending_graph + status.sources.pending_rag} 项</span></div>
+                        <small>图谱 {status.sources.pending_graph} · RAG {status.sources.pending_rag}</small>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                <section className="status-history card" aria-labelledby="status-history-title">
+                  <header className="status-history__header">
+                    <div><h2 id="status-history-title">最近整理</h2><p>本机记录</p></div>
+                    <span>共 {history.length} 条</span>
+                  </header>
+                  {history.length ? (
+                    <>
+                      <div className="status-history__table">
+                        <table aria-label="最近整理记录">
+                          <thead>
+                            <tr><th scope="col">整理结果</th><th scope="col">时间</th><th scope="col">处理文档</th><th scope="col">图谱更新</th><th scope="col">RAG 更新</th><th scope="col">失败</th></tr>
+                          </thead>
+                          <tbody>
+                            {visibleHistory.map((item) => (
+                              <tr key={item.id}>
+                                <td className="status-history__result">
+                                  <span className={item.failed ? "is-failed" : "is-completed"}>
+                                    {item.failed ? <TriangleAlert size={14} /> : <CheckCircle2 size={14} />}
+                                    {item.failed ? "部分失败" : "整理完成"}
+                                  </span>
+                                </td>
+                                <td className="status-history__time"><time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></td>
+                                <td data-label="处理文档">{item.processed}</td>
+                                <td data-label="图谱更新">{item.graphUpdated}</td>
+                                <td data-label="RAG 更新">{item.ragUpdated}</td>
+                                <td data-label="失败" className={item.failed ? "text-danger" : ""}>{item.failed}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <nav className="status-history-pagination" aria-label="最近整理翻页">
+                        <span>第 {historyPage} / {historyPageCount} 页<small>每页 {HISTORY_PAGE_SIZE} 条</small></span>
+                        <div>
+                          <button
+                            type="button"
+                            aria-label="上一页"
+                            disabled={historyPage <= 1}
+                            onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                          ><ChevronLeft size={15} /></button>
+                          <button
+                            type="button"
+                            aria-label="下一页"
+                            disabled={historyPage >= historyPageCount}
+                            onClick={() => setHistoryPage((page) => Math.min(historyPageCount, page + 1))}
+                          ><ChevronRight size={15} /></button>
+                        </div>
+                      </nav>
+                    </>
+                  ) : <div className="empty-compact"><Clock3 size={25} /><strong>暂无本地记录</strong></div>}
+                </section>
               </div>
-              {history.length ? (
-                <nav className="history-pagination" aria-label="最近整理翻页">
-                  <button
-                    type="button"
-                    aria-label="上一页"
-                    disabled={historyPage <= 1}
-                    onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
-                  ><ChevronLeft size={15} /></button>
-                  <span>第 {historyPage} / {historyPageCount} 页<small>每页 6 条</small></span>
-                  <button
-                    type="button"
-                    aria-label="下一页"
-                    disabled={historyPage >= historyPageCount}
-                    onClick={() => setHistoryPage((page) => Math.min(historyPageCount, page + 1))}
-                  ><ChevronRight size={15} /></button>
-                </nav>
-              ) : null}
-            </section>
-          </div>
-        </>
-      ) : null}
-      <RuntimeLogPanel />
+            </div> : null}
+          </section>
+          <section className="status-panel status-panel--logs" role="tabpanel" id="status-panel-logs"
+            aria-labelledby="status-tab-logs" hidden={activeSection !== "logs"} tabIndex={0}>
+            <RuntimeLogPanel active={activeSection === "logs"} />
+          </section>
+        </div>
+      </div>
     </section>
   );
 }
