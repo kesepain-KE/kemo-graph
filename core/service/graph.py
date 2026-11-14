@@ -1,34 +1,30 @@
-"""图谱领域服务。
-
-图谱查询由 :mod:`core.services.retrieval` 负责；本服务聚焦节点、关系、
-全量图和 GPU/分页可视化数据入口。
-"""
-
 from __future__ import annotations
+from core.db import connect_graph, connect_sources
 
-from core.common import parse_json_list as _parse_json_list
-
-import json
 from datetime import datetime, timezone
 from typing import Any
+from core.db import connect_graph, connect_rag, connect_sources
+from core.graph_visualization import get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
+from core.ingestor import DocumentNotFoundError, Ingestor
+from core.locks import get_knowledge_base_lock
+from core.search_cache import clear_search_cache_after_mutation
+from core.rag_engine import RAGEngine
+from core.service.errors import DocumentContentConflictError
+from core.common import parse_json_list as _parse_json_list
 
-from ..db import connect_graph, connect_sources
-from ..ingestor import DocumentNotFoundError, Ingestor
-from ..knowledge_models import DocumentContentConflictError
-from ..locks import get_knowledge_base_lock
-from .protocols import ServiceOwner
 
+from .context import ServiceContext
+from core.graph.meta import refresh_graph_meta
 
 class GraphService:
-    """图谱实体、关系和可视化数据的统一入口。"""
+    def __init__(self, context: ServiceContext) -> None:
+        self.context = context
 
-    def __init__(self, owner: ServiceOwner) -> None:
-        self.owner = owner
 
     def get_node(self, node_id: str) -> dict[str, Any]:
         """返回节点、双向关系和可追溯的来源绑定。"""
 
-        owner = self.owner
+        owner = self.context
         owner._require_available("graph")
         graph_connection = connect_graph(owner.paths)
         try:
@@ -150,10 +146,10 @@ class GraphService:
         }
 
     def search_nodes(self, query: str, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        from ..graph_search import prepare_node_search, search_nodes
+        from core.graph_search import prepare_node_search, search_nodes
 
-        self.owner._require_available("graph")
-        connection = connect_graph(self.owner.paths)
+        self.context._require_available("graph")
+        connection = connect_graph(self.context.paths)
         try:
             prepare_node_search(connection)
             return search_nodes(connection, query, limit=limit, offset=offset)
@@ -163,9 +159,9 @@ class GraphService:
     def update_node_summary(
         self, node_id: str, summary: str, expected_summary: str,
     ) -> dict[str, Any]:
-        from ..rag_engine import RAGEngine
+        from core.rag_engine import RAGEngine
 
-        owner = self.owner
+        owner = self.context
         lock = get_knowledge_base_lock(owner.data_dir)
         if not lock.acquire(blocking=False):
             raise DocumentContentConflictError("图谱正在构建或修改，请稍后保存摘要")
@@ -194,9 +190,9 @@ class GraphService:
                     )
             finally:
                 connection.close()
-            owner._refresh_graph_meta(changed=True)
+            refresh_graph_meta(owner,changed=True)
             RAGEngine(owner.data_dir, settings=owner.settings).refresh_auxiliary_consistency()
-            owner.clear_search_cache()
+            owner.retrieval.clear_search_cache()
             return self.get_node(node_id)
         finally:
             lock.release()
@@ -204,7 +200,7 @@ class GraphService:
     def get_relation(self, edge_id: str) -> dict[str, Any]:
         """返回一条关系、可读路径和全部文档证据绑定。"""
 
-        owner = self.owner
+        owner = self.context
         owner._require_available("graph")
         graph_connection = connect_graph(owner.paths)
         try:
@@ -293,12 +289,6 @@ class GraphService:
         ]
         return result
 
-    def delete_relation(self, edge_id: str) -> dict[str, Any]:
-        return self.owner._delete_relation_impl(edge_id)
-
-    def delete_node(self, node_id: str) -> dict[str, Any]:
-        return self.owner._delete_node_impl(node_id)
-
     def get_full_graph(
         self,
         nodes_page: int | None = None,
@@ -306,7 +296,7 @@ class GraphService:
     ) -> dict[str, Any]:
         """返回图谱节点、全部边和群；节点可选择分页。"""
 
-        owner = self.owner
+        owner = self.context
         if nodes_page is not None and (
             isinstance(nodes_page, bool)
             or not isinstance(nodes_page, int)
@@ -405,10 +395,10 @@ class GraphService:
         }
 
     def get_visualization_meta(self) -> dict[str, Any]:
-        self.owner._require_available("graph")
-        from ..graph_visualization import get_visualization_meta
+        self.context._require_available("graph")
+        from core.graph_visualization import get_visualization_meta
 
-        return get_visualization_meta(self.owner.paths)
+        return get_visualization_meta(self.context.paths)
 
     def list_visualization_nodes(
         self,
@@ -417,11 +407,11 @@ class GraphService:
         page_size: int = 1000,
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
-        self.owner._require_available("graph")
-        from ..graph_visualization import list_visualization_nodes
+        self.context._require_available("graph")
+        from core.graph_visualization import list_visualization_nodes
 
         return list_visualization_nodes(
-            self.owner.paths,
+            self.context.paths,
             page=page,
             page_size=page_size,
             expected_revision=expected_revision,
@@ -434,11 +424,11 @@ class GraphService:
         page_size: int = 2000,
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
-        self.owner._require_available("graph")
-        from ..graph_visualization import list_visualization_edges
+        self.context._require_available("graph")
+        from core.graph_visualization import list_visualization_edges
 
         return list_visualization_edges(
-            self.owner.paths,
+            self.context.paths,
             page=page,
             page_size=page_size,
             expected_revision=expected_revision,
@@ -454,11 +444,11 @@ class GraphService:
         edge_limit: int = 10000,
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
-        self.owner._require_available("graph")
-        from ..graph_visualization import get_neighborhood
+        self.context._require_available("graph")
+        from core.graph_visualization import get_neighborhood
 
         return get_neighborhood(
-            self.owner.paths,
+            self.context.paths,
             node_id,
             depth=depth,
             direction=direction,
@@ -467,8 +457,256 @@ class GraphService:
             expected_revision=expected_revision,
         )
 
+    def delete_relation(self, edge_id: str) -> dict[str, Any]:
+        """删除关系及其全部证据，并使群组总结和搜索缓存失效。"""
 
+        self.context._require_available("graph")
+        graph_connection = connect_graph(self.context.paths)
+        try:
+            graph_connection.execute("BEGIN IMMEDIATE")
+            edge = graph_connection.execute(
+                """
+                SELECT e.edge_id, e.source_node_id, sn.keyword AS source_keyword,
+                       e.relation, e.target_node_id, tn.keyword AS target_keyword,
+                       e.weight, e.support_count, e.created_at
+                FROM edges e
+                JOIN nodes sn ON sn.node_id = e.source_node_id
+                JOIN nodes tn ON tn.node_id = e.target_node_id
+                WHERE e.edge_id = ?
+                """,
+                (edge_id,),
+            ).fetchone()
+            if edge is None:
+                raise DocumentNotFoundError(f"关系不存在：{edge_id}")
+            evidence_count = int(
+                graph_connection.execute(
+                    "SELECT COUNT(*) FROM edge_sources WHERE edge_id = ?",
+                    (edge_id,),
+                ).fetchone()[0]
+            )
+            mention_rows = graph_connection.execute(
+                """
+                SELECT rm.mention_id
+                FROM relation_mentions rm
+                JOIN mention_nodes sm ON sm.mention_id = rm.source_mention_id
+                JOIN mention_nodes tm ON tm.mention_id = rm.target_mention_id
+                WHERE sm.node_id = ? AND rm.relation = ? AND tm.node_id = ?
+                """,
+                (
+                    edge["source_node_id"],
+                    edge["relation"],
+                    edge["target_node_id"],
+                ),
+            ).fetchall()
+            if mention_rows:
+                placeholders = ",".join("?" for _ in mention_rows)
+                graph_connection.execute(
+                    f"DELETE FROM relation_mentions WHERE mention_id IN ({placeholders})",
+                    tuple(row["mention_id"] for row in mention_rows),
+                )
+            graph_connection.execute(
+                "DELETE FROM edge_sources WHERE edge_id = ?", (edge_id,)
+            )
+            graph_connection.execute("DELETE FROM edges WHERE edge_id = ?", (edge_id,))
+            graph_connection.execute("DELETE FROM group_nodes")
+            graph_connection.execute("DELETE FROM groups")
+            graph_connection.commit()
+        except Exception:
+            graph_connection.rollback()
+            raise
+        finally:
+            graph_connection.close()
 
+        refresh_graph_meta(self.context,changed=True)
+        RAGEngine(self.context.data_dir, settings=self.context.settings).refresh_auxiliary_consistency()
+        result = {
+            "deleted": True,
+            "edge": _relation_row(edge),
+            "deleted_evidence_count": evidence_count,
+            "deleted_mention_count": len(mention_rows),
+            "groups_invalidated": True,
+        }
+        self.context._log_event(
+            "delete_relation",
+            f"edge_id={edge_id}, evidence={evidence_count}",
+        )
+        return clear_search_cache_after_mutation(self.context.documents, result)
+
+    def delete_node(self, node_id: str) -> dict[str, Any]:
+        """删除指定节点，按 06 文档规则执行级联操作。"""
+        self.context._require_available("graph")
+        with Ingestor(
+            data_dir=self.context.data_dir,
+            external_dir=self.context.external_dir,
+            settings=self.context.settings,
+        )._write_lock:
+            result = self._execute_node_deletion(node_id)
+        self.context._log_event(
+            "delete_node",
+            f"node_id={node_id}, edges={result['cascade_deleted_edges']}",
+        )
+        return clear_search_cache_after_mutation(self.context.documents, result)
+
+    def _execute_node_deletion(self, node_id: str) -> dict[str, Any]:
+        graph_connection = connect_graph(self.context.paths)
+        try:
+            node_row = graph_connection.execute(
+                "SELECT node_id, keyword FROM nodes WHERE node_id = ?", (node_id,)
+            ).fetchone()
+            if node_row is None:
+                raise DocumentNotFoundError(f"节点不存在：{node_id}")
+            bindings = graph_connection.execute(
+                """
+                SELECT ns.source_id,
+                       (SELECT COUNT(*) FROM node_sources other
+                        WHERE other.source_id = ns.source_id
+                          AND other.node_id != ns.node_id) AS other_node_count
+                FROM node_sources ns WHERE ns.node_id = ?
+                ORDER BY ns.source_id
+                """,
+                (node_id,),
+            ).fetchall()
+        finally:
+            graph_connection.close()
+
+        source_ids = [str(binding["source_id"]) for binding in bindings]
+        source_by_id: dict[str, Any] = {}
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            source_connection = connect_sources(self.context.paths)
+            try:
+                source_by_id = {
+                    str(row["source_id"]): row
+                    for row in source_connection.execute(
+                        f"""
+                        SELECT source_id, relative_path, exists_status
+                        FROM sources WHERE source_id IN ({placeholders})
+                        """,
+                        tuple(source_ids),
+                    ).fetchall()
+                }
+            finally:
+                source_connection.close()
+
+        isolated_source_ids = [
+            str(binding["source_id"])
+            for binding in bindings
+            if int(binding["other_node_count"] or 0) == 0
+            and str(binding["source_id"]) in source_by_id
+            and source_by_id[str(binding["source_id"])]["exists_status"] == "active"
+        ]
+        unlinked_files = [
+            str(source_by_id[str(binding["source_id"])]["relative_path"])
+            for binding in bindings
+            if int(binding["other_node_count"] or 0) > 0
+            and str(binding["source_id"]) in source_by_id
+        ]
+
+        ingestor = Ingestor(
+            data_dir=self.context.data_dir,
+            external_dir=self.context.external_dir,
+            settings=self.context.settings,
+        )
+        deleted_files: list[str] = []
+        for source_id in isolated_source_ids:
+            deletion = ingestor.delete_document(source_id)
+            deleted_files.append(str(deletion["relative_path"]))
+
+        graph_connection = connect_graph(self.context.paths)
+        try:
+            graph_connection.execute("BEGIN IMMEDIATE")
+            edge_ids = {
+                row["edge_id"]
+                for row in graph_connection.execute(
+                    """
+                    SELECT edge_id FROM edges
+                    WHERE source_node_id = ? OR target_node_id = ?
+                    """,
+                    (node_id, node_id),
+                ).fetchall()
+            }
+            mention_ids = [
+                str(row["mention_id"])
+                for row in graph_connection.execute(
+                    "SELECT mention_id FROM mention_nodes WHERE node_id = ?",
+                    (node_id,),
+                ).fetchall()
+            ]
+            deleted_relation_mentions = 0
+            if mention_ids:
+                placeholders = ",".join("?" for _ in mention_ids)
+                deleted_relation_mentions = int(
+                    graph_connection.execute(
+                        f"""
+                        SELECT COUNT(*) FROM relation_mentions
+                        WHERE source_mention_id IN ({placeholders})
+                           OR target_mention_id IN ({placeholders})
+                        """,
+                        tuple(mention_ids + mention_ids),
+                    ).fetchone()[0]
+                )
+                graph_connection.execute(
+                    f"""
+                    DELETE FROM relation_mentions
+                    WHERE source_mention_id IN ({placeholders})
+                       OR target_mention_id IN ({placeholders})
+                    """,
+                    tuple(mention_ids + mention_ids),
+                )
+                graph_connection.execute(
+                    f"DELETE FROM entity_mentions WHERE mention_id IN ({placeholders})",
+                    tuple(mention_ids),
+                )
+            if edge_ids:
+                placeholders = ",".join("?" for _ in edge_ids)
+                parameters = tuple(sorted(edge_ids))
+                graph_connection.execute(
+                    f"DELETE FROM edge_sources WHERE edge_id IN ({placeholders})",
+                    parameters,
+                )
+                graph_connection.execute(
+                    f"DELETE FROM edges WHERE edge_id IN ({placeholders})",
+                    parameters,
+                )
+
+            graph_connection.execute(
+                "DELETE FROM node_sources WHERE node_id = ?", (node_id,)
+            )
+            graph_connection.execute(
+                "DELETE FROM mention_nodes WHERE node_id = ?", (node_id,)
+            )
+            graph_connection.execute("DELETE FROM group_nodes")
+            graph_connection.execute("DELETE FROM groups")
+            graph_connection.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
+            graph_connection.commit()
+        except Exception:
+            graph_connection.rollback()
+            raise
+        finally:
+            graph_connection.close()
+
+        # 清理 chunk_nodes 中的孤立引用
+        rag_connection = connect_rag(self.context.paths)
+        try:
+            rag_connection.execute(
+                "DELETE FROM chunk_nodes WHERE node_id = ?", (node_id,)
+            )
+            rag_connection.commit()
+        finally:
+            rag_connection.close()
+
+        refresh_graph_meta(self.context,changed=True)
+        RAGEngine(self.context.data_dir, settings=self.context.settings).refresh_auxiliary_consistency()
+        return {
+            "deleted_node_id": node_id,
+            "deleted_keyword": node_row["keyword"],
+            "cascade_deleted_edges": len(edge_ids),
+            "deleted_mention_count": len(mention_ids),
+            "deleted_relation_mention_count": deleted_relation_mentions,
+            "deleted_source_ids": isolated_source_ids,
+            "deleted_files": deleted_files,
+            "unlinked_files": unlinked_files,
+        }
 
 def _relation_row(row: Any) -> dict[str, Any]:
     source_keyword = str(row["source_keyword"])

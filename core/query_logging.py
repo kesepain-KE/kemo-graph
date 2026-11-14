@@ -11,13 +11,13 @@ def trace_query(function):
         query_id = uuid4().hex[:12]
         detail = f"query_id={query_id}, mode={query_mode}, query_chars={len(str(query))}, force={force}"
         # Do not persist question bodies, model answers, headers or credentials.
-        self.owner._log_event("query_start", detail)
+        self.context._log_event("query_start", detail)
         started = perf_counter()
         try:
             result = function(self, query_mode, query, params, execute, force=force)
         except Exception as exc:
-            self.owner._log_event("query_failed", f"{detail}, error={type(exc).__name__}", round((perf_counter() - started) * 1000), level="ERROR")
+            self.context._log_event("query_failed", f"{detail}, error={type(exc).__name__}", round((perf_counter() - started) * 1000), level="ERROR")
             raise
-        self.owner._log_event("query_complete", detail, round((perf_counter() - started) * 1000))
+        self.context._log_event("query_complete", detail, round((perf_counter() - started) * 1000))
         return result
     return traced

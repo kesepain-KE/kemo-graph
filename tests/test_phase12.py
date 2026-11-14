@@ -406,7 +406,7 @@ class GlobalSearchTests(unittest.TestCase):
             with (
                 patch("core.rag_engine.embed", side_effect=embedding),
                 patch(
-                    "core.knowledge_base.chat",
+                    "core.service.context.chat",
                     return_value="知识库主要讨论知识图谱与向量检索。",
                 ) as request,
             ):
@@ -429,7 +429,7 @@ class GlobalSearchTests(unittest.TestCase):
             settings = _settings(root)
             initialize_databases(root / "data", settings)
             service = KnowledgeBaseService(settings=settings, data_dir=root / "data")
-            with patch("core.knowledge_base.chat") as request:
+            with patch("core.service.context.chat") as request:
                 result = service.query_global("整体主题", top_k=5)
 
             self.assertEqual(result["communities"], [])

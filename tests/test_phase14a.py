@@ -102,7 +102,7 @@ class GraphVisualizationServiceTests(unittest.TestCase):
             service = _seed_service(Path(temporary_dir))
             revision = service.get_graph_visualization_meta()["revision"]
 
-            with patch("core.knowledge_base.chat") as model_chat:
+            with patch("core.service.context.chat") as model_chat:
                 forward = service.get_graph_neighborhood(
                     "b",
                     depth=1,

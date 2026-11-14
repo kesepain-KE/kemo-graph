@@ -9,8 +9,9 @@ from typing import Any
 from .db import connect_sources
 from .ingestor import DocumentNotFoundError
 from .ingestor._utils import _safe_source_path
-from .knowledge_models import DocumentContentConflictError, DocumentTooLargeError, MAX_IMPORT_BYTES
-from .knowledge_support import _write_bytes_atomic
+from core.documents.errors import DocumentContentConflictError, DocumentTooLargeError
+from core.documents.formats import MAX_IMPORT_BYTES
+from core.common import write_bytes_atomic as _write_bytes_atomic
 from .locks import get_knowledge_base_lock
 
 

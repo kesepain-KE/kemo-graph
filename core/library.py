@@ -16,8 +16,9 @@ from uuid import uuid4
 from .db import connect_sources, initialize_databases
 from .ingestor import DocumentNotFoundError, FileMapStore, FileMapping
 from .ingestor._utils import _path_key
-from .knowledge_models import DocumentContentConflictError, MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
-from .knowledge_support import _write_bytes_atomic
+from core.documents.errors import DocumentContentConflictError
+from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
+from core.common import write_bytes_atomic as _write_bytes_atomic
 from .locks import get_knowledge_base_lock
 from markitdown._utils import read_text
 
@@ -288,7 +289,8 @@ def read_content(owner: Any, source_id: str) -> dict[str, Any]:
 
 
 def update_content(owner: Any, source_id: str, content: str, expected_hash: str | None) -> dict[str, Any]:
-    from .knowledge_models import MAX_IMPORT_BYTES, DocumentTooLargeError
+    from core.documents.formats import MAX_IMPORT_BYTES
+    from core.documents.errors import DocumentTooLargeError
     with _write_lock(owner):
         path = original_for_source(owner, source_id)
         if path.suffix.casefold() not in TEXT_SUFFIXES:

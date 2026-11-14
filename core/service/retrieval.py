@@ -1,29 +1,17 @@
-"""检索领域服务。
-
-检索与缓存的业务实现全部位于本模块；``KnowledgeBaseService`` 只保留
-兼容 façade。服务通过 ``ServiceOwner`` 获取数据目录、配置、可用性检查、
-日志及可替换的 provider 工厂，因此既避免循环导入，也保留了旧测试和
-集成方对 provider 的注入/patch 能力。
-"""
-
 from __future__ import annotations
-
 from core.common import elapsed_ms as _elapsed_ms, clip_context_text as _clip_context_text
-
 import json
 import time
 from typing import Any, Callable
-
-from .protocols import ServiceOwner
-from ..query_logging import trace_query
-from ..query_progress import query_step, step_status
+from .context import ServiceContext
+from core.query_logging import trace_query
+from core.query_progress import query_step, step_status
 
 
 class RetrievalService:
-    """图谱、RAG、混合检索及搜索缓存的统一入口。"""
+    def __init__(self, context: ServiceContext) -> None:
+        self.context = context
 
-    def __init__(self, owner: ServiceOwner) -> None:
-        self.owner = owner
 
     def query_graph(
         self,
@@ -34,7 +22,7 @@ class RetrievalService:
         confidence: float | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        owner = self.owner
+        owner = self.context
         owner._require_available("graph")
         return self.cached_query(
             "graph",
@@ -65,7 +53,7 @@ class RetrievalService:
         threshold: float | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        owner = self.owner
+        owner = self.context
         owner._require_available("rag")
         return self.cached_query(
             "rag",
@@ -99,7 +87,7 @@ class RetrievalService:
         direction: str = "both",
         force: bool = False,
     ) -> dict[str, Any]:
-        owner = self.owner
+        owner = self.context
         owner._require_available("graph", "rag")
         return self.cached_query(
             "hybrid",
@@ -145,7 +133,7 @@ class RetrievalService:
         direction: str = "both",
         force: bool = False,
     ) -> dict[str, Any]:
-        owner = self.owner
+        owner = self.context
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query 必须是非空字符串")
         normalized_query = query.strip()
@@ -172,7 +160,7 @@ class RetrievalService:
                 ),
                 "direction": direction,
             },
-            lambda: owner._query_answer_uncached(
+            lambda: self.query_answer_uncached(
                 normalized_query,
                 graph_depth=graph_depth,
                 rag_top_k=rag_top_k,
@@ -190,7 +178,7 @@ class RetrievalService:
         *,
         force: bool = False,
     ) -> dict[str, Any]:
-        owner = self.owner
+        owner = self.context
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query 必须是非空字符串")
         if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
@@ -201,7 +189,7 @@ class RetrievalService:
             "global",
             normalized_query,
             {"top_k": top_k},
-            lambda: owner._query_global_uncached(normalized_query, top_k),
+            lambda: self.query_global_uncached(normalized_query, top_k),
             force=force,
         )
 
@@ -217,7 +205,7 @@ class RetrievalService:
     ) -> dict[str, Any]:
         """基于混合召回上下文生成回答，不读写搜索缓存。"""
 
-        owner = self.owner
+        owner = self.context
         started_at = time.perf_counter()
         retrieval = owner._new_hybrid_engine().query(
             normalized_query,
@@ -281,7 +269,7 @@ class RetrievalService:
     ) -> dict[str, Any]:
         """从节点群向量和图谱关系构建全局回答上下文。"""
 
-        owner = self.owner
+        owner = self.context
         communities = owner._new_rag_engine().search_communities(
             normalized_query,
             top_k=top_k,
@@ -296,7 +284,7 @@ class RetrievalService:
 
         group_ids = [str(item["group_id"]) for item in communities]
         placeholders = ",".join("?" for _ in group_ids)
-        from ..db import connect_graph
+        from core.db import connect_graph
 
         connection = connect_graph(owner.paths)
         try:
@@ -333,7 +321,7 @@ class RetrievalService:
         finally:
             connection.close()
 
-        from ..knowledge_base import KnowledgeBaseProcessingError
+        from core.knowledge_base import KnowledgeBaseProcessingError
 
         group_details = {str(row["group_id"]): row for row in group_rows}
         missing_groups = set(group_ids).difference(group_details)
@@ -413,6 +401,155 @@ class RetrievalService:
             "key_entities": key_entities,
         }
 
+    def list_cached_queries(
+        self: RetrievalService,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        self.context._require_initialized()
+        from core.search_cache import SearchCache
+
+        return SearchCache(self.context.paths, self.context.settings).list(page, page_size)
+
+    def get_cached_query(
+        self: RetrievalService,
+        cache_key: str,
+    ) -> dict[str, Any]:
+        self.context._require_initialized()
+        from core.ingestor import DocumentNotFoundError
+        from core.search_cache import SearchCache
+
+        detail = SearchCache(self.context.paths, self.context.settings).detail(cache_key)
+        if detail is None:
+            raise DocumentNotFoundError(f"搜索缓存不存在：{cache_key}")
+        return detail
+
+    def clear_search_cache(
+        self: RetrievalService,
+        stale_only: bool = False,
+    ) -> dict[str, Any]:
+        self.context._require_initialized()
+        from core.search_cache import SearchCache
+
+        deleted = SearchCache(self.context.paths, self.context.settings).clear(stale_only)
+        self.context._log_event(
+            "search_cache_clear",
+            f"deleted={deleted}, stale_only={stale_only}",
+        )
+        return {"deleted": deleted, "stale_only": stale_only}
+
+    @trace_query
+    def cached_query(
+        self: RetrievalService,
+        query_mode: str,
+        query: str,
+        params: dict[str, Any],
+        execute: Callable[[], dict[str, Any]],
+        *,
+        force: bool,
+    ) -> dict[str, Any]:
+        owner = self.context
+        if not owner.settings.search_cache_enabled:
+            return execute()
+        from core.search_cache import (
+            SearchCache,
+            cache_key_lock,
+            compute_state_hash,
+            decode_cached_result,
+            make_cache_key,
+            search_config_hash,
+        )
+
+        try:
+            cache = SearchCache(owner.paths, owner.settings)
+            config_hash = search_config_hash(owner.settings)
+        except Exception as exc:
+            owner._log_event(
+                "search_cache_error",
+                f"mode={query_mode}, stage=initialize, error={type(exc).__name__}",
+                level="WARNING",
+            )
+            return execute()
+
+        for _attempt in range(3):
+            try:
+                state_hash = compute_state_hash(owner.paths, owner.settings)
+                cache_key = make_cache_key(
+                    query,
+                    state_hash,
+                    params,
+                    query_mode=query_mode,
+                    config_hash=config_hash,
+                )
+            except Exception as exc:
+                owner._log_event(
+                    "search_cache_error",
+                    f"mode={query_mode}, stage=fingerprint, error={type(exc).__name__}",
+                    level="WARNING",
+                )
+                return execute()
+            with cache_key_lock(owner.paths, cache_key):
+                try:
+                    if compute_state_hash(owner.paths, owner.settings) != state_hash:
+                        continue
+                except Exception as exc:
+                    owner._log_event(
+                        "search_cache_error",
+                        f"mode={query_mode}, stage=verify, error={type(exc).__name__}",
+                        level="WARNING",
+                    )
+                    return execute()
+                if not force:
+                    try:
+                        with query_step("cache"):
+                            cached = cache.get(cache_key, state_hash=state_hash)
+                        if cached is not None:
+                            step_status("cache_hit", "completed")
+                            owner._log_event(
+                                "search_cache_hit",
+                                f"mode={query_mode}, key={cache_key[:12]}",
+                            )
+                            return decode_cached_result(cached)
+                    except Exception as exc:
+                        owner._log_event(
+                            "search_cache_error",
+                            f"mode={query_mode}, stage=read, error={type(exc).__name__}",
+                            level="WARNING",
+                        )
+                result = execute()
+                try:
+                    if compute_state_hash(owner.paths, owner.settings) == state_hash:
+                        cache.set(
+                            cache_key,
+                            query,
+                            state_hash,
+                            params,
+                            result,
+                            query_mode=query_mode,
+                        )
+                        owner._log_event(
+                            "search_cache_store",
+                            f"mode={query_mode}, key={cache_key[:12]}, force={force}",
+                        )
+                    else:
+                        owner._log_event(
+                            "search_cache_skip",
+                            f"mode={query_mode}, reason=state_changed",
+                            level="WARNING",
+                        )
+                except Exception as exc:
+                    owner._log_event(
+                        "search_cache_error",
+                        f"mode={query_mode}, stage=write, error={type(exc).__name__}",
+                        level="WARNING",
+                    )
+                return result
+        owner._log_event(
+            "search_cache_skip",
+            f"mode={query_mode}, reason=state_unstable",
+            level="WARNING",
+        )
+        return execute()
 
 def _build_answer_context(retrieval: Any) -> dict[str, Any]:
     """将混合检索结果压缩为可控、可读且不丢失来源的 LLM 上下文。"""
@@ -540,175 +677,7 @@ def _build_answer_context(retrieval: Any) -> dict[str, Any]:
         "semantic_communities": semantic_communities,
     }
 
-
 def _dict_items(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
-
-
-
-
-
-# The cache methods were kept as a separate implementation during the
-# interrupted extraction above.  Bind the concrete methods here so the class
-# remains usable even when this module is imported without the compatibility
-# facade's private helpers.
-def _service_list_cached_queries(
-    self: RetrievalService,
-    page: int = 1,
-    page_size: int = 20,
-) -> dict[str, Any]:
-    self.owner._require_initialized()
-    from ..search_cache import SearchCache
-
-    return SearchCache(self.owner.paths, self.owner.settings).list(page, page_size)
-
-
-def _service_get_cached_query(
-    self: RetrievalService,
-    cache_key: str,
-) -> dict[str, Any]:
-    self.owner._require_initialized()
-    from ..ingestor import DocumentNotFoundError
-    from ..search_cache import SearchCache
-
-    detail = SearchCache(self.owner.paths, self.owner.settings).detail(cache_key)
-    if detail is None:
-        raise DocumentNotFoundError(f"搜索缓存不存在：{cache_key}")
-    return detail
-
-
-def _service_clear_search_cache(
-    self: RetrievalService,
-    stale_only: bool = False,
-) -> dict[str, Any]:
-    self.owner._require_initialized()
-    from ..search_cache import SearchCache
-
-    deleted = SearchCache(self.owner.paths, self.owner.settings).clear(stale_only)
-    self.owner._log_event(
-        "search_cache_clear",
-        f"deleted={deleted}, stale_only={stale_only}",
-    )
-    return {"deleted": deleted, "stale_only": stale_only}
-
-
-@trace_query
-def _service_cached_query(
-    self: RetrievalService,
-    query_mode: str,
-    query: str,
-    params: dict[str, Any],
-    execute: Callable[[], dict[str, Any]],
-    *,
-    force: bool,
-) -> dict[str, Any]:
-    owner = self.owner
-    if not owner.settings.search_cache_enabled:
-        return execute()
-    from ..search_cache import (
-        SearchCache,
-        cache_key_lock,
-        compute_state_hash,
-        decode_cached_result,
-        make_cache_key,
-        search_config_hash,
-    )
-
-    try:
-        cache = SearchCache(owner.paths, owner.settings)
-        config_hash = search_config_hash(owner.settings)
-    except Exception as exc:
-        owner._log_event(
-            "search_cache_error",
-            f"mode={query_mode}, stage=initialize, error={type(exc).__name__}",
-            level="WARNING",
-        )
-        return execute()
-
-    for _attempt in range(3):
-        try:
-            state_hash = compute_state_hash(owner.paths, owner.settings)
-            cache_key = make_cache_key(
-                query,
-                state_hash,
-                params,
-                query_mode=query_mode,
-                config_hash=config_hash,
-            )
-        except Exception as exc:
-            owner._log_event(
-                "search_cache_error",
-                f"mode={query_mode}, stage=fingerprint, error={type(exc).__name__}",
-                level="WARNING",
-            )
-            return execute()
-        with cache_key_lock(owner.paths, cache_key):
-            try:
-                if compute_state_hash(owner.paths, owner.settings) != state_hash:
-                    continue
-            except Exception as exc:
-                owner._log_event(
-                    "search_cache_error",
-                    f"mode={query_mode}, stage=verify, error={type(exc).__name__}",
-                    level="WARNING",
-                )
-                return execute()
-            if not force:
-                try:
-                    with query_step("cache"):
-                        cached = cache.get(cache_key, state_hash=state_hash)
-                    if cached is not None:
-                        step_status("cache_hit", "completed")
-                        owner._log_event(
-                            "search_cache_hit",
-                            f"mode={query_mode}, key={cache_key[:12]}",
-                        )
-                        return decode_cached_result(cached)
-                except Exception as exc:
-                    owner._log_event(
-                        "search_cache_error",
-                        f"mode={query_mode}, stage=read, error={type(exc).__name__}",
-                        level="WARNING",
-                    )
-            result = execute()
-            try:
-                if compute_state_hash(owner.paths, owner.settings) == state_hash:
-                    cache.set(
-                        cache_key,
-                        query,
-                        state_hash,
-                        params,
-                        result,
-                        query_mode=query_mode,
-                    )
-                    owner._log_event(
-                        "search_cache_store",
-                        f"mode={query_mode}, key={cache_key[:12]}, force={force}",
-                    )
-                else:
-                    owner._log_event(
-                        "search_cache_skip",
-                        f"mode={query_mode}, reason=state_changed",
-                        level="WARNING",
-                    )
-            except Exception as exc:
-                owner._log_event(
-                    "search_cache_error",
-                    f"mode={query_mode}, stage=write, error={type(exc).__name__}",
-                    level="WARNING",
-                )
-            return result
-    owner._log_event(
-        "search_cache_skip",
-        f"mode={query_mode}, reason=state_unstable",
-        level="WARNING",
-    )
-    return execute()
-
-
-RetrievalService.list_cached_queries = _service_list_cached_queries  # type: ignore[method-assign]
-RetrievalService.get_cached_query = _service_get_cached_query  # type: ignore[method-assign]
-RetrievalService.clear_search_cache = _service_clear_search_cache  # type: ignore[method-assign]
-RetrievalService.cached_query = _service_cached_query  # type: ignore[method-assign]

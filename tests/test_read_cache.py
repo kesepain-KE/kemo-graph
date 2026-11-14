@@ -170,7 +170,7 @@ def test_documents_and_health_share_reads_across_service_instances_and_invalidat
     another = KnowledgeBaseService(settings=settings, data_dir=data_dir, external_dir=tmp_path / "docs")
     assert service.list_documents()["pagination"]["total"] == 1
     assert service.status()["sources"]["active"] == 1
-    with patch.object(another, "_read_document_page", side_effect=AssertionError("disk reread")), patch.object(another, "_read_status", side_effect=AssertionError("health reread")):
+    with patch.object(another.documents, "_read_document_page", side_effect=AssertionError("disk reread")), patch.object(another.maintenance, "_read_status", side_effect=AssertionError("health reread")):
         assert another.list_documents()["pagination"]["total"] == 1
         assert another.status()["sources"]["active"] == 1
     connection = connect_sources(paths)

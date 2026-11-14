@@ -11,7 +11,7 @@ import pytest
 
 from api import create_app
 from core.config import AppConfig
-from core.knowledge_models import (
+from core.service.errors import (
     DocumentImportPathError,
     SUPPORTED_IMPORT_SUFFIXES,
 )

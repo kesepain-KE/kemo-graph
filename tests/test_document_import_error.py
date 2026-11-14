@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from core import knowledge_support as ks
+from core.documents import importing as ks
 
 
 def test_document_import_error_is_resolvable() -> None:

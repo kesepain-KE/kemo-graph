@@ -11,7 +11,7 @@ from api import create_app
 from core.config import AppConfig
 from core.db import connect_graph, initialize_databases
 from core.knowledge_base import KnowledgeBaseService
-from core.knowledge_models import DocumentContentConflictError
+from core.service.errors import DocumentContentConflictError
 from core.search_cache import SearchCache, SearchCacheCleanupError, SearchCacheError
 
 

@@ -429,7 +429,7 @@ class GroupSummaryTests(unittest.TestCase):
             write_graph_meta(paths, {**meta, "changed_since_summary": 1})
             service = KnowledgeBaseService(settings=settings, data_dir=root / "data")
             with (
-                patch("core.knowledge_base.chat", return_value="A connected group"),
+                patch("core.service.context.chat", return_value="A connected group"),
                 patch("core.rag_engine.embed", side_effect=_embedding),
             ):
                 result = service.generate_group_summaries(force=True)
@@ -445,7 +445,7 @@ class GroupSummaryTests(unittest.TestCase):
             self.assertEqual(tuple(group), ("A connected group", 4, 3))
 
             write_graph_meta(paths, {**read_graph_meta(paths), "changed_since_summary": 1})
-            with patch("core.knowledge_base.chat", side_effect=RuntimeError("gateway")):
+            with patch("core.service.context.chat", side_effect=RuntimeError("gateway")):
                 with self.assertRaises(RuntimeError):
                     service.generate_group_summaries(force=True)
             graph = connect_graph(paths)

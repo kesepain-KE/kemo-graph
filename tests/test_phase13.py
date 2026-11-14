@@ -238,12 +238,12 @@ class TransparentCacheTests(unittest.TestCase):
                 "key_entities": [],
             }
             with (
-                patch("core.knowledge_base.GraphEngine", return_value=graph_engine),
-                patch("core.knowledge_base.RAGEngine", return_value=rag_engine),
-                patch("core.knowledge_base.HybridEngine", return_value=hybrid_engine),
+                patch("core.service.context.GraphEngine", return_value=graph_engine),
+                patch("core.service.context.RAGEngine", return_value=rag_engine),
+                patch("core.service.context.HybridEngine", return_value=hybrid_engine),
                 patch.object(
-                    service,
-                    "_query_global_uncached",
+                    service.retrieval,
+                    "query_global_uncached",
                     return_value=global_result,
                 ) as global_query,
             ):
@@ -344,8 +344,8 @@ class TransparentCacheTests(unittest.TestCase):
             engine = MagicMock()
             engine.query.return_value = hybrid_result
             with (
-                patch("core.knowledge_base.HybridEngine", return_value=engine),
-                patch("core.knowledge_base.chat", return_value="画布用于展示节点。") as llm,
+                patch("core.service.context.HybridEngine", return_value=engine),
+                patch("core.service.context.chat", return_value="画布用于展示节点。") as llm,
             ):
                 first = service.query_answer(" 画布是什么 ")
                 second = service.query_answer("画布是什么")
@@ -382,7 +382,7 @@ class TransparentCacheTests(unittest.TestCase):
             engine = MagicMock()
             engine.query.side_effect = execute
             results: list[dict] = []
-            with patch("core.knowledge_base.GraphEngine", return_value=engine):
+            with patch("core.service.context.GraphEngine", return_value=engine):
                 threads = [
                     threading.Thread(
                         target=lambda: results.append(service.query_graph("same"))
@@ -423,7 +423,7 @@ class TransparentCacheTests(unittest.TestCase):
 
             engine = MagicMock()
             engine.query.side_effect = execute
-            with patch("core.knowledge_base.GraphEngine", return_value=engine):
+            with patch("core.service.context.GraphEngine", return_value=engine):
                 service.query_graph("moving")
                 service.query_graph("moving")
             self.assertEqual(calls, 2)
@@ -447,7 +447,7 @@ class TransparentCacheTests(unittest.TestCase):
             )
             service = KnowledgeBaseService(settings=settings, data_dir=root / "data")
             with patch(
-                "core.knowledge_base.Ingestor.delete_document",
+                "core.ingestor.Ingestor.delete_document",
                 return_value={"deleted_source_id": "s1"},
             ):
                 result = service.delete_document("s1")

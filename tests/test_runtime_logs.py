@@ -133,7 +133,7 @@ def test_terminal_handler_keeps_last_good_sink_when_config_is_invalid(tmp_path):
 
 def test_query_lifecycle_preserves_results_errors_and_omits_question():
     owner = SimpleNamespace(_log_event=Mock())
-    service = SimpleNamespace(owner=owner)
+    service = SimpleNamespace(context=owner)
     @trace_query
     def execute(self, mode, query, params, callback, *, force):
         return callback()

@@ -1,113 +1,18 @@
-"""供 CLI、外部 API 和 Web 入口共用的知识库门面。"""
-
 from __future__ import annotations
-
-from core.common import now_iso as _now_iso, elapsed_ms as _elapsed_ms, write_json_atomic as _write_json_atomic, write_bytes_atomic as _write_bytes_atomic, parse_json_list as _parse_json_list, clip_context_text as _clip_context_text
-
 import json
 import hashlib
 import os
 import re
-import shutil
 import stat
 import tempfile
-import time
 from contextlib import contextmanager
-from copy import deepcopy
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Iterator
 from uuid import uuid4
-
-from provider.engine import chat
-from core.documents.conversion import (
-    DocumentConversionError,
-    SUPPORTED_DOCUMENT_SUFFIXES,
-    import_document as convert_document,
-)
-
-from .config import DEFAULT_CONFIG_PATH, AppConfig, load_config
-from .db import (
-    connect_graph,
-    connect_rag,
-    connect_sources,
-    get_database_paths,
-    read_graph_meta,
-    write_graph_meta,
-)
-from .graph_engine import GraphEngine
-from .graph_organizer import GraphOrganizer
-from .graph_visualization import (
-    GraphDirection,
-    get_neighborhood,
-    get_visualization_meta,
-    list_visualization_edges,
-    list_visualization_nodes,
-)
-from .hybrid import HybridEngine
-from .ingestor import (
-    DocumentNotFoundError,
-    FileMapError,
-    IngestError,
-    Ingestor,
-)
-from .logger import DailyTSVLogger
-from .locks import get_knowledge_base_lock
-from .rag_engine import FaissIndexManager, RAGEngine
-from .rebuilder import KnowledgeBaseRebuilder, ProgressCallback
-from .services import (
-    DocumentService,
-    GraphService,
-    MaintenanceService,
-    RetrievalService,
-)
-
-from .knowledge_models import (
-    MAX_IMPORT_BYTES,
-    SUPPORTED_IMPORT_SUFFIXES,
-    DocumentImportConflictError,
-    DocumentImportError,
-    DocumentImportPathError,
-    DocumentTooLargeError,
-    _ImportSnapshot,
-)
-
-
-def _public_chat(*args: Any, **kwargs: Any) -> Any:
-    """Resolve the facade symbol lazily so existing patch/injection points remain valid."""
-
-    from . import knowledge_base
-
-    return knowledge_base.chat(*args, **kwargs)
-
-
-def _public_convert_document(*args: Any, **kwargs: Any) -> Any:
-    """Resolve document conversion through the public facade patch point."""
-
-    from . import knowledge_base
-
-    return knowledge_base.convert_document(*args, **kwargs)
-
-
-
-def _relation_row(row: Any) -> dict[str, Any]:
-    source_keyword = str(row["source_keyword"])
-    relation = str(row["relation"])
-    target_keyword = str(row["target_keyword"])
-    return {
-        "edge_id": row["edge_id"],
-        "source_node_id": row["source_node_id"],
-        "source_keyword": source_keyword,
-        "relation": relation,
-        "target_node_id": row["target_node_id"],
-        "target_keyword": target_keyword,
-        "path": f"{source_keyword}->[{relation}]->{target_keyword}",
-        "weight": float(row["weight"] or 0.0),
-        "support_count": int(row["support_count"] or 0),
-        "created_at": row["created_at"],
-    }
-
+from core.db import connect_sources
+from core.documents.errors import DocumentImportConflictError, DocumentImportError, DocumentImportPathError, DocumentTooLargeError
+from core.documents.formats import MAX_IMPORT_BYTES, _ImportSnapshot
 
 def _clear_directory_contents(root: Path) -> int:
     """删除目录中的全部内容且不跟随符号链接，返回永久删除的文件数。"""
@@ -133,7 +38,6 @@ def _clear_directory_contents(root: Path) -> int:
             deleted += 1
     return deleted
 
-
 def _resolve_import_source(value: Path | str) -> Path:
     if not isinstance(value, (str, Path)):
         raise DocumentImportPathError("source_path 必须是路径字符串")
@@ -157,7 +61,6 @@ def _resolve_import_source(value: Path | str) -> Path:
         raise DocumentImportPathError(f"文件不可读：{resolved.name}") from exc
     return resolved
 
-
 def _stable_markdown_name(filename: str, identity: str) -> str:
     stem = Path(filename).stem
     safe_stem = (
@@ -172,7 +75,6 @@ def _stable_markdown_name(filename: str, identity: str) -> str:
     ).hexdigest()[:10]
     return f"{safe_stem}-{digest}.md"
 
-
 def _safe_markdown_destination(root: Path, relative_path: str) -> Path:
     relative = Path(relative_path)
     if relative.is_absolute() or ".." in relative.parts:
@@ -186,7 +88,6 @@ def _safe_markdown_destination(root: Path, relative_path: str) -> Path:
         raise DocumentImportPathError("Markdown 映射路径必须以 .md 结尾")
     return destination
 
-
 def _restore_import_destination(path: Path, previous: bytes | None) -> None:
     if previous is None:
         path.unlink(missing_ok=True)
@@ -197,7 +98,6 @@ def _restore_import_destination(path: Path, previous: bytes | None) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-
 
 def _source_record_for_relative_path(
     paths: Any,
@@ -221,12 +121,10 @@ def _source_record_for_relative_path(
         "content_hash": str(row["content_hash"]),
     }
 
-
 def _source_id_for_relative_path(paths: Any, relative_path: str) -> str:
     """兼容内部旧调用；新代码应读取完整来源记录。"""
 
     return str(_source_record_for_relative_path(paths, relative_path)["source_id"])
-
 
 def _normalize_expected_origin_hash(value: str | None) -> str | None:
     if value is None:
@@ -240,7 +138,6 @@ def _normalize_expected_origin_hash(value: str | None) -> str | None:
         raise ValueError("expected_origin_hash 必须是 64 位 SHA-256 十六进制字符串")
     return normalized
 
-
 def _sha256_snapshot(path: Path) -> str:
     digest = hashlib.sha256()
     try:
@@ -250,7 +147,6 @@ def _sha256_snapshot(path: Path) -> str:
     except OSError as exc:
         raise DocumentImportConflictError("无法复核导入快照") from exc
     return digest.hexdigest()
-
 
 def _same_import_source_state(
     before: os.stat_result,
@@ -278,7 +174,6 @@ def _same_import_source_state(
             == getattr(after, "st_ctime_ns", None)
         )
     return unchanged
-
 
 @contextmanager
 def _stable_import_snapshot(
@@ -389,7 +284,6 @@ def _stable_import_snapshot(
                 ).isoformat(),
             )
 
-
 def _snapshot_filename(source: Path) -> str:
     """保留转换所需的原始 basename，同时生成跨平台安全的快照名。"""
 
@@ -413,14 +307,12 @@ def _snapshot_filename(source: Path) -> str:
         sanitized = f"{Path(sanitized).stem[:stem_limit]}{safe_suffix}"
     return sanitized
 
-
 def _detected_format(suffix: str) -> str:
     if suffix in {".md", ".markdown"}:
         return "markdown"
     if suffix in {".html", ".htm"}:
         return "html"
     return suffix.removeprefix(".")
-
 
 def _ingest_error_summary(result: dict[str, Any]) -> str:
     messages: list[str] = []
@@ -432,134 +324,6 @@ def _ingest_error_summary(result: dict[str, Any]) -> str:
             if value:
                 messages.append(str(value)[:160])
     return "; ".join(messages[:3]) or "文档整理返回失败状态"
-
-
-def _build_answer_context(retrieval: Any) -> dict[str, Any]:
-    """将混合检索结果压缩为可控、可读且不丢失来源的 LLM 上下文。"""
-
-    if not isinstance(retrieval, dict):
-        retrieval = {}
-    graph = retrieval.get("graph")
-    rag = retrieval.get("rag")
-    graph = graph if isinstance(graph, dict) else {}
-    rag = rag if isinstance(rag, dict) else {}
-
-    raw_nodes = _dict_items(graph.get("hit_nodes")) + _dict_items(
-        graph.get("expanded_nodes")
-    )
-    nodes: list[dict[str, Any]] = []
-    node_names: dict[str, str] = {}
-    seen_node_ids: set[str] = set()
-    for item in raw_nodes:
-        node_id = str(item.get("node_id") or "").strip()
-        keyword = str(item.get("keyword") or node_id).strip()
-        identity = node_id or keyword.casefold()
-        if not identity or identity in seen_node_ids:
-            continue
-        seen_node_ids.add(identity)
-        if node_id:
-            node_names[node_id] = keyword or node_id
-        nodes.append(
-            {
-                "node_id": node_id,
-                "keyword": keyword,
-                "summary": _clip_context_text(item.get("summary"), 800),
-                "aliases": item.get("aliases") if isinstance(item.get("aliases"), list) else [],
-                "tags": item.get("tags") if isinstance(item.get("tags"), list) else [],
-                "match_score": item.get("match_score"),
-                "depth": item.get("depth"),
-            }
-        )
-        if len(nodes) >= 30:
-            break
-
-    relationships: list[dict[str, Any]] = []
-    for edge in _dict_items(graph.get("edges"))[:40]:
-        source_id = str(edge.get("source_node_id") or "")
-        target_id = str(edge.get("target_node_id") or "")
-        source = node_names.get(source_id, source_id)
-        target = node_names.get(target_id, target_id)
-        relation = _clip_context_text(edge.get("relation"), 160)
-        relationships.append(
-            {
-                "text": f"{source} →[{relation}]→ {target}",
-                "weight": edge.get("weight"),
-            }
-        )
-
-    relationship_paths = [
-        _clip_context_text(path.get("text"), 700)
-        for path in _dict_items(graph.get("paths"))[:20]
-        if str(path.get("text") or "").strip()
-    ]
-    groups = [
-        {
-            "group_id": str(item.get("group_id") or ""),
-            "summary": _clip_context_text(item.get("summary"), 1200),
-            "node_ids": item.get("node_ids") if isinstance(item.get("node_ids"), list) else [],
-        }
-        for item in _dict_items(graph.get("groups"))[:8]
-    ]
-
-    rag_passages: list[dict[str, Any]] = []
-    for item in _dict_items(rag.get("results"))[:12]:
-        source = item.get("source")
-        source = source if isinstance(source, dict) else {}
-        parent = item.get("context")
-        parent = parent if isinstance(parent, dict) else {}
-        matched_content = _clip_context_text(item.get("content"), 1600)
-        parent_content = _clip_context_text(parent.get("content"), 3200)
-        rag_passages.append(
-            {
-                "chunk_id": str(item.get("chunk_id") or ""),
-                "content": parent_content or matched_content,
-                "matched_content": (
-                    matched_content
-                    if parent_content and matched_content != parent_content
-                    else ""
-                ),
-                "score": item.get("score"),
-                "granularity": item.get("granularity"),
-                "context_granularity": parent.get("granularity"),
-                "source": str(
-                    source.get("relative_path") or source.get("source_id") or "未知来源"
-                ),
-            }
-        )
-
-    semantic_entities = [
-        {
-            "node_id": str(item.get("node_id") or ""),
-            "keyword": str(item.get("keyword") or ""),
-            "summary": _clip_context_text(item.get("summary"), 800),
-            "score": item.get("score"),
-        }
-        for item in _dict_items(retrieval.get("entities"))[:10]
-    ]
-    semantic_communities = [
-        {
-            "group_id": str(item.get("group_id") or ""),
-            "summary": _clip_context_text(item.get("summary"), 1200),
-            "score": item.get("score"),
-        }
-        for item in _dict_items(retrieval.get("communities"))[:6]
-    ]
-    return {
-        "graph_nodes": nodes,
-        "relationships": relationships,
-        "relationship_paths": relationship_paths,
-        "groups": groups,
-        "rag_passages": rag_passages,
-        "semantic_entities": semantic_entities,
-        "semantic_communities": semantic_communities,
-    }
-
-
-def _dict_items(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
-
 
 def _load_source_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(value, str) or not value:

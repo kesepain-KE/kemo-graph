@@ -148,7 +148,7 @@ class DocumentImportTests(unittest.TestCase):
                 return {"format": "txt"}
 
             with patch(
-                "core.knowledge_base.convert_document",
+                "core.service.documents.convert_document",
                 side_effect=replace_source_during_conversion,
             ):
                 imported = service.import_document(
@@ -206,7 +206,7 @@ class DocumentImportTests(unittest.TestCase):
             source.write_text("current content", encoding="utf-8")
             service = _service(root)
 
-            with patch("core.knowledge_base.convert_document") as convert_mock:
+            with patch("core.service.documents.convert_document") as convert_mock:
                 with self.assertRaises(DocumentImportConflictError):
                     service.import_document(
                         source,
@@ -240,10 +240,10 @@ class DocumentImportTests(unittest.TestCase):
 
             with (
                 patch(
-                    "core.knowledge_base.os.fstat",
+                    "core.documents.importing.os.fstat",
                     side_effect=change_source_before_second_fstat,
                 ),
-                patch("core.knowledge_base.convert_document") as convert_mock,
+                patch("core.service.documents.convert_document") as convert_mock,
             ):
                 with self.assertRaises(DocumentImportConflictError):
                     service.import_document(source, ingest_after_import=False)
@@ -260,7 +260,7 @@ class DocumentImportTests(unittest.TestCase):
             service = _service(root)
 
             with patch(
-                "core.knowledge_base.Ingestor.scan_sources",
+                "core.ingestor.Ingestor.scan_sources",
                 side_effect=IngestError("scan failed"),
             ):
                 with self.assertRaises(DocumentImportError):
@@ -350,7 +350,7 @@ class DocumentImportTests(unittest.TestCase):
                 return {"format": "txt"}
 
             with patch(
-                "core.knowledge_base.convert_document",
+                "core.service.documents.convert_document",
                 side_effect=tamper_with_snapshot,
             ):
                 with self.assertRaises(DocumentImportConflictError):
@@ -390,7 +390,7 @@ class DocumentImportTests(unittest.TestCase):
             source = source_dir / "broken.txt"
             source.write_text("broken", encoding="utf-8")
             with patch(
-                "core.knowledge_base.convert_document",
+                "core.service.documents.convert_document",
                 side_effect=DocumentConversionError("conversion failed"),
             ):
                 with self.assertRaises(DocumentConversionError):
@@ -413,7 +413,7 @@ class DocumentImportTests(unittest.TestCase):
                 "details": [],
             }
 
-            with patch("core.knowledge_base.Ingestor.ingest") as ingest_mock:
+            with patch("core.ingestor.Ingestor.ingest") as ingest_mock:
                 pending = service.import_document(source, ingest_after_import=False)
                 ingest_mock.assert_not_called()
             self.assertEqual(pending["ingest_status"], "pending")
@@ -421,7 +421,7 @@ class DocumentImportTests(unittest.TestCase):
             source = Path(pending["original_path"])
             source.write_text("# Document updated", encoding="utf-8")
             with patch(
-                "core.knowledge_base.Ingestor.ingest",
+                "core.ingestor.Ingestor.ingest",
                 return_value=ingest_result,
             ) as ingest_mock:
                 completed = service.import_document(source)

@@ -1,117 +1,24 @@
-"""供 CLI、外部 API 和 Web 入口共用的知识库门面。"""
-
 from __future__ import annotations
-
 from core.common import escape_like as _escape_like
-
-import json
 import hashlib
-import os
-import re
-import stat
 import tempfile
 import time
-from contextlib import contextmanager
-from copy import deepcopy
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
-from uuid import uuid4
+from typing import Any, Sequence
+from core.documents.conversion import DocumentConversionError, import_document as convert_document
+from core.build_progress import read_builds
+from core.db import connect_sources
+from core.ingestor import FileMapError, Ingestor
+from core.locks import get_knowledge_base_lock
+from core.search_cache import SearchCacheCleanupError, clear_search_cache_after_mutation
+from core.service.errors import SUPPORTED_IMPORT_SUFFIXES, DocumentContentConflictError, DocumentImportError, DocumentImportConflictError, DocumentImportPathError, UnsupportedDocumentFormatError
+from core.documents.importing import _ingest_error_summary, _load_source_metadata, _resolve_import_source, _restore_import_destination, _safe_markdown_destination, _sha256_snapshot, _source_record_for_relative_path, _stable_import_snapshot, _stable_markdown_name
+from core.common import elapsed_ms as _elapsed_ms, now_iso as _now_iso, write_bytes_atomic as _write_bytes_atomic
 
-from provider.engine import chat
-from core.documents.conversion import (
-    DocumentConversionError,
-    SUPPORTED_DOCUMENT_SUFFIXES,
-    import_document as convert_document,
-)
 
-from .config import DEFAULT_CONFIG_PATH, AppConfig, load_config
-from .build_progress import read_builds
-from .db import (
-    connect_graph,
-    connect_rag,
-    connect_sources,
-    get_database_paths,
-    read_graph_meta,
-    write_graph_meta,
-)
-from .graph_engine import GraphEngine
-from .graph_organizer import GraphOrganizer
-from .graph_visualization import (
-    GraphDirection,
-    get_neighborhood,
-    get_visualization_meta,
-    list_visualization_edges,
-    list_visualization_nodes,
-)
-from .hybrid import HybridEngine
-from .ingestor import (
-    DocumentNotFoundError,
-    FileMapError,
-    IngestError,
-    Ingestor,
-)
-from .logger import DailyTSVLogger
-from .locks import get_knowledge_base_lock
-from .search_cache import SearchCacheCleanupError, clear_search_cache_after_mutation
-from .rag_engine import FaissIndexManager, RAGEngine
-from .rebuilder import KnowledgeBaseRebuilder, ProgressCallback
-from .services import (
-    DocumentService,
-    GraphService,
-    MaintenanceService,
-    RetrievalService,
-)
-
-from .knowledge_models import (
-    CONFIG_API_KEY_MASK,
-    MAX_IMPORT_BYTES,
-    SUPPORTED_IMPORT_SUFFIXES,
-    DocumentContentConflictError,
-    DocumentImportError,
-    DocumentImportConflictError,
-    DocumentImportPathError,
-    DocumentIngestError,
-    DocumentTooLargeError,
-    KnowledgeBaseNotInitializedError,
-    KnowledgeBaseProcessingError,
-    UnsupportedDocumentFormatError,
-    _ImportSnapshot,
-)
-from .knowledge_support import (
-    _build_answer_context,
-    _clear_directory_contents,
-    _clip_context_text,
-    _detected_format,
-    _dict_items,
-    _elapsed_ms,
-    _ingest_error_summary,
-    _load_source_metadata,
-    _normalize_expected_origin_hash,
-    _now_iso,
-    _parse_json_list,
-    _public_convert_document,
-    _relation_row,
-    _resolve_import_source,
-    _restore_import_destination,
-    _safe_markdown_destination,
-    _same_import_source_state,
-    _sha256_snapshot,
-    _snapshot_filename,
-    _source_id_for_relative_path,
-    _source_record_for_relative_path,
-    _stable_import_snapshot,
-    _stable_markdown_name,
-    _write_bytes_atomic,
-    _write_json_atomic,
-)
-
+from .context import ServiceContext
 
 _DOCUMENT_BUILD_STATUSES = ("pending", "processing", "ready", "failed")
-
-
-
 
 def _document_filters(
     *,
@@ -164,11 +71,37 @@ def _document_filters(
 
     return (f"WHERE {' AND '.join(clauses)}" if clauses else "", parameters)
 
+class DocumentService:
+    def __init__(self, context: ServiceContext) -> None:
+        self.context = context
 
-class KnowledgeDocumentsMixin:
-    """Internal knowledge documents domain implementation."""
+    @property
+    def settings(self):
+        return self.context.settings
 
-    def _list_documents_impl(
+    @property
+    def paths(self):
+        return self.context.paths
+
+    @property
+    def data_dir(self):
+        return self.context.data_dir
+
+    @property
+    def external_dir(self):
+        return self.context.external_dir
+
+    def _require_initialized(self) -> None:
+        self.context._require_initialized()
+
+    def _log_event(self, *args, **kwargs) -> None:
+        self.context._log_event(*args, **kwargs)
+
+    def clear_search_cache(self, stale_only: bool = False):
+        return self.context.retrieval.clear_search_cache(stale_only)
+
+
+    def list_documents(
         self,
         status: str | None = None,
         page: int = 1,
@@ -203,11 +136,11 @@ class KnowledgeDocumentsMixin:
             rag_status=rag_status,
         )
 
-        from .read_cache import READ_CACHE, database_revision
+        from core.read_cache import READ_CACHE, database_revision
 
         cache_key = (
             "document-page",
-            str(self.paths.sources_db.resolve()),
+            str(self.context.paths.sources_db.resolve()),
             status,
             page,
             page_size,
@@ -239,7 +172,7 @@ class KnowledgeDocumentsMixin:
 
         return READ_CACHE.get_or_load(
             cache_key,
-            lambda: database_revision(self.paths.sources_db),
+            lambda: database_revision(self.context.paths.sources_db),
             loader,
         )
 
@@ -261,7 +194,7 @@ class KnowledgeDocumentsMixin:
             "total": 0,
             "total_pages": 0,
         }
-        if not self.paths.sources_db.exists():
+        if not self.context.paths.sources_db.exists():
             result = {"documents": [], "pagination": pagination}
             if include_summary:
                 result["summary"] = self._empty_document_summary()
@@ -278,7 +211,7 @@ class KnowledgeDocumentsMixin:
         if status in {"active", "pending"} or directory is not None or search:
             order_sql = "ORDER BY relative_path"
 
-        connection = connect_sources(self.paths)
+        connection = connect_sources(self.context.paths)
         try:
             total = int(
                 connection.execute(
@@ -419,19 +352,17 @@ class KnowledgeDocumentsMixin:
             },
         }
 
-    def _get_document_content_impl(self, source_id: str) -> dict[str, Any]:
-        from .library import read_content
+    def get_document_content(self, source_id: str) -> dict[str, Any]:
+        from core.library import read_content
         return read_content(self, source_id)
 
-    def _update_document_content_impl(
+    def update_document_content(
         self, source_id: str, content: str, *, expected_content_hash: str | None = None,
     ) -> dict[str, Any]:
-        from .library import update_content
+        from core.library import update_content
         return update_content(self, source_id, content, expected_content_hash)
 
-
-
-    def _import_document_impl(
+    def import_document(
         self,
         source_path: Path | str,
         *,
@@ -445,7 +376,7 @@ class KnowledgeDocumentsMixin:
         try:
             source = _resolve_import_source(source_path)
         except DocumentImportPathError as exc:
-            self._log_event(
+            self.context._log_event(
                 "document_import_failed",
                 f"error={type(exc).__name__}",
                 _elapsed_ms(started_at),
@@ -454,7 +385,7 @@ class KnowledgeDocumentsMixin:
             raise
         suffix = source.suffix.casefold()
         if suffix not in SUPPORTED_IMPORT_SUFFIXES:
-            self._log_event(
+            self.context._log_event(
                 "document_import_failed",
                 f"file={source.name}, error=UnsupportedDocumentFormatError",
                 _elapsed_ms(started_at),
@@ -463,8 +394,8 @@ class KnowledgeDocumentsMixin:
             raise UnsupportedDocumentFormatError(
                 f"不支持的文档格式：{suffix or '<无扩展名>'}"
             )
-        from .library import original_root, resolve_path, validate_name
-        with get_knowledge_base_lock(self.data_dir):
+        from core.library import original_root, resolve_path, validate_name
+        with get_knowledge_base_lock(self.context.data_dir):
             root = original_root(self)
             root.mkdir(parents=True, exist_ok=True)
             if source.is_relative_to(root):
@@ -478,9 +409,9 @@ class KnowledgeDocumentsMixin:
 
             original_previous = original.read_bytes() if original.exists() else None
             ingestor = Ingestor(
-                data_dir=self.data_dir,
-                external_dir=self.external_dir,
-                settings=self.settings,
+                data_dir=self.context.data_dir,
+                external_dir=self.context.external_dir,
+                settings=self.context.settings,
             )
             try:
                 existing_mapping = ingestor.file_map.get_by_original(identity)
@@ -490,7 +421,7 @@ class KnowledgeDocumentsMixin:
                     else _stable_markdown_name(source.name, identity)
                 )
                 destination = _safe_markdown_destination(
-                    self.external_dir,
+                    self.context.external_dir,
                     markdown_relative_path,
                 )
                 previous_bytes = (
@@ -505,7 +436,7 @@ class KnowledgeDocumentsMixin:
                         size = snapshot.size
                         origin_hash = snapshot.sha256
                         origin_modified_at = snapshot.modified_at
-                        self._log_event(
+                        self.context._log_event(
                             "document_import_start",
                             (
                                 f"file={source.name}, "
@@ -516,9 +447,9 @@ class KnowledgeDocumentsMixin:
                             if original_previous is not None and hashlib.sha256(original_previous).hexdigest() != origin_hash:
                                 raise DocumentContentConflictError("同名原文件已存在，请重命名后导入")
                             _write_bytes_atomic(original, snapshot.path.read_bytes())
-                        conversion = _public_convert_document(
+                        conversion = convert_document(
                             snapshot.path,
-                            self.external_dir,
+                            self.context.external_dir,
                             destination_name=markdown_relative_path,
                         )
                         if _sha256_snapshot(snapshot.path) != origin_hash:
@@ -526,7 +457,7 @@ class KnowledgeDocumentsMixin:
                                 "导入快照在转换期间发生变化，已拒绝提交："
                                 f"{source.name}"
                             )
-                    self._log_event(
+                    self.context._log_event(
                         "document_convert",
                         f"file={source.name}, format={conversion['format']}",
                         _elapsed_ms(started_at),
@@ -543,7 +474,7 @@ class KnowledgeDocumentsMixin:
                     )
                     raise
             except (DocumentImportError, DocumentConversionError, FileMapError) as exc:
-                self._log_event(
+                self.context._log_event(
                     "document_import_failed",
                     f"file={source.name}, error={type(exc).__name__}",
                     _elapsed_ms(started_at),
@@ -551,7 +482,7 @@ class KnowledgeDocumentsMixin:
                 )
                 raise
             except Exception as exc:
-                self._log_event(
+                self.context._log_event(
                     "document_import_failed",
                     f"file={source.name}, error={type(exc).__name__}",
                     _elapsed_ms(started_at),
@@ -562,12 +493,12 @@ class KnowledgeDocumentsMixin:
                 ) from exc
 
             source_record = _source_record_for_relative_path(
-                self.paths,
+                self.context.paths,
                 markdown_relative_path,
             )
             source_id = str(source_record["source_id"])
             content_hash = str(source_record["content_hash"])
-            source_connection = connect_sources(self.paths)
+            source_connection = connect_sources(self.context.paths)
             try:
                 source_connection.execute(
                     """
@@ -623,7 +554,7 @@ class KnowledgeDocumentsMixin:
             result["ingest"] = ingest_result
         if ingest_error:
             result["ingest_error"] = ingest_error
-        self._log_event(
+        self.context._log_event(
             "document_import_done",
             f"file={source.name}, source_id={source_id}, ingest={ingest_status}",
             _elapsed_ms(started_at),
@@ -631,8 +562,8 @@ class KnowledgeDocumentsMixin:
         )
         return result
 
-    def _upload_file_impl(self, content: str, filename: str) -> dict[str, Any]:
-        from .library import validate_name
+    def upload_file(self, content: str, filename: str) -> dict[str, Any]:
+        from core.library import validate_name
         name = validate_name(filename)
         if not Path(name).suffix:
             name += ".md"
@@ -651,26 +582,26 @@ class KnowledgeDocumentsMixin:
         force: bool = False,
         failed_only: bool = False,
     ) -> dict[str, Any]:
-        from .library import build_paths
+        from core.library import build_paths
         if paths is None and not failed_only:
             build_paths(self, "")
         elif paths is not None:
             normalized = []
             for path in paths:
                 path = str(path)
-                original = self.external_dir.parent / "originals" / path
+                original = self.context.external_dir.parent / "originals" / path
                 if original.exists():
                     normalized.extend(build_paths(self, path))
                 else:
                     normalized.append(path)
             paths = normalized
         return Ingestor(
-            data_dir=self.data_dir,
-            external_dir=self.external_dir,
-            settings=self.settings,
+            data_dir=self.context.data_dir,
+            external_dir=self.context.external_dir,
+            settings=self.context.settings,
         ).ingest(paths=paths, mode=mode, retry_failed=retry_failed, force=force, failed_only=failed_only)
 
-    def _sync_sources_impl(
+    def sync_sources(
         self,
         records: Sequence[dict[str, Any]],
         *,
@@ -678,7 +609,7 @@ class KnowledgeDocumentsMixin:
     ) -> dict[str, Any]:
         """同步上游表记录；kemo-graph 只维护派生 Markdown、Graph 与 RAG。"""
 
-        from .source_sync import sync_external_sources
+        from core.source_sync import sync_external_sources
 
         return sync_external_sources(
             self,
@@ -686,7 +617,7 @@ class KnowledgeDocumentsMixin:
             ingest_after_sync=ingest_after_sync,
         )
 
-    def _list_synced_sources_impl(
+    def list_synced_sources(
         self,
         *,
         source_type: str | None = None,
@@ -696,7 +627,7 @@ class KnowledgeDocumentsMixin:
     ) -> dict[str, Any]:
         """分页读取由外部权威数据源同步而来的记录。"""
 
-        from .source_sync import list_external_sources
+        from core.source_sync import list_external_sources
 
         return list_external_sources(
             self,
@@ -706,26 +637,26 @@ class KnowledgeDocumentsMixin:
             page_size=page_size,
         )
 
-    def _delete_synced_sources_impl(self, source_uris: Sequence[str]) -> dict[str, Any]:
+    def delete_synced_sources(self, source_uris: Sequence[str]) -> dict[str, Any]:
         """按稳定 URI 删除外部派生数据，保留上游权威来源。"""
 
-        from .source_sync import delete_external_sources
+        from core.source_sync import delete_external_sources
 
         return delete_external_sources(self, source_uris)
 
-    def _delete_document_impl(self, source_id: str) -> dict[str, Any]:
-        self._require_initialized()
+    def delete_document(self, source_id: str) -> dict[str, Any]:
+        self.context._require_initialized()
         result = Ingestor(
-            data_dir=self.data_dir,
-            external_dir=self.external_dir,
-            settings=self.settings,
+            data_dir=self.context.data_dir,
+            external_dir=self.context.external_dir,
+            settings=self.context.settings,
         ).delete_document(source_id)
         return clear_search_cache_after_mutation(self, result)
 
-    def _delete_documents_impl(self, source_ids: Sequence[str]) -> dict[str, Any]:
+    def delete_documents(self, source_ids: Sequence[str]) -> dict[str, Any]:
         """逐一精确删除活动文档，并以结构化结果报告部分失败。"""
 
-        self._require_initialized()
+        self.context._require_initialized()
         if isinstance(source_ids, (str, bytes)):
             raise TypeError("source_ids 必须是字符串数组")
         normalized: list[str] = []
@@ -743,9 +674,9 @@ class KnowledgeDocumentsMixin:
             raise ValueError("单次最多删除 1000 篇文档")
 
         ingestor = Ingestor(
-            data_dir=self.data_dir,
-            external_dir=self.external_dir,
-            settings=self.settings,
+            data_dir=self.context.data_dir,
+            external_dir=self.context.external_dir,
+            settings=self.context.settings,
         )
         deleted: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
@@ -761,7 +692,7 @@ class KnowledgeDocumentsMixin:
                             "message": str(exc),
                         }
                     )
-        self._log_event(
+        self.context._log_event(
             "delete_documents",
             f"requested={len(normalized)}, deleted={len(deleted)}, failed={len(failures)}",
             level="WARNING" if failures else "INFO",
@@ -776,16 +707,16 @@ class KnowledgeDocumentsMixin:
         }
         return clear_search_cache_after_mutation(self, result) if deleted else result
 
-    def _delete_all_documents_impl(self, directory: str | None = None) -> dict[str, Any]:
+    def delete_all_documents(self, directory: str | None = None) -> dict[str, Any]:
         """删除当前知识库内的全部活动文档，不跨越 Store 边界。"""
 
-        self._require_initialized()
+        self.context._require_initialized()
         where_sql, parameters = _document_filters(
             status="active",
             directory=directory,
             search=None,
         )
-        connection = connect_sources(self.paths)
+        connection = connect_sources(self.context.paths)
         try:
             source_ids = [
                 str(row["source_id"])

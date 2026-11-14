@@ -5,13 +5,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock
 
-from core.services import (
-    DocumentService,
-    GraphService,
-    MaintenanceService,
-    RetrievalService,
-)
-
+from core.service.documents import DocumentService
+from core.service.graph import GraphService
+from core.service.maintenance import MaintenanceService
+from core.service.retrieval import RetrievalService
 
 class DomainServiceDelegationTests(unittest.TestCase):
     def test_retrieval_query_keeps_keyword_arguments(self) -> None:
@@ -42,14 +39,32 @@ class DomainServiceDelegationTests(unittest.TestCase):
         )
 
     def test_domain_services_expose_separate_areas(self) -> None:
-        owner = Mock()
-        owner._list_documents_impl.return_value = {"documents": []}
-        owner._delete_relation_impl.return_value = {"edge_id": "e1"}
-        owner._rebuild_all_impl.return_value = {"validated": True}
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from core.settings import AppConfig
+        from core.storage import initialize_databases
+        from core.service import KnowledgeBaseService
+        from core.db import connect_graph
+        from core.graph.tool_store import add_entity, add_relation
 
-        self.assertEqual(DocumentService(owner).list_documents(), {"documents": []})
-        self.assertEqual(GraphService(owner).delete_relation("e1"), {"edge_id": "e1"})
-        self.assertEqual(
-            MaintenanceService(owner).rebuild_all(),
-            {"validated": True},
-        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = AppConfig(log_dir=str(root / "logs"))
+            initialize_databases(root / "data", settings)
+            service = KnowledgeBaseService(settings=settings, data_dir=root / "data", external_dir=root / "markdown")
+            original = root / "source.txt"
+            original.write_text("A shared document.", encoding="utf-8")
+            source = service.import_document(original, ingest_after_import=False)
+            documents = service.list_documents()
+            self.assertEqual(service.documents.list_documents(), documents)
+            self.assertEqual(service.retrieval.list_cached_queries(), service.list_cached_queries())
+            self.assertEqual(service.maintenance.status(), service.status())
+            conn = connect_graph(service.paths)
+            try:
+                left = add_entity(conn, keyword="alpha", summary="alpha", source_id=source["source_id"], content_hash="hash")
+                right = add_entity(conn, keyword="beta", summary="beta", source_id=source["source_id"], content_hash="hash")
+                relation = add_relation(conn, source_node_id=left, target_node_id=right, relation="relates", evidence_weight=1.0, source_id=source["source_id"], content_hash="hash")
+            finally:
+                conn.close()
+            service.graph.delete_relation(relation)
+            self.assertEqual(service.documents.list_documents(), documents)
