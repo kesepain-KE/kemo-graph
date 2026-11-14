@@ -1,3 +1,5 @@
+# Verified against an independent export of pre-migration commit bccc64e.
+# Includes documentation routes and compatibility aliases omitted from OpenAPI.
 - path: /openapi.json
   methods:
   - GET

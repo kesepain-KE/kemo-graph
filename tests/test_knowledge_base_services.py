@@ -5,9 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock
 
-from core.service.documents import DocumentService
-from core.service.graph import GraphService
-from core.service.maintenance import MaintenanceService
+from core.documents.errors import DocumentNotFoundError
 from core.service.retrieval import RetrievalService
 
 class DomainServiceDelegationTests(unittest.TestCase):
@@ -66,5 +64,11 @@ class DomainServiceDelegationTests(unittest.TestCase):
                 relation = add_relation(conn, source_node_id=left, target_node_id=right, relation="relates", evidence_weight=1.0, source_id=source["source_id"], content_hash="hash")
             finally:
                 conn.close()
-            service.graph.delete_relation(relation)
+            self.assertEqual(service.graph.get_relation(relation), service.get_relation(relation))
+            self.assertEqual(service.graph.get_relation(relation)["edge_id"], relation)
+            result = service.graph.delete_relation(relation)
+            self.assertTrue(result["deleted"])
+            self.assertEqual(result["edge"]["edge_id"], relation)
+            with self.assertRaises(DocumentNotFoundError):
+                service.graph.get_relation(relation)
             self.assertEqual(service.documents.list_documents(), documents)
