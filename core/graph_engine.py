@@ -8,6 +8,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
+
+from rapidfuzz.fuzz import ratio
 from typing import Any
 
 from .text_norm import norm_key
@@ -39,6 +41,21 @@ class _Node:
     tags: list[str]
     weight: float
     ref_count: int
+
+
+@dataclass(frozen=True)
+class _NodeKeys:
+    keyword: str
+    aliases: frozenset[str]
+    descriptive: frozenset[str]
+    terms: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _EntityKeys:
+    primary: str
+    alternate: frozenset[str]
+    terms: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -208,14 +225,17 @@ class GraphEngine:
             """
         ).fetchall()
         nodes = [_node_from_row(row) for row in rows]
+        node_keys = [_node_keys(node) for node in nodes]
         best_by_node: dict[str, _MatchedNode] = {}
         for entity in entities:
             if not 0.0 <= entity.confidence <= 1.0:
                 raise GraphQueryError("Entity.confidence 必须在 0 到 1 之间")
+            entity_keys = _entity_keys(entity)
+            fuzzy_cutoff = min(_CONTAINS_MATCH_SCORE, threshold / entity.confidence if entity.confidence else 1.0)
             scored_nodes: list[tuple[_Node, float]] = []
             has_strong_match = False
-            for node in nodes:
-                lexical_score = _node_match_score(entity, node)
+            for node, keys in zip(nodes, node_keys):
+                lexical_score = _node_match_score(entity_keys, keys, fuzzy_cutoff=fuzzy_cutoff)
                 scored_nodes.append((node, lexical_score))
                 has_strong_match = has_strong_match or (
                     lexical_score >= _CONTAINS_MATCH_SCORE
@@ -451,55 +471,55 @@ def _parse_string_array(value: str | None, field: str, node_id: str) -> list[str
     return parsed
 
 
-def _node_match_score(entity: Entity, node: _Node) -> float:
-    primary = norm_key(entity.normalized)
-    node_keyword = norm_key(node.keyword)
-    node_aliases = {norm_key(alias) for alias in node.aliases}
-    if primary == node_keyword:
-        return 1.0
+def _node_keys(node: _Node) -> _NodeKeys:
+    keyword = norm_key(node.keyword)
+    aliases = frozenset(norm_key(alias) for alias in node.aliases)
+    return _NodeKeys(
+        keyword=keyword,
+        aliases=aliases,
+        descriptive=frozenset(
+            norm_key(value) for value in [node.summary, *node.tags]
+            if isinstance(value, str) and value.strip()
+        ),
+        terms=frozenset({keyword, *aliases}),
+    )
 
-    alternate_terms = {
-        norm_key(value)
-        for value in [entity.text, *entity.aliases]
-        if value.strip()
-    }
+
+def _entity_keys(entity: Entity) -> _EntityKeys:
+    primary = norm_key(entity.normalized)
+    alternate = frozenset(
+        norm_key(value) for value in [entity.text, *entity.aliases] if value.strip()
+    )
+    return _EntityKeys(primary, alternate, frozenset({primary, *alternate}))
+
+
+def _node_match_score(
+    entity: _EntityKeys, node: _NodeKeys, *, fuzzy_cutoff: float = 0.0,
+) -> float:
+    if entity.primary == node.keyword:
+        return 1.0
     if (
-        primary in node_aliases
-        or node_keyword in alternate_terms
-        or bool(node_aliases.intersection(alternate_terms))
+        entity.primary in node.aliases
+        or node.keyword in entity.alternate
+        or bool(node.aliases.intersection(entity.alternate))
     ):
         return 0.9
-
-    entity_terms = {primary, *alternate_terms}
-    node_terms = {node_keyword, *node_aliases}
     if any(
-        _is_meaningful_contains_match(entity_term, node_term)
-        for entity_term in entity_terms
-        for node_term in node_terms
+        _is_meaningful_contains_match(left, right)
+        for left in entity.terms for right in node.terms
     ):
         return _CONTAINS_MATCH_SCORE
-    # Keep summary/tag matching below keyword/alias matching.  This is a
-    # recall-oriented fallback for nodes whose canonical name is not the term
-    # users naturally search for; it is still protected by the minimum partial
-    # match length check above.
-    descriptive_terms = {
-        norm_key(value)
-        for value in [node.summary, *node.tags]
-        if isinstance(value, str) and value.strip()
-    }
     if any(
-        _is_meaningful_contains_match(entity_term, descriptive_term)
-        for entity_term in entity_terms
-        for descriptive_term in descriptive_terms
+        _is_meaningful_contains_match(left, right)
+        for left in entity.terms for right in node.descriptive
     ):
         return _SUMMARY_CONTAINS_MATCH_SCORE
+    # Indel similarity bounds SequenceMatcher from above; it is not its replacement.
+    cutoff = max(0.0, fuzzy_cutoff * 100.0 - 1e-10)
     return max(
-        (
-            SequenceMatcher(None, entity_term, node_term).ratio()
-            for entity_term in entity_terms
-            for node_term in node_terms
-            if entity_term and node_term
-        ),
+        (SequenceMatcher(None, left, right).ratio()
+         for left in entity.terms for right in node.terms
+         if left and right and ratio(left, right, score_cutoff=cutoff) > 0.0),
         default=0.0,
     )
 
