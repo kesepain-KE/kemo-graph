@@ -305,10 +305,10 @@ class DescriptionSynthesisTests(unittest.TestCase):
 
             with (
                 patch(
-                    "core.graph_organizer.chat_with_tools",
+                    "core.graph.organizer.chat_with_tools",
                     side_effect=_merge_and_finish,
                 ),
-                patch("core.graph_organizer.chat", side_effect=synthesize) as request,
+                patch("core.graph.organizer.chat", side_effect=synthesize) as request,
             ):
                 result = GraphOrganizer(
                     root / "data",
@@ -338,11 +338,11 @@ class DescriptionSynthesisTests(unittest.TestCase):
 
             with (
                 patch(
-                    "core.graph_organizer.chat_with_tools",
+                    "core.graph.organizer.chat_with_tools",
                     side_effect=_merge_and_finish,
                 ),
                 patch(
-                    "core.graph_organizer.chat",
+                    "core.graph.organizer.chat",
                     side_effect=RuntimeError("gateway unavailable"),
                 ),
             ):
