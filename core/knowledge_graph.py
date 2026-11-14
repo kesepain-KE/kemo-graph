@@ -49,10 +49,10 @@ from .ingestor import (
     FileMapError,
     IngestError,
     Ingestor,
-    RecycleConflictError,
 )
 from .logger import DailyTSVLogger
 from .locks import get_knowledge_base_lock
+from .search_cache import clear_search_cache_after_mutation
 from .rag_engine import FaissIndexManager, RAGEngine
 from .rebuilder import KnowledgeBaseRebuilder, ProgressCallback
 from .services import (
@@ -178,23 +178,18 @@ class KnowledgeGraphMixin:
 
         self._refresh_graph_meta(changed=True)
         RAGEngine(self.data_dir, settings=self.settings).refresh_auxiliary_consistency()
-        try:
-            cache_deleted = self.clear_search_cache()["deleted"]
-        except Exception:
-            cache_deleted = 0
         result = {
             "deleted": True,
             "edge": _relation_row(edge),
             "deleted_evidence_count": evidence_count,
             "deleted_mention_count": len(mention_rows),
             "groups_invalidated": True,
-            "search_cache_deleted": cache_deleted,
         }
         self._log_event(
             "delete_relation",
             f"edge_id={edge_id}, evidence={evidence_count}",
         )
-        return result
+        return clear_search_cache_after_mutation(self, result)
 
     def _delete_node_impl(self, node_id: str) -> dict[str, Any]:
         """删除指定节点，按 06 文档规则执行级联操作。"""
@@ -205,15 +200,11 @@ class KnowledgeGraphMixin:
             settings=self.settings,
         )._write_lock:
             result = self._execute_node_deletion(node_id)
-        try:
-            result["search_cache_deleted"] = self.clear_search_cache()["deleted"]
-        except Exception:
-            result["search_cache_deleted"] = 0
         self._log_event(
             "delete_node",
             f"node_id={node_id}, edges={result['cascade_deleted_edges']}",
         )
-        return result
+        return clear_search_cache_after_mutation(self, result)
 
     def _execute_node_deletion(self, node_id: str) -> dict[str, Any]:
         graph_connection = connect_graph(self.paths)
@@ -275,13 +266,10 @@ class KnowledgeGraphMixin:
             external_dir=self.external_dir,
             settings=self.settings,
         )
-        recycled_files: list[str] = []
-        recycled_paths: list[str] = []
+        deleted_files: list[str] = []
         for source_id in isolated_source_ids:
             deletion = ingestor.delete_document(source_id)
-            recycled_files.append(str(deletion["relative_path"]))
-            if deletion.get("recycled_path"):
-                recycled_paths.append(str(deletion["recycled_path"]))
+            deleted_files.append(str(deletion["relative_path"]))
 
         graph_connection = connect_graph(self.paths)
         try:
@@ -375,8 +363,7 @@ class KnowledgeGraphMixin:
             "deleted_mention_count": len(mention_ids),
             "deleted_relation_mention_count": deleted_relation_mentions,
             "deleted_source_ids": isolated_source_ids,
-            "recycled_files": recycled_files,
-            "recycled_paths": recycled_paths,
+            "deleted_files": deleted_files,
             "unlinked_files": unlinked_files,
         }
 

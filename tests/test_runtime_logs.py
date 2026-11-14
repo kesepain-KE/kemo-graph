@@ -1,5 +1,11 @@
+import yaml
 import json
 import logging
+import csv
+import io
+import os
+from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from core.config import AppConfig
-from core.logger import DailyTSVLogger, redact_log_text
+from core.logger import DailyTSVLogger, LOG_COLUMNS, TSVFormatter, TSVStreamHandler, redact_log_text
 from core.log_viewer import read_logs
 from core.query_logging import trace_query
 from core.terminal_logging import TerminalLogHandler, capture_terminal_logs
@@ -82,13 +88,13 @@ def test_terminal_mirror_is_restored_and_does_not_duplicate_or_capture_viewer_po
 def test_terminal_handler_follows_runtime_config_and_environment(tmp_path, monkeypatch):
     first_log = tmp_path / "first-log"
     second_log = tmp_path / "second-log"
-    config = tmp_path / "config.json"
+    config = tmp_path / "config.yaml"
     initial = AppConfig(
         log_dir=str(first_log),
         log_level="INFO",
         kemo={"api_key": "first-secret", "api_key_env": "KEMO_DYNAMIC_LOG_KEY"},
     )
-    config.write_text(initial.model_dump_json(), encoding="utf-8")
+    config.write_text(yaml.safe_dump(initial.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     monkeypatch.setenv("KEMO_DYNAMIC_LOG_KEY", "first-environment-secret")
     handler = TerminalLogHandler(initial, config_path=config)
     handler.emit(logging.makeLogRecord({"name": "test", "levelno": logging.INFO, "msg": "first-secret first-environment-secret"}))
@@ -100,7 +106,7 @@ def test_terminal_handler_follows_runtime_config_and_environment(tmp_path, monke
             "kemo": initial.kemo.model_copy(update={"api_key": "second-secret"}),
         }
     )
-    config.write_text(updated.model_dump_json(), encoding="utf-8")
+    config.write_text(yaml.safe_dump(updated.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     monkeypatch.setenv("KEMO_DYNAMIC_LOG_KEY", "second-environment-secret")
     handler.emit(logging.makeLogRecord({"name": "test", "levelno": logging.DEBUG, "msg": "second-secret second-environment-secret"}))
 
@@ -113,11 +119,11 @@ def test_terminal_handler_follows_runtime_config_and_environment(tmp_path, monke
 
 def test_terminal_handler_keeps_last_good_sink_when_config_is_invalid(tmp_path):
     settings = AppConfig(log_dir=str(tmp_path / "stable-log"))
-    config = tmp_path / "config.json"
-    config.write_text(settings.model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     handler = TerminalLogHandler(settings, config_path=config)
     stable_sink = handler.sink.log_dir
-    config.write_text("{not-json", encoding="utf-8")
+    config.write_text("kemo: [invalid-yaml", encoding="utf-8")
 
     handler.emit(logging.makeLogRecord({"name": "test", "levelno": logging.INFO, "msg": "still works"}))
 
@@ -143,8 +149,8 @@ def test_query_lifecycle_preserves_results_errors_and_omits_question():
 
 
 def test_api_uses_configured_log_dir_and_validates_inputs(settings, tmp_path):
-    config = tmp_path / "config.json"
-    config.write_text(settings.model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     app = create_app(config_path=config, data_dir=tmp_path / "data", external_dir=tmp_path / "markdown")
     DailyTSVLogger(settings.resolve_log_dir()).log("kb", "query_complete", "done")
     with TestClient(app) as client:
@@ -152,7 +158,7 @@ def test_api_uses_configured_log_dir_and_validates_inputs(settings, tmp_path):
         assert response.status_code == 200
         assert response.json()["data"]["entries"][0]["action"] == "query_complete"
         assert client.get("/api/v1/system/logs?category=unknown").status_code == 422
-        assert client.get("/api/v1/system/logs?date=../config.json").status_code == 422
+        assert client.get("/api/v1/system/logs?date=../config.yaml").status_code == 422
         assert client.get("/api/v1/system/logs?limit=100000").status_code == 422
         assert client.get("/api/v1/system/logs?date=2026-02-30").status_code in (400, 422)
         assert client.get("/api/v1/system/logs?date=2000-01-01").json()["data"]["entries"] == []
@@ -162,3 +168,66 @@ def test_secret_formats_are_sanitized():
     text = redact_log_text('Authorization: Bearer abcdef; password="long password" token=12345 {"api_key":"secret"}')
     for secret in ("abcdef", "long password", "12345", '"secret"'):
         assert secret not in text
+
+
+def test_console_logs_are_parseable_tables_with_full_levels_and_redacted_tracebacks():
+    stream = io.StringIO()
+    handler = TSVStreamHandler(stream)
+    handler.setFormatter(TSVFormatter(secrets=("private-value",)))
+    handler.handle(logging.makeLogRecord({
+        "name": "module", "levelno": logging.DEBUG, "levelname": "DEBUG",
+        "msg": 'a\tb\n"quoted" private-value', "action": "step", "elapsed_ms": 12.5,
+    }))
+    try:
+        raise RuntimeError("private-value")
+    except RuntimeError:
+        handler.handle(logging.makeLogRecord({
+            "name": "module", "levelno": logging.ERROR, "levelname": "ERROR",
+            "msg": "failed", "exc_info": sys.exc_info(),
+        }))
+    text = stream.getvalue()
+    rows = list(csv.reader(io.StringIO(text), delimiter="\t"))
+    assert rows[0] == list(LOG_COLUMNS)
+    assert len(rows) == 3 and all(len(row) == 6 for row in rows)
+    assert rows[1][1:4] == ["DEBUG", "module", "step"]
+    assert rows[1][-1] == "12.5"
+    assert "RuntimeError" in rows[2][4]
+    assert "private-value" not in text
+
+
+def test_restart_logs_use_the_same_table_columns(tmp_path, monkeypatch):
+    import restart
+    path = tmp_path / "restart.tsv"
+    monkeypatch.setattr(restart, "RESTART_LOG_PATH", path)
+    restart._append_log("restart-1", "ready\tmessage\napi_key=secret")
+    rows = list(csv.reader(io.StringIO(path.read_text(encoding="utf-8")), delimiter="\t"))
+    assert rows[0] == list(LOG_COLUMNS)
+    assert len(rows) == 2 and len(rows[1]) == 6
+    assert rows[1][2:4] == ["restart", "restart-1"]
+    assert "secret" not in rows[1][4]
+
+
+@pytest.mark.parametrize("entry", ["web", "web_env", "converter"])
+def test_entrypoint_errors_are_tables_before_service_startup(tmp_path, entry):
+    root = Path(__file__).resolve().parents[1]
+    config = tmp_path / "broken.yaml"
+    config.write_text("kemo: [private-value", encoding="utf-8")
+    command = (
+        [sys.executable, str(root / "start_web.py"), "--config", str(config)]
+        if entry != "converter"
+        else [sys.executable, "-m", "markitdown", str(tmp_path / "missing.docx")]
+    )
+    environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if entry == "web_env":
+        environment["KEMO_GRAPH_CONFIG"] = str(config.with_suffix(".json"))
+    result = subprocess.run(
+        command, cwd=root, capture_output=True, text=True, encoding="utf-8",
+        env=environment, timeout=20,
+    )
+    assert result.returncode == (2 if entry == "converter" else 1)
+    assert result.stdout == ""
+    rows = list(csv.reader(io.StringIO(result.stderr), delimiter="\t"))
+    assert rows[0] == list(LOG_COLUMNS)
+    assert len(rows) > 1 and all(len(row) == 6 for row in rows)
+    assert rows[-1][1] == "ERROR"
+    assert "private-value" not in result.stderr

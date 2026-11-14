@@ -295,7 +295,7 @@ def delete_entity(
             )
         conn.execute("DELETE FROM group_nodes")
         conn.execute("DELETE FROM groups")
-    return {"deleted": deleted, "recycled": False}
+    return {"deleted": deleted}
 
 
 def _recalculate_edge(conn: sqlite3.Connection, edge_id: str) -> None:

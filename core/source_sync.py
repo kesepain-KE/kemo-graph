@@ -15,6 +15,7 @@ from uuid import uuid4
 from .db import connect_sources, initialize_databases
 from .ingestor import Ingestor
 from .ingestor._utils import _hash_relative_path
+from .search_cache import clear_search_cache_after_mutation
 
 
 MAX_SOURCE_CONTENT_BYTES = 50 * 1024 * 1024
@@ -174,10 +175,7 @@ def sync_external_sources(
             mutated = True
 
     if mutated:
-        try:
-            result["search_cache_deleted"] = service.clear_search_cache()["deleted"]
-        except Exception:
-            result["search_cache_deleted"] = 0
+        clear_search_cache_after_mutation(service, result)
     else:
         result["search_cache_deleted"] = 0
 

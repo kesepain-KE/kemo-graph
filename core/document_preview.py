@@ -1,14 +1,14 @@
-"""Read complete original documents for display, independently of Markdown indexing."""
+"""Preview originals independently of Markdown indexing."""
 
 from __future__ import annotations
 
 import base64
 import hashlib
 from html import escape
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from markitdown import detect_file_type
 from markitdown._utils import read_text
 from .library import TEXT_SUFFIXES
 from .knowledge_models import MAX_IMPORT_BYTES, DocumentTooLargeError
@@ -18,8 +18,10 @@ body{margin:0;padding:32px;color:#202124;font:15px/1.8 system-ui,sans-serif;over
 img{max-width:100%;height:auto}table{border-collapse:collapse;max-width:100%;margin:20px 0}
 th,td{border:1px solid #dadce0;padding:6px 12px;white-space:pre-wrap;vertical-align:top}
 th{background:#f7f8fa}h1,h2,h3{line-height:1.4}pre{white-space:pre-wrap}
-.sheet,.slide{margin-bottom:40px}.slide{border:1px solid #e6e7ea;padding:24px}
+.sheet{margin-bottom:40px}
 """
+
+OFFICE_PREVIEW_SUFFIXES = {".doc", ".docx", ".docm", ".ppt", ".pptx", ".pptm"}
 
 
 def _html(body: str) -> str:
@@ -31,19 +33,17 @@ def _html(body: str) -> str:
     )
 
 
-def _image(content: bytes, content_type: str) -> str:
-    return f'<img src="data:{content_type};base64,{base64.b64encode(content).decode()}">'
-
-
 def preview_document(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ValueError("所选路径不是文件")
     if path.stat().st_size > MAX_IMPORT_BYTES:
         raise DocumentTooLargeError("原文件预览超过 50 MB 上限")
-    suffix = path.suffix.casefold()
-    data: dict[str, Any] = {"name": path.name, "size": path.stat().st_size, "editable": suffix in TEXT_SUFFIXES}
+    suffix, _ = detect_file_type(path)
+    data: dict[str, Any] = {"name": path.name, "size": path.stat().st_size, "editable": path.suffix.casefold() in TEXT_SUFFIXES}
     if suffix == ".pdf":
         return {**data, "mode": "pdf"}
+    if suffix in OFFICE_PREVIEW_SUFFIXES:
+        return {**data, "mode": "office", "format": suffix[1:], "editable": False}
     if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
         return {**data, "mode": "image"}
     if suffix in TEXT_SUFFIXES:
@@ -53,17 +53,7 @@ def preview_document(path: Path) -> dict[str, Any]:
         if suffix in {".html", ".htm"}:
             return {**data, "mode": "html", "html": _html(content), "content": content}
         return {**data, "mode": mode, "content": content}
-    if suffix == ".docx":
-        import mammoth
-        def convert_image(image):
-            with image.open() as stream:
-                return {"src": f"data:{image.content_type};base64,"
-                        + base64.b64encode(stream.read()).decode()}
-        body = mammoth.convert_to_html(
-            BytesIO(path.read_bytes()),
-            convert_image=mammoth.images.img_element(convert_image),
-        ).value
-    elif suffix in {".xlsx", ".xlsm", ".xls"}:
+    if suffix in {".xlsx", ".xlsm", ".xls"}:
         tables = []
         if suffix == ".xls":
             import xlrd
@@ -83,30 +73,6 @@ def preview_document(path: Path) -> dict[str, Any]:
                 workbook.close()
             else:
                 workbook.release_resources()
-    elif suffix == ".pptx":
-        from pptx import Presentation
-        from pptx.enum.shapes import MSO_SHAPE_TYPE
-        presentation = Presentation(path)
-
-        def render_shapes(shapes) -> str:
-            result = []
-            for shape in shapes:
-                if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-                    result.append(render_shapes(shape.shapes))
-                elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                    result.append(_image(shape.image.blob, shape.image.content_type))
-                elif shape.has_table:
-                    result.append("<table>" + "".join(
-                        "<tr>" + "".join(f"<td>{escape(cell.text)}</td>" for cell in row.cells) + "</tr>"
-                        for row in shape.table.rows
-                    ) + "</table>")
-                elif shape.has_text_frame:
-                    result.extend(f"<p>{escape(paragraph.text)}</p>" for paragraph in shape.text_frame.paragraphs)
-            return "".join(result)
-        body = "".join(
-            f'<section class="slide"><h2>第 {index + 1} 页</h2>{render_shapes(slide.shapes)}</section>'
-            for index, slide in enumerate(presentation.slides)
-        )
     elif suffix == ".rtf":
         from striprtf.striprtf import rtf_to_text
         return {**data, "mode": "text", "content": rtf_to_text(read_text(path))}

@@ -144,7 +144,7 @@ GET_DOCUMENT_RELATIONS_SCHEMA = _function_schema(
 
 DELETE_NODE_SCHEMA = _function_schema(
     "delete_node",
-    "按知识库级联规则删除节点，并处理来源解绑与条件回收",
+    "按知识库级联规则删除节点，解绑共享来源并永久删除独占文档",
     {"node_id": _NODE_ID},
     ["node_id"],
 )
@@ -158,7 +158,7 @@ DELETE_RELATION_SCHEMA = _function_schema(
 
 DELETE_DOCUMENT_SCHEMA = _function_schema(
     "delete_document",
-    "删除文档并级联清理 Graph、RAG、FAISS，文件移入回收站",
+    "永久删除文档文件并级联清理 Graph、RAG、FAISS",
     {"source_id": _SOURCE_ID},
     ["source_id"],
 )

@@ -17,7 +17,6 @@ from core.graph_visualization import (
 from core.ingestor import (
     DocumentNotFoundError,
     IngestError,
-    RecycleConflictError,
 )
 from core.knowledge_base import (
     DocumentImportError,
@@ -32,13 +31,16 @@ from core.knowledge_base import (
 )
 from core.logger import DailyTSVLogger
 from core.jobs import JobNotFoundError
+from core.library import LibraryNameConflictError
 from core.rag_engine import RAGQueryError
+from core.search_cache import SearchCacheCleanupError
 from core.portable_store import (
     PortableStoreAccessError,
     PortableStoreError,
     PortableStoreNotInitializedError,
 )
 from provider.tools.document_tools import DocumentConversionError
+from markitdown import MissingOptionalDependencyError
 from update import (
     UpdateBlockedError,
     UpdateError,
@@ -73,13 +75,15 @@ def install_exception_handlers(app: FastAPI) -> None:
         GraphNodeNotFoundError,
         GraphRevisionChangedError,
         JobNotFoundError,
-        RecycleConflictError,
-        GraphQueryError,
+            GraphQueryError,
         RAGQueryError,
+        SearchCacheCleanupError,
         IngestError,
         PortableStoreError,
         DocumentImportError,
         DocumentConversionError,
+        MissingOptionalDependencyError,
+        PermissionError,
         ValueError,
         TypeError,
         UpdateError,
@@ -114,6 +118,17 @@ async def _http_error_handler(request: Request, exc: HTTPException) -> JSONRespo
 
 
 async def _application_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    if isinstance(exc, PermissionError):
+        _log_api_error(request, 403, "FILE_ACCESS_DENIED", exc)
+        return JSONResponse(
+            status_code=403,
+            content=error_payload("FILE_ACCESS_DENIED", "没有权限操作该文件或目录，请检查访问权限。"),
+        )
+    if isinstance(exc, SearchCacheCleanupError):
+        _log_api_error(request, 503, "SEARCH_CACHE_CLEANUP_FAILED", exc)
+        payload = error_payload("SEARCH_CACHE_CLEANUP_FAILED", str(exc))
+        payload["error"]["result"] = exc.result
+        return JSONResponse(status_code=503, content=payload)
     if isinstance(exc, RestartPermissionError):
         _log_api_error(request, 403, "RESTART_FORBIDDEN", exc)
         return JSONResponse(
@@ -155,6 +170,12 @@ async def _application_error_handler(request: Request, exc: Exception) -> JSONRe
         return JSONResponse(
             status_code=500,
             content=error_payload("UPDATE_FAILED", str(exc)),
+        )
+    if isinstance(exc, LibraryNameConflictError):
+        _log_api_error(request, 409, "LIBRARY_ENTRY_EXISTS", exc)
+        return JSONResponse(
+            status_code=409,
+            content=error_payload("LIBRARY_ENTRY_EXISTS", str(exc)),
         )
     if isinstance(exc, DocumentContentConflictError):
         _log_api_error(request, 409, "CONTENT_CONFLICT", exc)
@@ -212,12 +233,6 @@ async def _application_error_handler(request: Request, exc: Exception) -> JSONRe
         return JSONResponse(
             status_code=409,
             content=error_payload("GRAPH_CHANGED", str(exc)),
-        )
-    if isinstance(exc, RecycleConflictError):
-        _log_api_error(request, 409, "INVALID_PARAM", exc)
-        return JSONResponse(
-            status_code=409,
-            content=error_payload("INVALID_PARAM", str(exc)),
         )
     if isinstance(exc, UnsupportedDocumentFormatError):
         _log_api_error(request, 415, "UNSUPPORTED_FORMAT", exc)

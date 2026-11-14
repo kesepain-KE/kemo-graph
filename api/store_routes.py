@@ -49,7 +49,6 @@ from .schemas import (
     StoreCacheClearRequest,
     StoreCacheKeyRequest,
     StoreCacheListRequest,
-    StoreCleanupRecycleRequest,
     StoreDocumentListRequest,
     StoreDocumentBatchDeleteRequest,
     StoreDocumentContentUpdateRequest,
@@ -647,18 +646,6 @@ def post_store_summarize(payload: StoreRootRequest, context: Context) -> dict:
     )
 
 
-@router.post("/stores/maintenance/cleanup-recycle", response_model=APIResponse)
-def post_store_cleanup_recycle(
-    payload: StoreCleanupRecycleRequest,
-    context: Context,
-) -> dict:
-    return success_response(
-        _store_operation(
-            payload.store_root,
-            context,
-            lambda service: service.cleanup_recycle(force=payload.force),
-        )
-    )
 
 
 @router.post("/stores/jobs/list", response_model=APIResponse)

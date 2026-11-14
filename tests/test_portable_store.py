@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import yaml
 import hashlib
 import io
 import json
@@ -39,8 +40,8 @@ def _settings(root: Path, *, allowed_roots: list[str] | None = None) -> AppConfi
 
 
 def _config_file(root: Path, settings: AppConfig) -> Path:
-    path = root / "config.json"
-    path.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+    path = root / "config.yaml"
+    path.write_text(yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     return path
 
 
@@ -81,7 +82,7 @@ def test_store_requires_absolute_root_and_uses_visible_fixed_layout(tmp_path: Pa
     assert paths.databases.rag_db.is_file()
     assert paths.databases.vector_index_dir.is_dir()
     assert paths.external_dir == paths.storage_root / "content" / "markdown"
-    assert paths.recycle_dir == paths.storage_root / "content" / "recycle"
+    assert not (paths.storage_root / "content" / "recycle").exists()
 
     with pytest.raises(PortableStoreError):
         initialize_store(store_root, scope="knowledge.user", settings=settings)
@@ -446,7 +447,7 @@ def test_portable_full_rebuild_preserves_manifest_content_and_origin_metadata(
     )
 
 
-def test_portable_node_delete_cascades_source_mentions_and_recycle(
+def test_portable_node_delete_cascades_source_mentions_and_files(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -495,9 +496,9 @@ def test_portable_node_delete_cascades_source_mentions_and_recycle(
 
     result = service.delete_node("only-node")
     assert result["deleted_source_ids"] == [imported["source_id"]]
-    assert result["recycled_files"] == [imported["markdown_relative_path"]]
+    assert result["deleted_files"] == [imported["markdown_relative_path"]]
     assert not (paths.external_dir / imported["markdown_relative_path"]).exists()
-    assert (paths.recycle_dir / imported["markdown_relative_path"]).is_file()
+    assert not (paths.external_dir.parent / "recycle").exists()
     with sqlite3.connect(paths.databases.sources_db) as connection:
         status = connection.execute(
             "SELECT exists_status FROM sources WHERE source_id = ?",

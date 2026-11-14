@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
+import httpx
 from starlette.requests import Request
 
 import start
@@ -35,8 +37,8 @@ def _load_update_entry():
 def _project(tmp_path: Path, version: str = "1.0.0") -> Path:
     root = tmp_path / "project"
     root.mkdir()
-    (root / "version.json").write_text(
-        json.dumps({"version": version}), encoding="utf-8"
+    (root / "version.yaml").write_text(
+        yaml.safe_dump({"version": version}), encoding="utf-8"
     )
     return root
 
@@ -64,7 +66,7 @@ def test_check_finds_new_version_and_persists_state(tmp_path: Path) -> None:
     (root / ".git").mkdir()
     updater = ApplicationUpdater(
         root,
-        fetch_json=lambda _url, _timeout: {"version": "1.1.0"},
+        fetch_version=lambda _url, _timeout: {"version": "1.1.0"},
         command_runner=_runner(),
     )
 
@@ -86,7 +88,7 @@ def test_same_version_check_offers_force_update(tmp_path: Path) -> None:
     (root / ".git").mkdir()
     updater = ApplicationUpdater(
         root,
-        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        fetch_version=lambda _url, _timeout: {"version": "1.2.0"},
         command_runner=_runner(),
     )
 
@@ -142,7 +144,7 @@ def test_same_version_force_apply_rebuilds_without_version_bump(tmp_path: Path) 
 
     updater = ApplicationUpdater(
         root,
-        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        fetch_version=lambda _url, _timeout: {"version": "1.2.0"},
         command_runner=run,
     )
 
@@ -156,10 +158,11 @@ def test_same_version_force_apply_rebuilds_without_version_bump(tmp_path: Path) 
 def test_update_failure_after_merge_attempts_safe_git_rollback(tmp_path: Path) -> None:
     root = _project(tmp_path, version="1.2.0")
     (root / ".git").mkdir()
-    config_path = root / "config" / "config.json"
+    config_path = root / "config" / "config.yaml"
     config_path.parent.mkdir()
-    original_config = b'{"user": true}\n'
+    original_config = b"user: true\n"
     config_path.write_bytes(original_config)
+    config_path.with_name("config.example.yaml").write_text("new_option: true\n", encoding="utf-8")
     (root / "requirements.txt").write_text("example-package==0.0.0\n", encoding="utf-8")
     commands: list[list[str]] = []
 
@@ -189,10 +192,9 @@ def test_update_failure_after_merge_attempts_safe_git_rollback(tmp_path: Path) -
 
     updater = ApplicationUpdater(
         root,
-        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        fetch_version=lambda _url, _timeout: {"version": "1.2.0"},
         command_runner=run,
     )
-    updater._git_bytes = lambda _revision_path: b'{"default": true}\n'  # type: ignore[method-assign]
 
     with pytest.raises(UpdateError, match="命令执行失败"):
         updater.apply(force=True)
@@ -248,18 +250,29 @@ def test_remote_failure_is_not_reported_as_up_to_date(tmp_path: Path) -> None:
     def fail(_url: str, _timeout: float):
         raise RuntimeError("offline")
 
-    updater = ApplicationUpdater(root, fetch_json=fail)
+    updater = ApplicationUpdater(root, fetch_version=fail)
     with pytest.raises(UpdateSourceError, match="检查 GitHub 更新失败"):
         updater.check()
     assert updater.status()["phase"] == "failed"
     assert updater.status()["error"]
 
 
+def test_remote_version_is_read_as_yaml(tmp_path, monkeypatch):
+    import update.updater as module
+    root = _project(tmp_path)
+    response = httpx.Response(200, text="version: 1.2.0\n# YAML release metadata\n",
+                              request=httpx.Request("GET", "https://release.test/version.yaml"))
+    monkeypatch.setattr(module.httpx, "get", lambda *args, **kwargs: response)
+    status = ApplicationUpdater(root).check()
+    assert status["latest_version"] == "1.2.0"
+    assert status["version_url"].endswith("/version.yaml")
+
+
 def test_runtime_and_user_config_do_not_make_worktree_dirty(tmp_path: Path) -> None:
     root = _project(tmp_path)
     (root / ".git").mkdir()
     porcelain = (
-        " M config/config.json\0?? data/index.bin\0?? external/a.md\0"
+        " M config/config.yaml\0?? data/index.bin\0?? external/a.md\0"
         "?? log/a.tsv\0?? output/a.json\0?? tmp/a.tmp\0"
         "?? update/runtime/state.json\0"
     )
@@ -285,20 +298,20 @@ def test_program_changes_block_update(tmp_path: Path) -> None:
 
 def test_user_config_wins_while_new_defaults_are_added(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    config = root / "config" / "config.json"
+    config = root / "config" / "config.yaml"
     config.parent.mkdir()
-    config.write_text(
-        json.dumps({"rag": {"chunk_size": 1000, "new_option": True}, "theme": "white"}),
+    config.with_name("config.example.yaml").write_text(
+        yaml.safe_dump({"rag": {"chunk_size": 1000, "new_option": True}, "theme": "white"}),
         encoding="utf-8",
     )
     updater = ApplicationUpdater(root)
-    old_user = json.dumps(
+    old_user = yaml.safe_dump(
         {"rag": {"chunk_size": 600}, "api_key": "secret"}
     ).encode()
 
     updater._merge_user_config(config, old_user)
 
-    merged = json.loads(config.read_text(encoding="utf-8"))
+    merged = yaml.safe_load(config.read_text(encoding="utf-8"))
     assert merged == {
         "rag": {"chunk_size": 600, "new_option": True},
         "theme": "white",
@@ -310,8 +323,8 @@ def test_cli_version_outputs_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert start.main(["version"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["data"]["version"] == json.loads(
-        (Path(__file__).resolve().parents[1] / "version.json").read_text(encoding="utf-8")
+    assert payload["data"]["version"] == yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "version.yaml").read_text(encoding="utf-8")
     )["version"]
 
 
@@ -465,7 +478,7 @@ def test_changes_separates_blocking_and_protected_files(tmp_path: Path) -> None:
     root = _project(tmp_path)
     (root / ".git").mkdir()
     porcelain = (
-        " M config/config.json\0"
+        " M config/config.yaml\0"
         "?? data/index.bin\0"
         " M web/frontend/vite.config.ts\0"
         "?? tools/scratch.py\0"
@@ -478,7 +491,7 @@ def test_changes_separates_blocking_and_protected_files(tmp_path: Path) -> None:
         "tools/scratch.py",
         "web/frontend/vite.config.ts",
     ]
-    assert changes["protected_files"] == ["config/config.json", "data/index.bin"]
+    assert changes["protected_files"] == ["config/config.yaml", "data/index.bin"]
     assert changes["worktree_clean"] is False
     assert changes["can_force_update"] is True
     assert changes["blocking_reasons"] == ["工作区包含未提交的程序文件修改"]
@@ -550,7 +563,7 @@ def test_force_apply_backs_up_dirty_files_before_merging(tmp_path: Path) -> None
 
     updater = ApplicationUpdater(
         root,
-        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        fetch_version=lambda _url, _timeout: {"version": "1.2.0"},
         command_runner=run,
     )
 
@@ -580,7 +593,7 @@ def test_dirty_worktree_still_blocks_without_force(tmp_path: Path) -> None:
     (root / ".git").mkdir()
     updater = ApplicationUpdater(
         root,
-        fetch_json=lambda _url, _timeout: {"version": "1.2.0"},
+        fetch_version=lambda _url, _timeout: {"version": "1.2.0"},
         command_runner=_runner(" M web/frontend/vite.config.ts\0"),
     )
 
@@ -601,7 +614,7 @@ def test_root_update_entry_lists_changes_with_dirty_flag(monkeypatch, capsys) ->
                 "installation_mode": "git",
                 "worktree_clean": False,
                 "blocking_files": ["web/frontend/vite.config.ts"],
-                "protected_files": ["config/config.json"],
+                "protected_files": ["config/config.yaml"],
                 "blocking_reasons": ["工作区包含未提交的程序文件修改"],
                 "can_force_update": True,
             }

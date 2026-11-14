@@ -1,4 +1,4 @@
-"""DOCX Converter：Mammoth 优先，python-docx 结构化回退。"""
+"""DOCX/DOCM Converter；DOCM 仅使用 Mammoth，不执行 VBA。"""
 
 from __future__ import annotations
 
@@ -18,13 +18,17 @@ from .._utils import (
 
 
 class DocxConverter(DocumentConverter):
-    extensions = frozenset({".docx"})
+    extensions = frozenset({".docx", ".docm"})
     priority = 10
 
     def convert(self, source: Path, info: StreamInfo) -> DocumentConverterResult:
+        macro_enabled = info.extension == ".docm"
+        format_name = "DOCM" if macro_enabled else "DOCX"
         try:
             import mammoth
-        except ImportError:
+        except ImportError as exc:
+            if macro_enabled:
+                raise MissingOptionalDependencyError("mammoth", format_name) from exc
             mammoth = None
 
         if mammoth is not None:
@@ -47,17 +51,17 @@ class DocxConverter(DocumentConverter):
                 )
             except ImportError as exc:
                 # Mammoth is present but markdownify is not; use the native
-                # fallback only if python-docx is available.
-                if not _module_available("docx"):
+                # fallback only for DOCX when python-docx is available.
+                if macro_enabled or not _module_available("docx"):
                     raise MissingOptionalDependencyError(
-                        "markdownify", "DOCX"
+                        "markdownify", format_name
                     ) from exc
             except Exception as exc:
-                # A malformed/feature-heavy document may fail in Mammoth. The
-                # native converter still preserves paragraphs and tables.
-                if not _module_available("docx"):
+                # python-docx can preserve DOCX paragraphs/tables, but rejects
+                # DOCM's macro-enabled main-part Content-Type.
+                if macro_enabled or not _module_available("docx"):
                     raise DocumentConversionError(
-                        f"无法转换 DOCX：{source}: {exc}"
+                        f"无法转换 {format_name}：{source}: {exc}"
                     ) from exc
 
         content = _convert_with_python_docx(source)

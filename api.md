@@ -2,7 +2,7 @@
 
 > **用途**：本文件定义 kemo-graph 对外提供给 kemo-agent、其他智能体或自动化程序的 HTTP API。
 > **不包括**：Web 前端页面、React 路由、浏览器交互约定。
-> **当前版本**：`1.6.0`
+> **当前版本**：`2.0.0`
 > **实现来源**：`api/__init__.py`、`api/routes.py`、`api/store_routes.py`、`api/library_routes.py`、`api/schemas.py`。
 
 ---
@@ -88,15 +88,17 @@ http://127.0.0.1:8000/api/v1
 | HTTP | error.code | 含义 | 调用方建议 |
 |---:|---|---|---|
 | 400 / 422 | `INVALID_PARAM` | 参数、请求体或业务前置条件非法 | 修正参数后再试 |
+| 400 | `INVALID_PATH` | 导入路径不安全、不是可读取的绝对文件路径，或上传文件名包含目录 | 使用安全文件名或修正本地文件路径 |
 | 404 | `NOT_FOUND` | source_id、node_id 或路由不存在 | 先刷新状态/图谱确认 ID |
 | 409 | `PROCESSING` | 知识库正在整理 | 等待后重试，不并发修改 |
 | 409 | `IMPORT_SOURCE_CHANGED` | 源文件与调用方确认的 SHA-256 不一致，或捕获期间发生变化 | 重新扫描文件后再发起导入 |
-| 413 | `FILE_TOO_LARGE` | 导入文件超过 50 MB | 拆分或压缩内容 |
-| 415 | `UNSUPPORTED_FORMAT` | 不支持的文档扩展名 | 先转换为支持格式 |
-| 422 | `CONVERSION_FAILED` | 文档无法转换为 Markdown | 检查文件是否损坏或加密 |
+| 413 | `FILE_TOO_LARGE` | 导入文件超过 50 MB，或转换结果超过 20,000,000 字符 | 拆分或精简内容 |
+| 415 | `UNSUPPORTED_FORMAT` | 扩展名或内容识别结果没有对应 Converter | 先转换为支持格式 |
+| 422 | `CONVERSION_FAILED` | 文档无法转换为 Markdown，或缺少对应格式依赖 | 检查文档及 message 中的依赖名 |
 | 422 | `IMPORT_FAILED` | 导入过程失败 | 查看 message 与服务日志 |
 | 502 | `INGEST_FAILED` | 转换成功，但图谱/RAG 整理失败 | 文档已保留，可稍后调用 ingest 重试 |
 | 503 | `NOT_INITIALIZED` | 知识库尚未初始化 | 先导入或扫描至少一篇文档 |
+| 503 | `SEARCH_CACHE_CLEANUP_FAILED` | 数据变更已生效，但包含旧正文的搜索缓存未能清理 | 刷新数据列表，并单独调用搜索缓存清理接口；不要重放已完成的变更 |
 | 403 | `STORE_ACCESS_DENIED` | Store 路径不符合绝对路径或 allowlist 边界 | 修正路径或 portable_stores 配置 |
 | 404 | `STORE_NOT_INITIALIZED` | 目标位置没有有效 manifest | 先调用 stores/initialize |
 | 422 | `STORE_INVALID` | Store 清单、scope、owner 或目录状态非法 | 检查 kemo-graph-storage/manifest.json |
@@ -501,6 +503,14 @@ created_at / updated_at / last_hit_at
 
 `stale_only=true` 只删除过期记录；不传时清空全部缓存。删除文档或节点时，服务端会主动清空缓存结果，避免已删除正文继续保留在历史结果中。
 
+文档删除、批量删除、节点／关系删除和源同步的数据变更完成后，如果清理失败，
+返回 `503 SEARCH_CACHE_CLEANUP_FAILED`，不会把未知清理数量伪报成 `0`。
+响应仍使用 `ok=false, data=null`，`error.result` 保留已完成的变更结果，
+其中 `search_cache_deleted=null`、`search_cache_error` 为具体清理错误。
+全部删除跨多个批次时，结果还包含已处理批次的累计计数及 `unprocessed` 数量，
+首次清理失败后不再处理后续批次。调用方应刷新状态，并单独调用
+`DELETE /api/v1/search/cache`，不要重复提交已经完成的删除或同步。
+
 缓存是透明加速层。缓存数据库损坏或暂时不可写时，查询会降级执行原始检索，不会因缓存故障阻断知识查询。
 
 ---
@@ -567,6 +577,8 @@ GET /api/v1/documents?status=active&page=1&page_size=6&directory=研究资料&se
 
 `summary.needs_rebuild_documents` 表示 Graph 或 RAG 为 `pending/failed` 的活动文档数，可用于显示批量重建提示。默认不返回 `summary`，以保持旧客户端响应大小和兼容性。
 
+每篇文档的 `builds` 保存各链路最近一次实际执行的步骤，没有记录时为 `{}`。`graph` / `rag` 条目包含该次构建的 `content_hash` 和按执行顺序排列的 `steps`；每步包含 `step`、`label`、`status`（`processing` / `completed` / `failed`）、`error`、`started_at`、`finished_at`。只记录真正开始或完成的步骤，不根据最终状态反推历史。失败后保留此前成功步骤与具体错误；服务中断时，未完成步骤会标记为失败。处理稿发生变化时保留上次步骤及其哈希，供客户端明确区分历史构建。
+
 ### 5.1.1 原文件目录、重命名与移动
 
 原文件保存在 Markdown 根目录同级的 `originals/` 中，默认是 `external/originals/`。知识库目录直接映射这里的实际文件与文件夹，无共享、用户或项目分类。规范 Markdown 单独保存在 `external/markdown/`，通过 `sources.library_path`、稳定的 `source_id` 与 `file_map.json` 关联。文档列表的 `source_path` 是原文件相对路径，`relative_path` 是处理产物相对路径。
@@ -576,9 +588,10 @@ GET /api/v1/documents?status=active&page=1&page_size=6&directory=研究资料&se
 | `GET /api/v1/library` | 目录树与当前目录第一层内容 | 查询参数 `directory`、`search`，均默认为空 |
 | `POST /api/v1/library/entries` | 在已有目录新建文件夹或文档 | `{"directory":"研究资料","name":"笔记.md","kind":"file"}`；文件夹用 `kind:"directory"` |
 | `PATCH /api/v1/library/entries` | 移动或重命名实际文件/文件夹 | `{"path":"研究资料/笔记.md","destination":"归档/笔记.md"}` |
-| `DELETE /api/v1/library/entries` | 回收实际文件/文件夹并清理关联索引 | `{"path":"归档/笔记.md"}` |
+| `POST /api/v1/library/transfer` | 将原文件或整个目录复制、剪切到目标目录 | `{"path":"研究资料/笔记.md","directory":"归档","mode":"copy","conflict":"error"}`；剪切用 `mode:"cut"`，保留同名副本用 `conflict:"keep_both"` |
+| `DELETE /api/v1/library/entries` | 永久删除实际文件/文件夹并清理关联索引 | `{"path":"归档/笔记.md"}` |
 | `POST /api/v1/library/refresh` | 扫描实际目录并更新变化的处理产物 | `{"path":""}`；可指定单个文件或目录 |
-| `POST /api/v1/library/build` | 通过映射构建指定文件或目录 | `{"path":"研究资料"}`；返回后台任务 |
+| `POST /api/v1/library/build` | 通过映射构建指定文件或目录 | `{"path":"研究资料","reprocess":false}`；立即返回后台任务，`reprocess:true` 强制重新预处理后构建 |
 | `POST /api/v1/import?ingest=false&directory=研究资料` | 保存原文件并转换到独立处理目录 | multipart `file` 字段；目标目录需已存在 |
 
 `GET /library` 的 `data` 包含 `root`（原文件根目录绝对路径）、`directory`（当前相对目录）、`tree`（完整递归树）和 `entries`（当前目录第一层；搜索时为全库名称/路径匹配结果）。单个条目示例：
@@ -591,7 +604,11 @@ GET /api/v1/documents?status=active&page=1&page_size=6&directory=研究资料&se
 
 改名和移动保留 `source_id`、处理产物路径、内容哈希及 Graph/RAG 索引，更新原文件路径与映射并清理搜索缓存，不调用模型。后台任务排队或执行中拒绝移动。目标已存在时返回冲突，不覆盖文件。
 
+`transfer` 中的 `directory` 是已有目标目录的库内相对路径，空字符串表示根目录。复制保留原始字节，递归复制目录中的实际文件，不复用来源的身份或处理稿；随后刷新或构建时建立独立映射。剪切实际移动原文件并保留原有来源和处理映射。禁止将目录放入自身及其子目录，不跟随符号链接或目录联接。默认同名返回 `409 LIBRARY_ENTRY_EXISTS`；`keep_both` 自动添加“ - 副本”及必要的序号，不覆盖已有项目。没有权限时返回 `403 FILE_ACCESS_DENIED`。
+
 刷新直接发现磁盘中的新增、修改与删除，重新转换变化的受支持原文件；原文件缺失时清理关联来源与索引。返回 `updated`、`deleted` 和 `errors`，逐项报告转换失败。刷新不调用模型，构建通过映射后的 Markdown 路径调用 Graph/RAG。
+
+构建任务在后台队列内完成目录扫描、必要的预处理及 Graph/RAG 构建，可通过 `/api/v1/jobs/{job_id}` 查询进度、成功或失败。普通重建在原文件未变化时保留已编辑的处理稿；`reprocess:true` 则重新转换原文件后构建，两者语义不同。构建期间目录浏览不等待写锁，冲突的文件写操作会明确拒绝。
 
 旧版仅保留处理后 Markdown 的来源不会自动变成原文件。旧索引仍保留；需要原格式预览时重新导入原始资料。旧项目组织端点与 `project` 参数已移除。
 
@@ -643,7 +660,7 @@ Content-Type: application/json
 
 ### 5.2.2 网页预览的知识文档渲染范围
 
-`/library/preview` 读取原文件，返回 `mode`（`markdown`、`text`、`html`、`pdf`、`image`、`download`）、`editable`、名称与大小，以及对应 `content` / `html`。PDF/图片使用原文件 URL；DOCX、所有工作表、PPTX 全部幻灯片、EPUB 与邮件等直接从原文件生成展示内容，不读取图谱处理产物。Office 展示覆盖文本、图片和表格，不保证桌面 Office 的分页、字体、动画完全一致；二进制格式下载后本地编辑。
+`/library/preview` 读取原文件，返回 `mode`（`markdown`、`text`、`html`、`pdf`、`image`、`download`）、`editable`、名称与大小，以及对应 `content` / `html`。PDF/图片使用原文件 URL；DOCX/DOCM、所有工作表、PPTX/PPTM 全部幻灯片、EPUB 与邮件等直接从原文件生成展示内容，不读取图谱处理产物。Office 展示覆盖文本、图片和表格，不保证桌面 Office 的分页、字体、动画完全一致；二进制格式下载后本地编辑。原文件预览有意独立于索引转换，以保留图片及展示结构，仅共用格式识别。无扩展名文件可识别后预览，但不声明为可编辑文本；HTML/SVG 原文件下载接口始终不允许在应用来源内联执行。
 
 原始 Markdown 的网页渲染支持：
 
@@ -654,6 +671,21 @@ Content-Type: application/json
 - YAML/TOML frontmatter 识别与代码语言高亮。
 
 网页预览默认不执行原始 HTML、`<script>` 或任意导入文档脚本。KaTeX 或 Mermaid 语法错误只影响当前公式/图表，并保留原始文本，不会让整个文档预览失败。API 调用方若不使用网页端，应将 `content` 交给自己的 Markdown/数学渲染器；不要把 `content` 当作已经清洗过的 HTML 直接插入页面。
+
+### 5.2.3 构建页处理稿与重建
+
+| 方法与端点 | 用途 |
+| --- | --- |
+| `GET /api/v1/documents/{source_id}/processed` | 读取独立处理目录中的 Markdown，不读取原文件 |
+| `PUT /api/v1/documents/{source_id}/processed` | 保存处理稿；必填 `content` 和 `expected_content_hash`（64 位 SHA-256） |
+| `POST /api/v1/documents/{source_id}/rebuild` | 后台重新构建此文件的 Graph 与 RAG，包括已经就绪的链路；无需请求体 |
+| `POST /api/v1/build/retry-failed` | 后台只重试失败来源的失败链路，不执行其他待处理/就绪链路；无需请求体 |
+
+处理稿读取/保存返回 `source_id`、`source_path`（原文件相对路径，可为空）、`original_path`、`relative_path`（处理稿相对路径）、`processed_path`（处理稿绝对路径）、`size`（UTF-8 字节数）、`modified_at`、`content_hash`、`content`、`graph_status` 和 `rag_status`；保存额外返回 `changed`。
+
+保存仅原子替换处理稿。内容发生变化时两条链路标记为 `pending`，保留旧图谱、向量及构建哈希；不改原文件或目录映射，不调用模型。版本冲突或知识库正被其他线程写入时返回 HTTP 409 / `CONTENT_CONFLICT`，不会覆盖编辑稿。超过 50 MB 返回 HTTP 413。原文件未变化的后续刷新不会覆盖手工修订的处理稿；原文件变化并重新转换后则以新的转换结果为准。
+
+重建端点返回持久化维护任务，使用 `GET /jobs/{job_id}` 跟踪。网页“保存并重新构建”先保存处理稿，再提交单文件重建；如果提交失败，会明确保留“已保存、未构建”的状态，可通过文档卡片再次重建。“确认保存，不构建”只调用处理稿保存端点。定位原文件仍使用 `source_id` 对应的 `/documents/{source_id}/source` 映射。
 
 ---
 
@@ -675,15 +707,19 @@ Content-Type: multipart/form-data
 支持扩展名：
 
 ```text
-.pdf, .docx, .pptx, .xlsx, .xlsm, .xls, .epub, .rtf, .eml,
+.pdf, .docx, .docm, .pptx, .pptm, .xlsx, .xlsm, .xls, .epub, .rtf, .eml,
 .md, .markdown, .txt, .log, .html, .htm, .rst, .csv, .tsv,
 .json, .jsonl, .ndjson, .yaml, .yml, .xml
 ```
 
-最大文件：**50 MB**。
+最大文件：**50 MB**；转换结果上限为 **20,000,000 字符**，两种超限均返回 `413 FILE_TOO_LARGE`。
+
+无扩展名文件由 Magika 识别，识别结果仍须属于注册表支持的格式；未知二进制不会回退成文本。已有扩展名优先，不自动修复错误扩展名。`detected_format` 返回实际采用的格式。
+
+DOCM 必须安装 Mammoth 与 markdownify，不回退到 python-docx；PPTM 使用 python-pptx，XLSM 使用 openpyxl。只读取文档内容，不执行 VBA。Office 模板、放映、加载项、XLSB 及其他未注册的 `application/vnd.ms-*` 格式不在支持范围内，完整表见 `markitdown/README.md`。
 
 文本类文件会自动识别 UTF-8、UTF-16、GB18030、Big5 等常见编码；CSV 会同时检测编码与分隔符。
-PDF 仅提取已有文本层，不执行 OCR。扫描版 PDF 会返回 `CONVERSION_FAILED`，应由主智能体先完成 OCR 再导入。
+PDF 仅提取已有文本层，不执行 OCR。可识别的网格表格输出为 Markdown 表格，保留周边正文；无有效表格的页面沿用原文本输出。扫描版 PDF 会返回 `CONVERSION_FAILED`，应由主智能体先完成 OCR 再导入。
 
 导入接口只接受本地普通文件。URL、网页抓取、视频、音频、远程链接和 OCR 不在 kemo-graph 转换层内处理；这些内容应由上游智能体先归一化为 Markdown 或本地文档。
 
@@ -824,22 +860,21 @@ DELETE /api/v1/documents/{source_id}
 内部结果：
 
 ```text
-原文件 → external/recycle/originals/唯一回收目录/
-处理 Markdown → external/recycle/
+原文件 → 永久删除
+处理 Markdown → 永久删除
 sources.exists_status → deleted
 删除该 source 的 node_sources / edge_sources / chunks / embeddings / chunk_nodes
 同步删除 FAISS 向量
 重算仍有来源的节点引用数和边权重
 ```
 
-回收站已存在同一相对路径的文件时，用本次删除的内容覆盖旧副本，并刷新回收时间和过期时间，不再因重复文件阻止删除。旧回收副本在成功覆盖后不再保留；文件移动或元数据写入失败时会尝试恢复原文件与旧回收副本。目录冲突和不安全路径仍会被拒绝。
+文件与派生数据删除完成后，来源记录标记为 deleted；派生数据清理失败时保留活动来源记录，以便重试。删除操作不可恢复。
 
 响应包含：
 
 ```text
 deleted_source_id
 relative_path
-recycled_path
 graph_deleted
 rag_deleted
 ```
@@ -870,7 +905,30 @@ DELETE /api/v1/documents?confirm=delete-all&directory=研究资料
 GET /api/v1/nodes/{node_id}
 ```
 
-返回节点摘要、别名、标签、节点权重、引用次数、全部来源绑定和双向关系。来源包含 `original_path`、`relative_path`、`origin_hash`、处理状态、证据文本与证据权重。
+返回节点摘要、别名、标签、节点权重、引用次数、全部来源绑定、双向关系和 `groups`（该节点所属的真实节点群总结）。来源包含 `source_path`（库内原文件相对路径，未映射时为空）、`original_path`、`relative_path`（处理稿相对路径）、`origin_hash`、处理状态、证据文本与证据权重。不要将处理稿路径当作原文件路径。
+
+#### 节点全文搜索
+
+```http
+GET /api/v1/graph/search?query=知识%20图谱&limit=20&offset=0
+```
+
+沿用 kemo-agent 历史与记忆检索的 SQLite FTS5/simple 方案，`jieba_query(query,0)` 中英文分词，查询词之间为 AND，按 BM25 排序。检索节点名称、摘要、别名、标签；名称和别名权重更高。不调用模型或向量服务，不启用拼音扩展。
+
+`query` 最多 1000 字符且不能含 NUL；`limit` 为 1–100，默认 20；`offset` 默认 0。返回 `query`、`engine: "sqlite-fts5/simple"`、`total`、`limit`、`offset`、`nodes`。每个节点包含 `node_id`、`keyword`、`summary`、`aliases`、`tags`、`ref_count`、`rank`（越小越相关）和纯文本 `snippet`。
+
+首次搜索自动为既有节点回填索引；后续节点增删改与索引通过同一 SQLite 事务同步，回滚不留下残留词。索引是派生数据，节点表仍为权威数据。依赖、平台要求与离线重新打包方式见 `core/sqlite_simple/README.md`。
+
+#### 编辑节点摘要
+
+```http
+PATCH /api/v1/nodes/{node_id}
+Content-Type: application/json
+
+{"summary": "新的节点摘要", "expected_summary": "读取时的节点摘要"}
+```
+
+两个字段均必填、各最多 200000 字符。以 `expected_summary` 防止覆盖并发修改，不一致返回 `409 CONTENT_CONFLICT`。仅修改图谱节点，不改原文件、处理稿或来源映射；更新全文索引、清理过期辅助向量与检索缓存，使相关节点群总结失效，待显式“总结节点群”重新生成。返回更新后的节点详情，不自动调用模型。
 
 ### 6.2 删除节点
 
@@ -888,7 +946,7 @@ DELETE /api/v1/nodes/{node_id}
   → 删除 node_sources、nodes、chunk_nodes 中相关记录
   → 清空旧 groups / group_nodes，等待后续总结重建
   → 检查每个绑定 source：
-      若该 source 没有任何其他节点 → Markdown 移入回收站，并级联删除其 Graph/RAG/FAISS 数据
+      若该 source 没有任何其他节点 → 永久删除原文件、Markdown 及其 Graph/RAG/FAISS 数据
       若仍绑定其他节点 → 只解除当前节点绑定，文件与向量保留
 ```
 
@@ -901,7 +959,7 @@ DELETE /api/v1/nodes/{node_id}
     "deleted_node_id": "node-uuid",
     "deleted_keyword": "知识图谱",
     "cascade_deleted_edges": 3,
-    "recycled_files": ["recycle/markdown/example.md"],
+    "deleted_files": ["markdown/example.md"],
     "unlinked_files": ["markdown/another.md"]
   },
   "error": null
@@ -949,7 +1007,7 @@ PUT /api/v1/config
 Content-Type: application/json
 ```
 
-请求体是完整配置对象。配置由服务端校验并原子写入。
+请求体保持 JSON 配置对象。服务端校验后原子写入 UTF-8 YAML 文件 `config/config.yaml`，不再读取旧 JSON 配置或 `.env`。`data_dir`、`external_dir`、`web.host` 与 `web.port` 也统一在该文件配置；运行目录或监听地址改变后需重启服务。
 
 **风险**：这是全量配置更新，不是 JSON Patch。调用方必须先 `GET /config`，只修改必要字段后带回完整对象；不要自行编造或删除未知配置项。
 
@@ -964,6 +1022,20 @@ Content-Type: application/json
 
 修改后，下一次来源扫描会根据图谱抽取配置指纹把已完成文档的 `graph_status` 标为 `pending`；随后可运行网页批量重建或 `python start.py rebuild-knowledge-base`。RAG 配置未变化时不会因此重做向量索引。配置保存动作本身不会直接删除已提交的 Graph/RAG 数据。
 
+### 7.2.1 获取上游可选模型
+
+```http
+GET /api/v1/config/models
+```
+
+使用服务端已保存的网关地址和密钥读取 Kemo `GET /model/models`，沿用配置文件密钥优先、环境变量次之的认证规则。不会调用模型生成接口，也不会将真实密钥返回浏览器。请求超时最多 20 秒，响应禁止缓存。
+
+成功响应的 `data.models` 为模型数组，每项包含 `id`、`provider_id` 和 `task`（`llm / embedding / rerank / unknown`）。模型范围由上游密钥权限决定；网页按明确的 `task` 分类展示，不通过模型名称猜测用途。
+
+未配置密钥返回 `400 / MODEL_CATALOG_NOT_CONFIGURED`；认证失败返回 `502 / MODEL_CATALOG_AUTH_FAILED`；超时返回 `504 / MODEL_CATALOG_TIMEOUT`；网络、上游接口或目录格式错误返回 `502 / MODEL_CATALOG_UNAVAILABLE`。错误响应不转发上游正文或凭据。
+
+网页在读取或保存配置后自动更新模型目录，支持搜索、刷新和点击选择；选择结果仍需通过保存配置应用。目录为空或拉取失败时保留当前模型 ID，并允许手动填写。
+
 ### 7.3 手动生成节点群总结
 
 ```http
@@ -971,22 +1043,6 @@ POST /api/v1/maintenance/summarize
 ```
 
 只有累计变动文件数量达到 `summary_trigger_file_count` 时才会真正生成总结；否则返回跳过原因。该动作可能调用图谱 LLM。
-
-### 7.4 清理过期回收站
-
-```http
-POST /api/v1/maintenance/cleanup-recycle
-```
-
-按回收站 `.meta.json` 的 `expires_at` 永久删除到期文件；不可恢复。
-
-### 7.5 永久清空回收站
-
-```http
-DELETE /api/v1/maintenance/recycle
-```
-
-强制删除回收站中的全部文件与元数据，不考虑到期时间。该操作不可恢复，必须由用户明确确认。
 
 ### 7.6 后台整理文档
 
@@ -1062,7 +1118,7 @@ POST /api/v1/update/apply
 ```
 
 - `status` 只读取本地版本、上次检查状态和 Git 工作区预检，不访问网络。
-- `check` 从公开仓库 `kesepain-KE/kemo-graph` 的 `main/version.json` 检查最新 SemVer。
+- `check` 从公开仓库 `kesepain-KE/kemo-graph` 的 `main/version.yaml` 检查最新 SemVer。
 - 根目录 `update.py` 在本地与远端版本相同时也会询问是否强制重新执行更新；
   用户确认后仍必须通过 Git 快进、工作区保护、依赖安装和前端构建检查。
 - `apply` 将更新作为 `kind=update` 的持久化后台任务提交，只允许来自 `localhost`、`127.0.0.1` 或 `::1` 的请求。
@@ -1179,9 +1235,9 @@ GET /graph 或 POST /query/graph → 检查节点/边/来源影响 → DELETE /n
 
 `/import` 只接收上传的本地文件，不接收 URL。调用方若持有网络 URL，应先自行安全下载、校验后再上传。
 
-### 9.2 不支持恢复回收站文件
+### 9.2 文件删除不可恢复
 
-用户主动删除的文档或节点关联独占文档会移入 `external/recycle/`，但当前没有恢复 API。到期清理后永久删除。
+删除原文件或节点关联的独占文档时，直接永久删除相应文件及索引。网页执行前要求确认。
 
 ---
 
@@ -1192,6 +1248,19 @@ GET /graph 或 POST /query/graph → 检查节点/边/来源影响 → DELETE /n
 ```text
 <configured-log-dir>/YYYY-MM-DD.tsv
 ```
+
+文件日志、终端日志与重启辅助日志统一采用 TSV 表格；网页以相同字段展示：
+
+| 列 | 含义 |
+|---|---|
+| `time` | UTC 时间 |
+| `level` | DEBUG / INFO / WARNING / ERROR |
+| `module` | 产生日志的模块 |
+| `action` | 运行事件或动作 |
+| `detail` | 脱敏后的单行详情 |
+| `elapsed_ms` | 毫秒耗时；无耗时为 `-` |
+
+`config/logging.yaml` 控制标准 Python logging 的 TSV 终端输出；重启辅助日志位于 `update/runtime/restart.tsv`。HTTP 日志接口仍返回带命名字段的 JSON 行记录，便于客户端生成表格。
 
 日志会记录导入、图谱构建、RAG、FAISS、删除、维护和 API 错误的摘要；不会记录 API Key、Bearer Token、完整文档正文或完整模型提示词。
 
@@ -1226,7 +1295,7 @@ KEMO_GRAPH_WEB_PORT
 操作系统的绝对路径，再放入 JSON 请求体；不得根据 kemo-graph 的安装目录猜测数据
 位置。
 
-其中包含该位置独立的 `sources.db`、`search_cache.db`、`Graph/graph.db`、`RAG/rag.db`、FAISS 索引、规范 Markdown 与回收站。不同 Store 不共享数据库；联合查询只在内存中融合。
+其中包含该位置独立的 `sources.db`、`search_cache.db`、`Graph/graph.db`、`RAG/rag.db`、FAISS 索引与规范 Markdown。不同 Store 不共享数据库；联合查询只在内存中融合。
 
 ### 11.1 初始化
 
@@ -1337,7 +1406,6 @@ POST /api/v1/stores/maintenance/organize-graph
 POST /api/v1/stores/maintenance/rebuild-knowledge-base
 POST /api/v1/stores/maintenance/rebuild-all
 POST /api/v1/stores/maintenance/summarize
-POST /api/v1/stores/maintenance/cleanup-recycle
 POST /api/v1/stores/jobs/list
 POST /api/v1/stores/jobs/get
 ```
@@ -1381,7 +1449,7 @@ Content-Type: application/json
 - `updated_at` 早于现有记录记为 `stale`；
 - 正文相同但 revision/metadata 改变时只更新元数据，不重建 Graph/RAG；
 - 正文变化后 Graph/RAG 变为 pending；`ingest_after_sync=true` 可立即整理；
-- `deleted=true` 是 tombstone：立即级联清理 Graph/RAG 和派生 Markdown，不进入回收站；
+- `deleted=true` 是 tombstone：立即级联清理 Graph/RAG 和派生 Markdown，直接删除；
 - `content_hash` 是上游正文哈希，`sources.content_hash` 是规范 Markdown 哈希，两者分别保存；
 - 批次上限 1000 条，单条正文 50 MiB，metadata 64 KiB。
 
@@ -1644,7 +1712,7 @@ tier 晋升只产生 metadata/revision 更新，不改变 URI；正文没有变�
    revision 与时间，适用于人工清理，不适合作为上游 change feed 的常规路径。
 
 tombstone 会立即删除派生 Markdown，并级联清理 Graph、RAG、FAISS 和搜索缓存；
-派生 Markdown 不进入回收站，因为上游 SQLite 才是可恢复的权威来源。以后使用
+派生 Markdown 直接删除，上游 SQLite 仍是可恢复的权威来源。以后使用
 同一 URI 和更新版本恢复时，会复用原来的 kemo-graph `source_id`。
 
 ### 11.12 整理策略与超时

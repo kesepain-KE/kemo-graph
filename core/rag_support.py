@@ -56,9 +56,9 @@ class _MixedVectorSpaceError(IndexIntegrityError):
 
 
 def _coerce_embedding_result(
-    value: EmbeddingResult | list[list[float]],
+    value: EmbeddingResult,
 ) -> EmbeddingResult:
-    """消费新签名，并兼容旧注入测试返回的裸向量列表。"""
+    """验证向量提供方返回的向量空间身份。"""
 
     if isinstance(value, EmbeddingResult):
         vector_space_id = _validate_vector_space_id(value.vector_space_id)
@@ -66,8 +66,6 @@ def _coerce_embedding_result(
             vectors=value.vectors,
             vector_space_id=vector_space_id,
         )
-    if isinstance(value, list):
-        return EmbeddingResult(vectors=value, vector_space_id="unknown")
     raise TypeError("Embedding 返回值必须是 EmbeddingResult")
 
 

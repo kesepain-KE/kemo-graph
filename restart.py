@@ -8,6 +8,7 @@ command.  This is a process-level restart, not a module reload.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import subprocess
@@ -21,11 +22,12 @@ from uuid import uuid4
 import httpx
 
 from update import migrate_legacy_runtime
+from core.logger import LOG_COLUMNS, redact_log_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 RUNTIME_STATE_PATH = PROJECT_ROOT / "update" / "runtime" / "web-runtime.json"
-RESTART_LOG_PATH = PROJECT_ROOT / "update" / "runtime" / "restart.log"
+RESTART_LOG_PATH = PROJECT_ROOT / "update" / "runtime" / "restart.tsv"
 
 
 class RestartError(RuntimeError):
@@ -199,6 +201,7 @@ def _run_helper(
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 close_fds=True,
                 **_detached_options(),
             )
@@ -304,9 +307,14 @@ def _pid_exists(pid: int) -> bool:
 
 def _append_log(restart_id: str, message: str) -> None:
     RESTART_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    line = f"{_now_iso()}\t{restart_id}\t{message}\n"
-    with RESTART_LOG_PATH.open("a", encoding="utf-8") as stream:
-        stream.write(line)
+    with RESTART_LOG_PATH.open("a", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, delimiter="\t")
+        if stream.tell() == 0:
+            writer.writerow(LOG_COLUMNS)
+        writer.writerow((
+            datetime.now(timezone.utc).strftime("%H:%M:%S"), "INFO", "restart",
+            redact_log_text(restart_id), redact_log_text(message), "-",
+        ))
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

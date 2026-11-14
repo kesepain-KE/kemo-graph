@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VERSION_FILE = "version.json"
+VERSION_FILE = "version.yaml"
 DEFAULT_REPOSITORY = "https://github.com/kesepain-KE/kemo-graph"
 DEFAULT_VERSION_URL = (
-    "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.json"
+    "https://raw.githubusercontent.com/kesepain-KE/kemo-graph/main/version.yaml"
 )
 DEFAULT_REMOTE = "origin"
 DEFAULT_BRANCH = "main"
@@ -37,7 +38,7 @@ _SEMVER_RE = re.compile(
 )
 
 ProgressCallback = Callable[[float, str], None]
-FetchJSON = Callable[[str, float], Mapping[str, Any]]
+FetchVersion = Callable[[str, float], Mapping[str, Any]]
 CommandRunner = Callable[[list[str], Path], subprocess.CompletedProcess[str]]
 
 
@@ -138,18 +139,18 @@ def _compare_prerelease(left: tuple[str, ...], right: tuple[str, ...]) -> int:
 def read_local_version(project_root: Path | str | None = None) -> str:
     root = Path(project_root or PROJECT_ROOT).resolve()
     try:
-        payload = json.loads((root / VERSION_FILE).read_text(encoding="utf-8"))
+        payload = yaml.safe_load((root / VERSION_FILE).read_text(encoding="utf-8"))
         version = str(payload["version"]).strip()
         SemanticVersion.parse(version)
         return version
-    except (OSError, KeyError, TypeError, json.JSONDecodeError, ValueError) as exc:
-        raise UpdateSourceError(f"无法读取本地 version.json：{exc}") from exc
+    except (OSError, KeyError, TypeError, yaml.YAMLError, ValueError) as exc:
+        raise UpdateSourceError(f"无法读取本地 version.yaml：{exc}") from exc
 
 
 class ApplicationUpdater:
     """Checks GitHub and applies a fast-forward update to a clean Git checkout."""
 
-    _PROTECTED_EXACT = frozenset({".env", "config/config.json"})
+    _PROTECTED_EXACT = frozenset({"config/config.yaml"})
     _PROTECTED_PREFIXES = (
         "data/",
         "external/",
@@ -169,7 +170,7 @@ class ApplicationUpdater:
         remote: str = DEFAULT_REMOTE,
         branch: str = DEFAULT_BRANCH,
         request_timeout: float = 10.0,
-        fetch_json: FetchJSON | None = None,
+        fetch_version: FetchVersion | None = None,
         command_runner: CommandRunner | None = None,
     ) -> None:
         self.project_root = Path(project_root or PROJECT_ROOT).resolve()
@@ -178,7 +179,7 @@ class ApplicationUpdater:
         self.remote = remote
         self.branch = branch
         self.request_timeout = request_timeout
-        self._fetch_json = fetch_json or _fetch_json
+        self._fetch_version = fetch_version or _fetch_version
         self._command_runner = command_runner or _run_command
         self.update_dir = self.project_root / "update" / "runtime"
         self.state_path = self.update_dir / "state.json"
@@ -268,7 +269,7 @@ class ApplicationUpdater:
         with self._lock:
             self._write_state({**self._read_state(), "phase": "checking", "error": None})
             try:
-                payload = self._fetch_json(self.version_url, self.request_timeout)
+                payload = self._fetch_version(self.version_url, self.request_timeout)
                 latest_text = str(payload.get("version", "")).strip()
                 latest = SemanticVersion.parse(latest_text)
                 current_text = read_local_version(self.project_root)
@@ -300,7 +301,7 @@ class ApplicationUpdater:
                 self._record_error(exc)
                 raise
             except (ValueError, TypeError, KeyError) as exc:
-                error = UpdateSourceError(f"远端 version.json 格式无效：{exc}")
+                error = UpdateSourceError(f"远端 version.yaml 格式无效：{exc}")
                 self._record_error(error)
                 raise error from exc
             except Exception as exc:
@@ -345,7 +346,7 @@ class ApplicationUpdater:
 
             self._write_state({**checked, "phase": "updating", "error": None})
             original_config: bytes | None = None
-            config_path = self.project_root / "config" / "config.json"
+            config_path = self.project_root / "config" / "config.yaml"
             old_head = ""
             merged = False
             stashed_files: list[str] = []
@@ -382,14 +383,12 @@ class ApplicationUpdater:
                 if SemanticVersion.parse(remote_version) < SemanticVersion.parse(
                     checked["latest_version"]
                 ):
-                    raise UpdateSourceError("GitHub main 分支版本低于远端 version.json")
+                    raise UpdateSourceError("GitHub main 分支版本低于远端 version.yaml")
 
                 callback(0.22, "备份并保护用户配置")
                 if config_path.is_file():
                     original_config = config_path.read_bytes()
                     self._backup_config(original_config)
-                    committed = self._git_bytes("HEAD:config/config.json")
-                    _write_bytes_atomic(config_path, committed)
 
                 callback(0.36, "快进应用新版本")
                 self._git(["git", "merge", "--ff-only", target])
@@ -588,26 +587,26 @@ class ApplicationUpdater:
     def _read_remote_version(self, target: str) -> str:
         raw = self._git_output(["git", "show", f"{target}:{VERSION_FILE}"])
         try:
-            version = str(json.loads(raw)["version"]).strip()
+            version = str(yaml.safe_load(raw)["version"]).strip()
             SemanticVersion.parse(version)
             return version
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise UpdateSourceError(f"远端分支 version.json 无效：{exc}") from exc
+        except (yaml.YAMLError, KeyError, TypeError, ValueError) as exc:
+            raise UpdateSourceError(f"远端分支 version.yaml 无效：{exc}") from exc
 
     def _backup_config(self, content: bytes) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        target = self.update_dir / "backups" / f"config-{stamp}.json"
+        target = self.update_dir / "backups" / f"config-{stamp}.yaml"
         _write_bytes_atomic(target, content)
 
     def _merge_user_config(self, path: Path, original: bytes) -> None:
         try:
-            defaults = json.loads(path.read_text(encoding="utf-8"))
-            user = json.loads(original.decode("utf-8"))
+            defaults = yaml.safe_load(path.with_name("config.example.yaml").read_text(encoding="utf-8"))
+            user = yaml.safe_load(original.decode("utf-8"))
             if not isinstance(defaults, dict) or not isinstance(user, dict):
                 raise ValueError("配置根节点必须是对象")
             merged = _deep_merge(defaults, user)
-            _write_json_atomic(path, merged)
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            _write_bytes_atomic(path, yaml.safe_dump(merged, allow_unicode=True, sort_keys=False).encode("utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
             raise UpdateError(f"合并用户配置失败：{exc}") from exc
 
     def _read_state(self) -> dict[str, Any]:
@@ -653,22 +652,6 @@ class ApplicationUpdater:
     def _git_output(self, command: list[str]) -> str:
         return self._run(command).stdout
 
-    def _git_bytes(self, revision_path: str) -> bytes:
-        # Route this read through the injected command runner as well.  The
-        # updater's tests and deployment wrappers can then observe every Git
-        # operation, while the production runner still returns UTF-8 text.
-        result = self._command_runner(
-            ["git", "show", revision_path],
-            self.project_root,
-        )
-        if result.returncode != 0:
-            message = str(result.stderr or result.stdout or "")[-2000:].strip()
-            raise UpdateError(f"Git 读取失败：{message}")
-        output = result.stdout
-        if isinstance(output, bytes):
-            return output
-        return str(output or "").encode("utf-8")
-
     def _run(
         self,
         command: list[str],
@@ -682,20 +665,20 @@ class ApplicationUpdater:
         return result
 
 
-def _fetch_json(url: str, timeout: float) -> Mapping[str, Any]:
+def _fetch_version(url: str, timeout: float) -> Mapping[str, Any]:
     try:
         response = httpx.get(
             url,
             timeout=timeout,
             follow_redirects=True,
-            headers={"Accept": "application/json", "User-Agent": "kemo-graph-updater"},
+            headers={"Accept": "application/yaml, text/yaml, text/plain", "User-Agent": "kemo-graph-updater"},
         )
         response.raise_for_status()
-        payload = response.json()
-    except (httpx.HTTPError, json.JSONDecodeError) as exc:
-        raise UpdateSourceError(f"无法读取 GitHub version.json：{exc}") from exc
+        payload = yaml.safe_load(response.text)
+    except (httpx.HTTPError, yaml.YAMLError) as exc:
+        raise UpdateSourceError(f"无法读取 GitHub version.yaml：{exc}") from exc
     if not isinstance(payload, Mapping):
-        raise UpdateSourceError("GitHub version.json 根节点必须是 JSON 对象")
+        raise UpdateSourceError("GitHub version.yaml 根节点必须是 YAML 映射")
     return payload
 
 

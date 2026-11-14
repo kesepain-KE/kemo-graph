@@ -63,7 +63,7 @@ from .query_planner import QueryPlan, filter_semantic_drift, plan_query
 
 
 
-Embedder = Callable[[list[str]], EmbeddingResult | list[list[float]]]
+Embedder = Callable[[list[str]], EmbeddingResult]
 Reranker = Callable[[str, list[str], int], list[tuple[int, float]]]
 
 class RAGEngine(RAGAuxiliaryMixin):

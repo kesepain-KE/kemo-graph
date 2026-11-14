@@ -485,7 +485,7 @@ class EntryPointTests(unittest.TestCase):
     def test_api_force_history_detail_and_clear(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
             application = create_app(
                 config_path=config_path,

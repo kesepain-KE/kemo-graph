@@ -17,7 +17,7 @@ from ..db import (
     read_rag_meta,
 )
 from . import IngestError
-from ._utils import _elapsed_ms, _hash_relative_path, _now_iso
+from ._utils import _elapsed_ms, _hash_relative_path, _now_iso, _path_key, _safe_source_path
 
 
 @dataclass(frozen=True)
@@ -40,10 +40,82 @@ class _SourceRecord:
     rag_status: str
 
 
+def cleanup_orphaned_sources(
+    self, *, remove_unmapped: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Remove derived files whose original source no longer exists."""
+
+    from ..library import resolve_path
+
+    with self._write_lock:
+        connection = connect_sources(self.paths)
+        try:
+            rows = connection.execute(
+                """
+                SELECT source_id, relative_path, original_path, library_path,
+                       source_uri, exists_status FROM sources
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+        mapped_paths = {_path_key(item.markdown_path) for item in self.file_map.list()}
+        newly_deleted_ids: list[str] = []
+        removed_paths: list[str] = []
+        for row in rows:
+            # Synced records have an upstream authority instead of a local file.
+            if row["source_uri"] is not None:
+                continue
+            original = (
+                resolve_path(self, row["library_path"], must_exist=False)
+                if row["library_path"] is not None
+                else Path(row["original_path"])
+            )
+            if original.is_file():
+                continue
+            if row["exists_status"] == "active":
+                self.delete_document(row["source_id"])
+                newly_deleted_ids.append(row["source_id"])
+                removed_paths.append(row["library_path"] or row["relative_path"])
+            elif (
+                _path_key(row["relative_path"]) in mapped_paths
+                or _safe_source_path(self.external_dir, row["relative_path"]).is_file()
+            ):
+                self._delete_source_file(row["relative_path"])
+                self._delete_source_data(row["source_id"])
+                removed_paths.append(row["library_path"] or row["relative_path"])
+
+        for mapping in self.file_map.list():
+            original = mapping.original_path
+            # Source sync writes its URI mapping before registering metadata.
+            if "://" in original and not original.startswith("upload://"):
+                continue
+            if Path(original).is_file():
+                continue
+            self._delete_source_file(mapping.markdown_path)
+            self.file_map.delete_by_markdown(mapping.markdown_path)
+            removed_paths.append(mapping.markdown_path)
+
+        if remove_unmapped:
+            tracked = {_path_key(item.markdown_path) for item in self.file_map.list()}
+            tracked.update(
+                _path_key(row["relative_path"]) for row in rows
+                if row["exists_status"] == "active" and row["source_id"] not in newly_deleted_ids
+            )
+            for path in self.external_dir.rglob("*"):
+                if path.is_file() and path.suffix.casefold() == ".md":
+                    relative = path.relative_to(self.external_dir).as_posix()
+                    if _path_key(relative) not in tracked:
+                        self._delete_source_file(relative)
+                        removed_paths.append(relative)
+        return newly_deleted_ids, removed_paths
+
+
 def scan_sources(self) -> ScanResult:
     """扫描全部 Markdown，并更新 sources 的身份、哈希和状态。"""
 
     started_at = time.perf_counter()
+    newly_deleted_ids, _ = cleanup_orphaned_sources(self)
+
     graph_config_changed = self._graph_extraction_config_changed()
     rag_config_changed = self._rag_chunking_config_changed()
     markdown_files = sorted(
@@ -79,7 +151,6 @@ def scan_sources(self) -> ScanResult:
     new_ids: list[str] = []
     changed_ids: list[str] = []
     unchanged_ids: list[str] = []
-    newly_deleted_ids: list[str] = []
     now = _now_iso()
     connection = connect_sources(self.paths)
     try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import yaml
 import hashlib
 import io
 import json
@@ -50,13 +51,13 @@ def _service(root: Path) -> KnowledgeBaseService:
         settings=_settings(root),
         data_dir=root / "data",
         external_dir=root / "external" / "markdown",
-        config_path=root / "config.json",
+        config_path=root / "config.yaml",
     )
 
 
 class ConfigurationTests(unittest.TestCase):
     def test_public_siliconflow_model_ids_do_not_contain_slashes(self) -> None:
-        settings = load_config(Path(__file__).resolve().parents[1] / "config" / "config.json")
+        settings = load_config(Path(__file__).resolve().parents[1] / "config" / "config.example.yaml")
         self.assertEqual(
             settings.models.embedding,
             "siliconflow-Qwen-Qwen3-VL-Embedding-8B",
@@ -485,9 +486,9 @@ class EntryPointTests(unittest.TestCase):
     def test_api_import_success_and_format_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text(
-                _settings(root).model_dump_json(indent=2),
+                yaml.safe_dump(_settings(root).model_dump(mode="json"), allow_unicode=True, sort_keys=False),
                 encoding="utf-8",
             )
             app = create_app(

@@ -19,11 +19,9 @@ class _FakeMaintenanceService:
     def __init__(self, *, fail_summary: bool = False) -> None:
         self.settings = AppConfig(
             summary_trigger_time="03:00",
-            recycle_life_days=14,
         )
         self.fail_summary = fail_summary
         self.summary_calls = 0
-        self.cleanup_calls = 0
 
     def generate_group_summaries(self):
         self.summary_calls += 1
@@ -31,13 +29,10 @@ class _FakeMaintenanceService:
             raise RuntimeError("summary failed")
         return {"generated": 2}
 
-    def cleanup_recycle(self):
-        self.cleanup_calls += 1
-        return {"deleted": 1}
 
 
 class MaintenanceSchedulerTests(unittest.TestCase):
-    def test_runs_both_tasks_once_per_day_at_configured_time(self) -> None:
+    def test_runs_summary_once_per_day_at_configured_time(self) -> None:
         service = _FakeMaintenanceService()
         scheduler = MaintenanceScheduler(lambda: service)
 
@@ -47,13 +42,11 @@ class MaintenanceSchedulerTests(unittest.TestCase):
         next_day = scheduler.run_pending(datetime(2026, 8, 1, 3, 0))
 
         self.assertEqual(first["summary"], {"generated": 2})
-        self.assertEqual(first["cleanup"], {"deleted": 1})
         self.assertIsNone(duplicate)
         self.assertIsNotNone(next_day)
         self.assertEqual(service.summary_calls, 2)
-        self.assertEqual(service.cleanup_calls, 2)
 
-    def test_cleanup_still_runs_when_summary_fails(self) -> None:
+    def test_summary_failure_is_reported_without_retrying_the_same_day(self) -> None:
         service = _FakeMaintenanceService(fail_summary=True)
         scheduler = MaintenanceScheduler(lambda: service)
 
@@ -61,8 +54,7 @@ class MaintenanceSchedulerTests(unittest.TestCase):
             result = scheduler.run_pending(datetime(2026, 7, 31, 3, 0))
 
         self.assertEqual(result["errors"]["summary"], "summary failed")
-        self.assertEqual(result["cleanup"], {"deleted": 1})
-        self.assertEqual(service.cleanup_calls, 1)
+        self.assertIsNone(scheduler.run_pending(datetime(2026, 7, 31, 3, 0, 30)))
 
     def test_start_is_idempotent_and_creates_daemon_thread(self) -> None:
         service = _FakeMaintenanceService()
@@ -88,7 +80,7 @@ class WebSchedulerIntegrationTests(unittest.TestCase):
     def test_web_lifespan_starts_and_stops_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
             scheduler = unittest.mock.MagicMock()
 

@@ -19,7 +19,7 @@ from start_web import create_app
 
 
 def _app(tmp_path: Path):
-    config = tmp_path / "config.json"
+    config = tmp_path / "config.yaml"
     config.write_text("{}", encoding="utf-8")
     return create_app(
         config_path=config,

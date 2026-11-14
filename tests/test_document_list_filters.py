@@ -1,5 +1,6 @@
 """Server-side document filtering, summaries and directory-scoped deletion."""
 
+import yaml
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -101,8 +102,8 @@ def test_directory_scoped_delete_does_not_require_client_side_id_enumeration(tmp
 
 
 def test_documents_api_exposes_server_filters_and_summary(tmp_path):
-    config = tmp_path / "config.json"
-    config.write_text(AppConfig().model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(AppConfig().model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     service = KnowledgeBaseService(
         settings=AppConfig(),
         data_dir=tmp_path / "data",

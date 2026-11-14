@@ -1,3 +1,4 @@
+import yaml
 from pathlib import Path
 from unittest.mock import patch
 
@@ -5,12 +6,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import create_app
+from api.schemas import APIResponse
 from core import library
 from core.config import AppConfig
+from core.db import connect_sources, initialize_databases
 from core.document_preview import preview_document
 from core.ingestor import FileMapStore, Ingestor
-from core.knowledge_base import KnowledgeBaseService, DocumentContentConflictError
+from core.knowledge_base import KnowledgeBaseService, DocumentContentConflictError, DocumentImportError
 from core.rag_engine import RAGEngine
+from core.search_cache import SearchCache, SearchCacheCleanupError, SearchCacheError, compute_state_hash, make_cache_key
 
 
 @pytest.fixture
@@ -41,9 +45,18 @@ def test_original_bytes_survive_upload_staging_and_preview_ignores_markdown(serv
     assert original.read_bytes() == original_bytes
     (service.external_dir / result["markdown_relative_path"]).write_text("处理产物已变化", encoding="utf-8")
     preview = preview_document(original)
-    assert preview["mode"] == "html"
-    assert all(text in preview["html"] for text in ("原文标题", "原文段落", "原文表格"))
-    assert "处理产物已变化" not in preview["html"]
+    assert preview["mode"] == "office" and preview["format"] == "docx"
+    assert not preview["editable"]
+    assert "html" not in preview and "content" not in preview
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(service.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    app = create_app(config_path=config, data_dir=service.data_dir, external_dir=service.external_dir)
+    with TestClient(app) as client:
+        metadata = client.get("/api/v1/library/preview", params={"path": result["source_path"]})
+        assert metadata.json()["data"] == preview
+        response = client.get("/api/v1/library/original", params={"path": result["source_path"]})
+        assert response.status_code == 200 and response.content == original_bytes
+    assert original.read_bytes() == original_bytes
 
 
 def test_real_recursive_tree_and_name_path_search(service, tmp_path):
@@ -56,6 +69,90 @@ def test_real_recursive_tree_and_name_path_search(service, tmp_path):
     assert library.list_library(service, search="技术调研/sample")["entries"][0]["name"] == "sample.txt"
     assert list(service.external_dir.glob("*.md"))
     assert not (service.external_dir / "用户").exists()
+
+
+def test_new_file_import_failure_rolls_back_original_and_derived_files(service):
+    with patch.object(FileMapStore, "upsert", side_effect=OSError("disk full")):
+        with pytest.raises(DocumentImportError):
+            library.create_entry(service, "", "new.md", "file")
+
+    assert not (library.original_root(service) / "new.md").exists()
+    assert not list(service.external_dir.glob("*.md"))
+    assert library.source_rows(service) == []
+    assert FileMapStore(service.external_dir / "file_map.json").list() == []
+
+    created = library.create_entry(service, "", "new.md", "file")
+    assert created["path"] == "new.md"
+    assert len(library.source_rows(service)) == 1
+
+
+@pytest.mark.parametrize("operation", ["single", "batch", "library"])
+def test_delete_reports_cache_failure_and_allows_separate_cleanup(service, tmp_path, operation):
+    document = imported(service, tmp_path)
+    cache = SearchCache(service.paths, service.settings)
+    state = compute_state_hash(service.paths, service.settings)
+    key = make_cache_key("secret", state, {}, query_mode="rag")
+    cache.set(key, "secret", state, {}, {"results": [{"content": "private"}]}, query_mode="rag")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(service.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    app = create_app(config_path=config, data_dir=service.data_dir, external_dir=service.external_dir)
+    with TestClient(app) as client:
+        with patch.object(SearchCache, "clear", side_effect=SearchCacheError("database locked")):
+            if operation == "single":
+                response = client.delete(f"/api/v1/documents/{document['source_id']}")
+            elif operation == "batch":
+                response = client.post("/api/v1/documents/delete-batch", json={"source_ids": [document["source_id"]]})
+            else:
+                response = client.request("DELETE", "/api/v1/library/entries", json={"path": document["source_path"]})
+
+        assert response.status_code == 503, response.text
+        payload = response.json()
+        assert payload["ok"] is False and payload["data"] is None
+        assert payload["error"]["code"] == "SEARCH_CACHE_CLEANUP_FAILED"
+        assert "已经生效" in payload["error"]["message"]
+        result = payload["error"]["result"]
+        assert APIResponse.model_validate(payload).error.result == result
+        assert result["search_cache_deleted"] is None
+        assert "database locked" in result["search_cache_error"]
+        if operation == "batch":
+            assert result["deleted"] == 1 and result["failed"] == 0
+        else:
+            assert result["deleted_source_id"] == document["source_id"]
+        assert service.list_documents(status="active")["documents"] == []
+        assert not (library.original_root(service) / document["source_path"]).exists()
+        assert cache.list()["total"] == 1
+        assert any("search_cache_cleanup_failed" in log.read_text(encoding="utf-8")
+                   for log in (tmp_path / "log").rglob("*.tsv"))
+
+        cleanup = client.delete("/api/v1/search/cache")
+        assert cleanup.status_code == 200
+        assert cleanup.json()["data"]["deleted"] == 1
+        assert cache.list()["total"] == 0
+
+
+def test_delete_all_stops_before_next_batch_when_cache_cleanup_fails(service):
+    initialize_databases(service.data_dir, service.settings)
+    connection = connect_sources(service.paths)
+    try:
+        with connection:
+            connection.executemany(
+                "INSERT INTO sources(source_id,original_path,relative_path,path_hash,content_hash) VALUES(?,?,?,?,?)",
+                [(str(index), f"original-{index}", f"document-{index:04}.md", str(index), "content")
+                 for index in range(1001)],
+            )
+    finally:
+        connection.close()
+
+    with patch.object(SearchCache, "clear", side_effect=SearchCacheError("database locked")):
+        with pytest.raises(SearchCacheCleanupError) as caught:
+            service.delete_all_documents()
+
+    result = caught.value.result
+    assert result["requested"] == 1001
+    assert result["deleted"] == len(result["documents"]) == 1000
+    assert result["failed"] == 0 and result["unprocessed"] == 1
+    assert result["search_cache_deleted"] is None
+    assert service.list_documents(status="active")["pagination"]["total"] == 1
 
 
 def test_folder_move_preserves_source_identity_and_processing_paths(service, tmp_path):
@@ -130,6 +227,22 @@ def test_refresh_discovers_disk_changes_and_cleans_deleted_sources(service, tmp_
     assert service.list_documents(status="active")["documents"] == []
 
 
+def test_refresh_removes_unregistered_processed_files_and_stale_mappings(service):
+    ingestor = Ingestor(service.data_dir, service.external_dir, settings=service.settings)
+    orphan = service.external_dir / "orphan.md"
+    orphan.write_text("unmapped processed content", encoding="utf-8")
+    stale = service.external_dir / "stale.md"
+    stale.write_text("processed content without its original", encoding="utf-8")
+    ingestor.file_map.upsert(str(service.external_dir.parent / "missing.docx"), "stale.md")
+    ingestor.file_map.upsert("upload://already-removed.txt", "already-removed.md")
+    result = library.refresh_library(service)
+    assert set(result["deleted"]) == {"orphan.md", "stale.md", "already-removed.md"}
+    assert not orphan.exists() and not stale.exists()
+    assert ingestor.file_map.list() == []
+    assert service.list_documents(status="active")["documents"] == []
+    assert ingestor.scan_sources().new_source_ids == []
+
+
 def test_build_selects_original_directory_and_reads_its_processed_file(service, tmp_path):
     library.create_entry(service, "", "selected", "directory")
     document = imported(service, tmp_path, directory="selected")
@@ -142,41 +255,51 @@ def test_build_selects_original_directory_and_reads_its_processed_file(service, 
     assert "原文件正文" in read[0][1]
 
 
-def test_delete_recycles_original_and_prevents_refresh_from_restoring_it(service, tmp_path):
+def test_delete_removes_original_and_processed_file_without_recreating_it(service, tmp_path):
     document = imported(service, tmp_path)
     library.delete_entry(service, document["source_path"])
     assert not (library.original_root(service) / document["source_path"]).exists()
-    recycled = list((service.external_dir.parent / "recycle" / "originals").rglob("sample.txt"))
-    assert recycled[0].read_text(encoding="utf-8") == "原文件正文\n第二行"
+    assert not (service.external_dir / document["markdown_relative_path"]).exists()
+    assert not (service.external_dir.parent / "recycle").exists()
     assert library.refresh_library(service)["updated"] == []
     assert service.list_documents(status="active")["documents"] == []
 
 
-def test_failed_recycling_restores_original_and_leaves_source_active(service, tmp_path):
+
+def test_failed_file_deletion_leaves_original_and_source_active(service, tmp_path):
     document = imported(service, tmp_path)
-    with patch.object(Ingestor, "_move_source_to_recycle", side_effect=OSError("disk full")):
+    with patch.object(Ingestor, "_delete_source_file", side_effect=OSError("disk full")):
         with pytest.raises(OSError, match="disk full"):
             service.delete_document(document["source_id"])
     assert library.original_for_source(service, document["source_id"]).read_bytes() == (tmp_path / "sample.txt").read_bytes()
     assert (service.external_dir / document["markdown_relative_path"]).is_file()
 
 
-def test_original_files_and_unindexed_folders_follow_recycle_expiration(service, tmp_path):
-    import json
-    document = imported(service, tmp_path)
-    library.delete_entry(service, document["source_path"])
+def test_delete_directory_removes_indexed_files_and_unindexed_attachments(service, tmp_path):
+    library.create_entry(service, "", "attachments", "directory")
+    document = imported(service, tmp_path, directory="attachments")
     folder = library.original_root(service) / "attachments"
-    folder.mkdir()
-    (folder / "image.png").write_bytes(b"preserved attachment")
-    library.delete_entry(service, "attachments")
-    recycle = service.external_dir.parent / "recycle"
-    for metadata in recycle.rglob("*.meta.json"):
-        payload = json.loads(metadata.read_text(encoding="utf-8"))
-        payload["expires_at"] = "2000-01-01T00:00:00+00:00"
-        metadata.write_text(json.dumps(payload), encoding="utf-8")
-    assert service.cleanup_recycle()["deleted"] == 3
-    assert not list(recycle.rglob("sample.txt"))
-    assert not list(recycle.rglob("image.png"))
+    (folder / "image.png").write_bytes(b"attachment")
+    result = library.delete_entry(service, "attachments")
+    assert result["sources_deleted"] == 1
+    assert not folder.exists()
+    assert not (service.external_dir / document["markdown_relative_path"]).exists()
+    assert not (service.external_dir.parent / "recycle").exists()
+    assert service.list_documents(status="active")["documents"] == []
+
+
+def test_delete_can_retry_index_cleanup_after_files_are_removed(service, tmp_path):
+    document = imported(service, tmp_path)
+    with patch.object(Ingestor, "_delete_source_data", side_effect=OSError("index unavailable")):
+        with pytest.raises(OSError, match="index unavailable"):
+            service.delete_document(document["source_id"])
+    assert not (library.original_root(service) / document["source_path"]).exists()
+    assert not (service.external_dir / document["markdown_relative_path"]).exists()
+    assert len(service.list_documents(status="active")["documents"]) == 1
+    result = service.delete_document(document["source_id"])
+    assert result["deleted_source_id"] == document["source_id"]
+    assert service.list_documents(status="active")["documents"] == []
+
 
 
 @pytest.mark.parametrize("path", ["../outside", "/outside", "C:/outside", "a/../../outside", "a\\b", "a//b"])
@@ -186,8 +309,8 @@ def test_library_paths_cannot_escape_or_alias_the_root(service, path):
 
 
 def test_api_original_download_and_nested_import_round_trip(service, tmp_path):
-    config = tmp_path / "config.json"
-    config.write_text(service.settings.model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(service.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     app = create_app(config_path=config, data_dir=service.data_dir, external_dir=service.external_dir)
     with TestClient(app) as client:
         assert client.post("/api/v1/library/entries", json={"directory": "", "name": "files", "kind": "directory"}).status_code == 200
@@ -222,14 +345,21 @@ def test_office_preview_covers_all_sheets_and_slides(tmp_path):
         slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text = label
     pptx = tmp_path / "sample.pptx"
     presentation.save(pptx)
-    preview = preview_document(pptx)["html"]
-    assert "第一页" in preview and "最后一页" in preview
+    preview = preview_document(pptx)
+    assert preview["mode"] == "office" and preview["format"] == "pptx"
+    assert "html" not in preview and "content" not in preview
+    # The browser SDK reads the full original, including every slide, rather
+    # than a server-generated linear HTML transcript.
+    from zipfile import ZipFile
+    with ZipFile(pptx) as archive:
+        assert "第一页" in archive.read("ppt/slides/slide1.xml").decode()
+        assert "最后一页" in archive.read("ppt/slides/slide2.xml").decode()
 
 
 def test_portable_store_uses_its_own_original_directory(tmp_path):
     settings = AppConfig(log_dir=str(tmp_path / "log"), portable_stores={"enabled": True, "allowed_roots": []})
-    config = tmp_path / "config.json"
-    config.write_text(settings.model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     app = create_app(config_path=config, data_dir=tmp_path / "default-data", external_dir=tmp_path / "default-content" / "markdown")
     root = str(tmp_path / "portable")
     with TestClient(app) as client:
@@ -242,3 +372,174 @@ def test_portable_store_uses_its_own_original_directory(tmp_path):
         assert listed.json()["data"]["result"]["entries"][0]["path"] == "renamed.md"
         assert (Path(root) / "kemo-graph-storage" / "content" / "originals" / "renamed.md").is_file()
         assert not library.original_root(app.state.kemo_context).exists()
+
+
+def test_copy_paste_preserves_bytes_and_creates_an_independent_mapping_on_refresh(service, tmp_path):
+    library.create_entry(service, "", "A", "directory")
+    library.create_entry(service, "", "B", "directory")
+    original = imported(service, tmp_path, directory="A")
+    result = library.transfer_entry(service, "A/sample.txt", "B", "copy")
+    assert result["path"] == "B/sample.txt"
+    root = library.original_root(service)
+    assert (root / result["path"]).read_bytes() == (root / "A/sample.txt").read_bytes()
+    with pytest.raises(library.LibraryNameConflictError):
+        library.transfer_entry(service, "A/sample.txt", "B", "copy")
+    second = library.transfer_entry(service, "A/sample.txt", "B", "copy", conflict="keep_both")
+    assert second["path"] == "B/sample - 副本.txt"
+    assert (root / "B/sample.txt").read_bytes() == (root / "A/sample.txt").read_bytes()
+    assert library.refresh_library(service)["errors"] == []
+    rows = {row["library_path"]: row for row in library.source_rows(service)}
+    assert len({row["source_id"] for row in rows.values()}) == 3
+    assert rows["A/sample.txt"]["source_id"] == original["source_id"]
+    assert len({row["relative_path"] for row in rows.values()}) == 3
+
+
+def test_recursive_copy_and_cut_include_unsupported_files_and_keep_moved_source_ids(service, tmp_path):
+    library.create_entry(service, "", "A", "directory")
+    library.create_entry(service, "A", "nested", "directory")
+    library.create_entry(service, "", "B", "directory")
+    library.create_entry(service, "", "C", "directory")
+    original = imported(service, tmp_path, directory="A/nested")
+    root = library.original_root(service)
+    (root / "A/nested/archive.bin").write_bytes(b"\x00\xff")
+    library.transfer_entry(service, "A", "B", "copy")
+    assert (root / "B/A/nested/archive.bin").read_bytes() == b"\x00\xff"
+    library.transfer_entry(service, "A", "C", "cut")
+    assert not (root / "A").exists()
+    assert (root / "C/A/nested/sample.txt").is_file()
+    assert (root / "B/A/nested/sample.txt").is_file()
+    record = next(row for row in library.source_rows(service) if row["source_id"] == original["source_id"])
+    assert record["library_path"] == "C/A/nested/sample.txt"
+    assert record["relative_path"] == original["markdown_relative_path"]
+    mapping = FileMapStore(service.external_dir / "file_map.json").get_by_original(str(root / record["library_path"]))
+    assert mapping.markdown_path == original["markdown_relative_path"]
+
+
+@pytest.mark.parametrize("mode", ["copy", "cut"])
+@pytest.mark.parametrize("destination", ["A", "A/child"])
+def test_paste_rejects_directory_cycles_without_changing_files(service, mode, destination):
+    library.create_entry(service, "", "A", "directory")
+    library.create_entry(service, "A", "child", "directory")
+    with pytest.raises(ValueError, match="自身及其子目录"):
+        library.transfer_entry(service, "A", destination, mode, conflict="keep_both")
+    assert list((library.original_root(service) / "A").iterdir()) == [library.original_root(service) / "A/child"]
+
+
+def test_failed_copy_cleans_only_its_new_destination(service, tmp_path):
+    original = imported(service, tmp_path)
+    library.create_entry(service, "", "B", "directory")
+    root = library.original_root(service)
+    content = (root / "sample.txt").read_bytes()
+    def fail_after_write(reader, writer):
+        writer.write(b"partial")
+        raise OSError("disk full")
+    with patch.object(library.shutil, "copyfileobj", side_effect=fail_after_write):
+        with pytest.raises(OSError, match="disk full"):
+            library.transfer_entry(service, "sample.txt", "B", "copy")
+    assert not (root / "B/sample.txt").exists()
+    assert library.original_for_source(service, original["source_id"]).read_bytes() == content
+    assert len(library.source_rows(service)) == 1
+
+
+def test_copy_does_not_remove_or_overwrite_a_destination_created_after_preflight(service, tmp_path):
+    imported(service, tmp_path)
+    library.create_entry(service, "", "B", "directory")
+    root = library.original_root(service)
+    real_open = Path.open
+    target = root / "B/sample.txt"
+    def raced_open(path, mode="r", *args, **kwargs):
+        if path == target and mode == "xb":
+            with real_open(path, "wb") as writer:
+                writer.write(b"another writer")
+        return real_open(path, mode, *args, **kwargs)
+    with patch.object(Path, "open", raced_open):
+        with pytest.raises(library.LibraryNameConflictError):
+            library.transfer_entry(service, "sample.txt", "B", "copy")
+    assert target.read_bytes() == b"another writer"
+
+
+def test_copy_rejects_nested_links_before_creating_a_destination(service, tmp_path):
+    library.create_entry(service, "", "A", "directory")
+    library.create_entry(service, "", "B", "directory")
+    root = library.original_root(service)
+    outside = tmp_path / "private.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        (root / "A/link.txt").symlink_to(outside)
+    except OSError:
+        pytest.skip("需要创建符号链接的系统权限")
+    with pytest.raises(ValueError, match="符号链接或目录联接"):
+        library.transfer_entry(service, "A", "B", "copy")
+    assert not (root / "B/A").exists()
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_directory_browsing_remains_available_while_graph_write_lock_is_held(service):
+    from threading import Event, Thread
+    from core.locks import get_knowledge_base_lock
+    library.create_entry(service, "", "A", "directory")
+    locked, release = Event(), Event()
+    def building():
+        with get_knowledge_base_lock(service.data_dir):
+            locked.set()
+            release.wait(5)
+    thread = Thread(target=building)
+    thread.start()
+    assert locked.wait(1)
+    try:
+        assert library.list_library(service)["entries"][0]["name"] == "A"
+        with pytest.raises(DocumentContentConflictError, match="正在构建或修改"):
+            library.create_entry(service, "", "B", "directory")
+    finally:
+        release.set()
+        thread.join(timeout=2)
+    assert not (library.original_root(service) / "B").exists()
+
+
+def test_transfer_api_reports_conflicts_missing_sources_and_access_denied(service, tmp_path):
+    imported(service, tmp_path)
+    library.create_entry(service, "", "B", "directory")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(service.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    app = create_app(config_path=config, data_dir=service.data_dir, external_dir=service.external_dir)
+    with TestClient(app) as client:
+        payload = {"path": "sample.txt", "directory": "B", "mode": "copy"}
+        assert client.post("/api/v1/library/transfer", json=payload).status_code == 200
+        conflict = client.post("/api/v1/library/transfer", json=payload)
+        assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "LIBRARY_ENTRY_EXISTS"
+        assert client.post("/api/v1/library/transfer", json={**payload, "conflict": "keep_both"}).status_code == 200
+        assert client.post("/api/v1/library/transfer", json={**payload, "path": "missing.txt"}).status_code == 404
+        assert client.post("/api/v1/library/transfer", json={**payload, "directory": "../outside"}).status_code == 422
+        assert client.post("/api/v1/library/transfer", json={**payload, "mode": "overwrite"}).status_code == 422
+        with patch.object(library, "transfer_entry", side_effect=PermissionError("denied")):
+            response = client.post("/api/v1/library/transfer", json=payload)
+            assert response.status_code == 403 and response.json()["error"]["code"] == "FILE_ACCESS_DENIED"
+
+
+def test_library_background_rebuild_and_force_reprocess_have_distinct_content(service, tmp_path):
+    import time
+    document = imported(service, tmp_path)
+    processed = service.external_dir / document["markdown_relative_path"]
+    processed.write_text("# Manual processing revision", encoding="utf-8")
+    Ingestor(service.data_dir, service.external_dir, settings=service.settings).scan_sources()
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(service.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    app = create_app(config_path=config, data_dir=service.data_dir, external_dir=service.external_dir)
+    read = []
+    with TestClient(app) as client, patch.object(
+        Ingestor, "_update_graph_for_source", side_effect=lambda record, text: read.append(text)
+    ), patch.object(Ingestor, "_update_rag_for_source"):
+        for reprocess in (False, True):
+            response = client.post("/api/v1/library/build", json={"path": document["source_path"], "reprocess": reprocess})
+            assert response.status_code == 200, response.text
+            job_id = response.json()["data"]["job_id"]
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                job = client.get(f"/api/v1/jobs/{job_id}").json()["data"]
+                if job["status"] not in {"queued", "running"}:
+                    break
+                time.sleep(0.02)
+            assert job["status"] == "completed", job
+            assert job["result"]["graph_updated"] == job["result"]["rag_updated"] == 1
+            assert ("Manual processing revision" in read[-1]) is not reprocess
+        assert library.original_for_source(service, document["source_id"]).read_text(encoding="utf-8") == "原文件正文\n第二行"

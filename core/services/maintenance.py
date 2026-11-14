@@ -1,4 +1,4 @@
-"""维护域服务：整理、重建、回收站和后台任务。"""
+"""维护域服务：整理、重建和后台任务。"""
 
 from __future__ import annotations
 
@@ -22,8 +22,6 @@ class MaintenanceService:
     def save_config(self, data: dict[str, Any]) -> dict[str, Any]:
         return self.owner._save_config_impl(data)
 
-    def cleanup_recycle(self, *, force: bool = False) -> dict[str, Any]:
-        return self.owner._cleanup_recycle_impl(force=force)
 
     def generate_group_summaries(self, *, force: bool = False) -> dict[str, Any]:
         return self.owner._generate_group_summaries_impl(force=force)

@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from ..db import connect_graph, connect_sources
 from ..ingestor import DocumentNotFoundError, Ingestor
+from ..knowledge_models import DocumentContentConflictError
+from ..locks import get_knowledge_base_lock
 from .protocols import ServiceOwner
 
 
@@ -57,6 +60,12 @@ class GraphService:
                 """,
                 (node_id, node_id),
             ).fetchall()
+            groups = [dict(row) for row in graph_connection.execute(
+                """SELECT g.group_id, g.summary, g.node_count, g.edge_count
+                   FROM groups g JOIN group_nodes gn ON gn.group_id = g.group_id
+                   WHERE gn.node_id = ? ORDER BY g.group_id""",
+                (node_id,),
+            ).fetchall()]
         finally:
             graph_connection.close()
 
@@ -70,7 +79,7 @@ class GraphService:
                     str(row["source_id"]): row
                     for row in source_connection.execute(
                         f"""
-                        SELECT source_id, original_path, relative_path, content_hash,
+                        SELECT source_id, original_path, library_path, relative_path, content_hash,
                                origin_hash, graph_status, rag_status, exists_status
                         FROM sources WHERE source_id IN ({placeholders})
                         """,
@@ -106,6 +115,11 @@ class GraphService:
                         if str(binding["source_id"]) in source_by_id
                         else None
                     ),
+                    "source_path": (
+                        source_by_id[str(binding["source_id"])]["library_path"]
+                        if str(binding["source_id"]) in source_by_id
+                        else None
+                    ),
                     "origin_hash": (
                         source_by_id[str(binding["source_id"])] ["origin_hash"]
                         if str(binding["source_id"]) in source_by_id
@@ -130,7 +144,60 @@ class GraphService:
                 for binding in bindings
             ],
             "relations": [_relation_row(row) for row in relations],
+            "groups": groups,
         }
+
+    def search_nodes(self, query: str, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        from ..graph_search import prepare_node_search, search_nodes
+
+        self.owner._require_available("graph")
+        connection = connect_graph(self.owner.paths)
+        try:
+            prepare_node_search(connection)
+            return search_nodes(connection, query, limit=limit, offset=offset)
+        finally:
+            connection.close()
+
+    def update_node_summary(
+        self, node_id: str, summary: str, expected_summary: str,
+    ) -> dict[str, Any]:
+        from ..rag_engine import RAGEngine
+
+        owner = self.owner
+        lock = get_knowledge_base_lock(owner.data_dir)
+        if not lock.acquire(blocking=False):
+            raise DocumentContentConflictError("图谱正在构建或修改，请稍后保存摘要")
+        try:
+            owner._require_available("graph")
+            connection = connect_graph(owner.paths)
+            try:
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    row = connection.execute(
+                        "SELECT summary FROM nodes WHERE node_id = ?", (node_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise DocumentNotFoundError(f"节点不存在：{node_id}")
+                    if row["summary"] != expected_summary:
+                        raise DocumentContentConflictError("节点摘要已变化，请重新读取后再编辑")
+                    if summary == row["summary"]:
+                        return self.get_node(node_id)
+                    connection.execute(
+                        "UPDATE nodes SET summary = ?, updated_at = ? WHERE node_id = ?",
+                        (summary, datetime.now(timezone.utc).isoformat(), node_id),
+                    )
+                    connection.execute(
+                        "DELETE FROM groups WHERE group_id IN "
+                        "(SELECT group_id FROM group_nodes WHERE node_id = ?)", (node_id,),
+                    )
+            finally:
+                connection.close()
+            owner._refresh_graph_meta(changed=True)
+            RAGEngine(owner.data_dir, settings=owner.settings).refresh_auxiliary_consistency()
+            owner.clear_search_cache()
+            return self.get_node(node_id)
+        finally:
+            lock.release()
 
     def get_relation(self, edge_id: str) -> dict[str, Any]:
         """返回一条关系、可读路径和全部文档证据绑定。"""

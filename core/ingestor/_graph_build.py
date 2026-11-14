@@ -374,6 +374,7 @@ def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
                     _elapsed_ms(llm_started_at),
                 )
 
+        self._advance_build_step(record.source_id, "graph", "persist", "提交图谱事务")
         new_node_ids = {
             str(row["node_id"])
             for row in connection.execute(
@@ -407,6 +408,7 @@ def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
     finally:
         connection.close()
 
+    self._advance_build_step(record.source_id, "graph", "link", "同步来源关联")
     self._get_rag_engine().refresh_auxiliary_consistency()
     self._remove_chunk_node_ids(orphan_node_ids)
     self._sync_chunk_nodes_for_source(
@@ -447,6 +449,7 @@ def _extract_graph_structured(self, record: _SourceRecord, text: str) -> None:
     else:
         prepared = GraphDraft(entities=(), relations=())
 
+    self._advance_build_step(record.source_id, "graph", "persist", "写入实体与关系")
     connection = connect_graph(self.paths)
     orphan_node_ids: set[str] = set()
     new_node_ids: set[str] = set()
@@ -599,6 +602,7 @@ def _extract_graph_structured(self, record: _SourceRecord, text: str) -> None:
     finally:
         connection.close()
 
+    self._advance_build_step(record.source_id, "graph", "link", "同步来源关联")
     self._get_rag_engine().refresh_auxiliary_consistency()
     self._remove_chunk_node_ids(orphan_node_ids)
     self._sync_chunk_nodes_for_source(

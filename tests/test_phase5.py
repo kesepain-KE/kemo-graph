@@ -34,7 +34,6 @@ def _settings() -> AppConfig:
         graph_build_mode="tools",
         chunk_size=128,
         chunk_overlap=16,
-        recycle_life_days=7,
         entity_extraction={"method": "rule", "max_entities": 10},
         models={
             "embedding": "test-embedding",
@@ -228,25 +227,11 @@ class KnowledgeBaseServiceTests(unittest.TestCase):
             self.assertEqual(moved_record["rag_status"], "ready")
             library.relocate_entry(service, "folder-b/renamed.md", "nested/doc.md")
 
-            # Re-imported documents may already have an older recycled copy.
-            previous_recycled = root / "external" / "recycle" / processed_path
-            previous_recycled.parent.mkdir(parents=True)
-            previous_recycled.write_text("previous revision", encoding="utf-8")
             result = service.delete_document(source_id)
-
             self.assertEqual(result["deleted_source_id"], source_id)
-            self.assertEqual(result["recycled_path"], f"recycle/{processed_path}")
             self.assertFalse(document.exists())
-            recycled = root / "external" / "recycle" / processed_path
-            self.assertTrue(recycled.exists())
-            self.assertEqual(recycled.read_text(encoding="utf-8"), processed_content)
-            metadata = json.loads(
-                recycled.with_name(recycled.name + ".meta.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(metadata["original_path"], processed_path)
-            originals_recycled = list((root / "external" / "recycle" / "originals").rglob("doc.md"))
-            self.assertEqual(originals_recycled[0].read_text(encoding="utf-8"), "Alpha links Beta")
-            self.assertIn("expires_at", metadata)
+            self.assertFalse((library.original_root(service) / "nested/doc.md").exists())
+            self.assertFalse((root / "external" / "recycle").exists())
             self.assertEqual(_table_count(ingestor, "graph", "nodes"), 0)
             self.assertEqual(_table_count(ingestor, "rag", "chunks"), 0)
             deleted_status = service.status()
@@ -344,15 +329,13 @@ class _FakeService:
     def generate_group_summaries(self):
         return {"generated": 0}
 
-    def cleanup_recycle(self, *, force=False):
-        return {"deleted": 2 if force else 0, "forced": force}
 
 
 class APITests(unittest.TestCase):
     def test_external_api_prefix_routes_envelopes_and_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
             app = create_api_app(
                 config_path=config_path,
@@ -414,10 +397,6 @@ class APITests(unittest.TestCase):
             ]
             self.assertEqual(document_page["pagination"]["page"], 2)
             self.assertEqual(client.get("/api/v1/graph/full").status_code, 200)
-            self.assertEqual(
-                client.delete("/api/v1/maintenance/recycle").json()["data"],
-                {"deleted": 2, "forced": True},
-            )
 
             invalid = client.post("/api/v1/query/rag", json={"query": ""})
             self.assertEqual(invalid.status_code, 422)
@@ -441,14 +420,13 @@ class APITests(unittest.TestCase):
                 "/api/v1/documents/{source_id}/content",
                 "/api/v1/documents/delete-batch",
                 "/api/v1/graph",
-                "/api/v1/maintenance/recycle",
             }
             self.assertTrue(expected.issubset(paths))
 
     def test_web_routes_share_core_router_and_allow_local_cors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
             # /status 与 /graph 由前端挂载提供；显式提供构建目录，
             # 避免测试结果取决于开发者本地是否执行过 npm run build。
@@ -494,7 +472,6 @@ class CLITests(unittest.TestCase):
             ["status"],
             ["delete-doc", "source-1"],
             ["summarize"],
-            ["cleanup-recycle"],
             ["list-docs", "--page", "2", "--page-size", "5"],
         ]
         with (
@@ -511,7 +488,7 @@ class CLITests(unittest.TestCase):
                             "--external-dir",
                             "custom-markdown",
                             "--config",
-                            "custom-config.json",
+                            "custom-config.yaml",
                             *command,
                         ]
                     )

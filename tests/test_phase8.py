@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import yaml
 import os
 import tempfile
 import unittest
@@ -28,7 +29,7 @@ class FrontendMountTests(unittest.TestCase):
             (assets / "app.js").write_text("window.phase8 = true;", encoding="utf-8")
             logo_bytes = b"\x89PNG\r\n\x1a\nphase-8-logo"
             (dist / "kemo-graph-logo.png").write_bytes(logo_bytes)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
 
             with patch("start_web.FRONTEND_DIST", dist):
@@ -76,7 +77,7 @@ class FrontendMountTests(unittest.TestCase):
     def test_missing_dist_warns_but_api_still_starts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
             with (
                 patch("start_web.FRONTEND_DIST", root / "missing-dist"),
@@ -94,56 +95,11 @@ class FrontendMountTests(unittest.TestCase):
 
 
 class ManagementAPITests(unittest.TestCase):
-    def test_recycle_cleanup_keeps_fresh_files_unless_forced(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_dir:
-            root = Path(temporary_dir)
-            external_dir = root / "external" / "markdown"
-            recycle_dir = root / "external" / "recycle"
-            external_dir.mkdir(parents=True)
-            recycle_dir.mkdir(parents=True)
-            service = KnowledgeBaseService(
-                settings=AppConfig(),
-                data_dir=root / "data",
-                external_dir=external_dir,
-                config_path=root / "config.json",
-            )
-
-            now = datetime.now(timezone.utc)
-            expired = recycle_dir / "expired.md"
-            expired.write_text("expired", encoding="utf-8")
-            expired.with_name("expired.md.meta.json").write_text(
-                json.dumps({"expires_at": (now - timedelta(days=1)).isoformat()}),
-                encoding="utf-8",
-            )
-            fresh = recycle_dir / "nested" / "fresh.md"
-            fresh.parent.mkdir()
-            fresh.write_text("fresh", encoding="utf-8")
-            fresh.with_name("fresh.md.meta.json").write_text(
-                json.dumps({"expires_at": (now + timedelta(days=1)).isoformat()}),
-                encoding="utf-8",
-            )
-            orphan = recycle_dir / "orphan.bin"
-            orphan.write_bytes(b"orphan")
-
-            self.assertEqual(
-                service.cleanup_recycle(),
-                {"deleted": 1, "forced": False},
-            )
-            self.assertFalse(expired.exists())
-            self.assertTrue(fresh.exists())
-            self.assertTrue(orphan.exists())
-
-            self.assertEqual(
-                service.cleanup_recycle(force=True),
-                {"deleted": 2, "forced": True},
-            )
-            self.assertTrue(recycle_dir.is_dir())
-            self.assertEqual(list(recycle_dir.iterdir()), [])
 
     def test_config_round_trip_uses_selected_config_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "custom-config.json"
+            config_path = root / "custom-config.yaml"
             service = KnowledgeBaseService(
                 settings=AppConfig(),
                 config_path=config_path,
@@ -156,7 +112,7 @@ class ManagementAPITests(unittest.TestCase):
 
             self.assertEqual(saved["chunk_size"], 768)
             self.assertEqual(service.get_config(), saved)
-            persisted = json.loads(config_path.read_text(encoding="utf-8"))
+            persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted["chunk_size"], 768)
             self.assertEqual(persisted["kemo"]["api_key"], "")
             self.assertNotIn("api_key_source", persisted["kemo"])
@@ -165,7 +121,7 @@ class ManagementAPITests(unittest.TestCase):
     def test_config_api_key_is_masked_and_can_be_replaced_or_cleared(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             settings = AppConfig(
                 kemo={"api_key": "initial-secret", "api_key_env": "FALLBACK_KEY"}
             )
@@ -185,20 +141,20 @@ class ManagementAPITests(unittest.TestCase):
 
                 unchanged = service.save_config(visible)
                 self.assertEqual(unchanged["kemo"]["api_key_source"], "config")
-                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
                 self.assertEqual(persisted["kemo"]["api_key"], "initial-secret")
 
                 unchanged["kemo"]["api_key"] = "replacement-secret"
                 replaced = service.save_config(unchanged)
                 self.assertEqual(replaced["kemo"]["api_key_source"], "config")
-                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
                 self.assertEqual(persisted["kemo"]["api_key"], "replacement-secret")
 
                 replaced["kemo"]["api_key"] = ""
                 cleared = service.save_config(replaced)
                 self.assertEqual(cleared["kemo"]["api_key"], "")
                 self.assertEqual(cleared["kemo"]["api_key_source"], "environment")
-                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
                 self.assertEqual(persisted["kemo"]["api_key"], "")
 
     def test_upload_registers_document_and_content_is_immediately_available(
@@ -210,7 +166,7 @@ class ManagementAPITests(unittest.TestCase):
                 settings=AppConfig(),
                 data_dir=root / "data",
                 external_dir=root / "markdown",
-                config_path=root / "config.json",
+                config_path=root / "config.yaml",
             )
             uploaded = service.upload_file("# 新文档\n\n正文", "new-document.md")
 

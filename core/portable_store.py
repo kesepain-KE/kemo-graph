@@ -68,7 +68,6 @@ class PortableStorePaths:
     storage_root: Path
     manifest_path: Path
     external_dir: Path
-    recycle_dir: Path
     databases: DatabasePaths
 
 
@@ -90,13 +89,11 @@ def resolve_store_paths(
         raise PortableStoreAccessError("kemo-graph-storage 必须直接位于 store_root 下")
     databases = get_database_paths(storage_root)
     external_dir = storage_root / "content" / "markdown"
-    recycle_dir = storage_root / "content" / "recycle"
     paths = PortableStorePaths(
         store_root=root,
         storage_root=storage_root,
         manifest_path=storage_root / "manifest.json",
         external_dir=external_dir,
-        recycle_dir=recycle_dir,
         databases=databases,
     )
     _assert_contained_paths(paths)
@@ -135,7 +132,6 @@ def initialize_store(
             raise PortableStoreError("知识位置 owner_id 与现有清单不一致")
         paths.external_dir.mkdir(parents=True, exist_ok=True)
         (paths.external_dir.parent / "originals").mkdir(parents=True, exist_ok=True)
-        paths.recycle_dir.mkdir(parents=True, exist_ok=True)
         initialize_databases(paths.storage_root, active_settings)
         return describe_store(
             paths.store_root,
@@ -152,7 +148,6 @@ def initialize_store(
 
     paths.external_dir.mkdir(parents=True, exist_ok=True)
     (paths.external_dir.parent / "originals").mkdir(parents=True, exist_ok=True)
-    paths.recycle_dir.mkdir(parents=True, exist_ok=True)
     initialize_databases(paths.storage_root, active_settings)
     now = _now_iso()
     manifest = PortableStoreManifest(
@@ -467,7 +462,6 @@ def _assert_contained_paths(paths: PortableStorePaths) -> None:
     candidates = [
         paths.manifest_path,
         paths.external_dir,
-        paths.recycle_dir,
         *(
             value
             for value in vars(paths.databases).values()
@@ -493,7 +487,6 @@ def _assert_initialized_layout(paths: PortableStorePaths) -> None:
     missing = [str(path) for path in required_files if not path.is_file()]
     required_directories = (
         paths.external_dir,
-        paths.recycle_dir,
         paths.databases.vector_index_dir,
     )
     missing.extend(

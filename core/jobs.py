@@ -25,7 +25,6 @@ SUPPORTED_JOB_KINDS = frozenset(
         "rebuild_knowledge_base",
         "rebuild_all",
         "summarize",
-        "cleanup_recycle",
         "update",
     }
 )
@@ -192,14 +191,20 @@ class MaintenanceJobManager:
         progress: Callable[[float, str], None],
     ) -> Any:
         if kind == "ingest":
+            paths = options.get("paths")
+            if "library_path" in options:
+                from .library import build_paths
+                reprocess = bool(options.get("reprocess"))
+                progress(0.02, "重新预处理原文件" if reprocess else "同步原文件与处理稿")
+                paths = build_paths(service, options["library_path"], reprocess=reprocess)
+                if not paths:
+                    raise ValueError("所选目录没有可构建的文档")
             progress(0.05, "扫描文档并构建 Graph/RAG")
             result = service.ingest(
-                paths=options.get("paths"),
+                paths=paths,
                 mode=options.get("mode", "both"),
                 **(
-                    {"retry_failed": True}
-                    if options.get("retry_failed")
-                    else {}
+                    {key: True for key in ("retry_failed", "force", "failed_only") if options.get(key)}
                 ),
             )
             if int(result.get("failed", 0)):
@@ -217,11 +222,6 @@ class MaintenanceJobManager:
         elif kind == "summarize":
             progress(0.1, "重新生成节点群总结")
             result = service.generate_group_summaries(
-                force=bool(options.get("force", False))
-            )
-        elif kind == "cleanup_recycle":
-            progress(0.2, "清理回收站")
-            result = service.cleanup_recycle(
                 force=bool(options.get("force", False))
             )
         else:  # pragma: no cover - submit 已校验
@@ -326,6 +326,22 @@ class MaintenanceJobManager:
                     (now, now, job_id),
                 )
                 _insert_event(connection, job_id, "ERROR", "服务重启，任务已中断")
+            connection.execute(
+                """
+                UPDATE source_build_steps
+                SET status = 'failed', error = '服务进程在构建完成前退出', finished_at = ?
+                WHERE status = 'processing'
+                """,
+                (now,),
+            )
+            connection.execute(
+                """
+                UPDATE sources SET
+                    graph_status = CASE WHEN graph_status = 'processing' THEN 'failed' ELSE graph_status END,
+                    rag_status = CASE WHEN rag_status = 'processing' THEN 'failed' ELSE rag_status END
+                WHERE graph_status = 'processing' OR rag_status = 'processing'
+                """
+            )
             connection.commit()
         finally:
             connection.close()
@@ -445,7 +461,6 @@ def _initial_detail(kind: str) -> str:
         "rebuild_knowledge_base": "等待重建变化文档",
         "rebuild_all": "等待全项目影子重建",
         "summarize": "等待生成节点群总结",
-        "cleanup_recycle": "等待清理回收站",
         "update": "等待下载并安装应用更新",
     }[kind]
 

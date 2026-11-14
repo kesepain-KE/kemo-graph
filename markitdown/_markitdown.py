@@ -8,10 +8,15 @@ from mimetypes import guess_type
 from typing import BinaryIO, Iterable
 
 from ._base_converter import DocumentConverter, DocumentConverterResult
-from ._exceptions import DocumentTooLargeError, UnsupportedFormatError
+from ._exceptions import (
+    DocumentConversionError,
+    DocumentTooLargeError,
+    MissingOptionalDependencyError,
+    UnsupportedFormatError,
+)
 from ._stream_info import StreamInfo
 from ._utils import sanitize_knowledge_markdown, validate_local_path
-from .converters import default_converters
+from .converters import default_converters, supported_suffixes
 
 
 class MarkItDown:
@@ -48,6 +53,9 @@ class MarkItDown:
             key=lambda item: getattr(item, "priority", 0), reverse=True
         )
 
+    def supported_suffixes(self) -> frozenset[str]:
+        return supported_suffixes(self._converters)
+
     def convert(self, input_file: Path | str) -> DocumentConverterResult:
         """转换本地文件；不接受 URL、网络链接或字节串。"""
 
@@ -55,7 +63,7 @@ class MarkItDown:
             input_file,
             max_input_bytes=self.max_input_bytes,
         )
-        extension, mime_type = _detect_file_type(source)
+        extension, mime_type = detect_file_type(source)
         info = StreamInfo(
             path=source,
             filename=source.name,
@@ -79,6 +87,7 @@ class MarkItDown:
                 )
                 result.text_content = clean_text
                 result.markdown = clean_text
+                result.file_extension = extension
                 if not clean_text.strip():
                     raise ValueError("转换结果为空")
                 if (
@@ -145,7 +154,7 @@ class MarkItDown:
                 temporary_path.unlink(missing_ok=True)
 
 
-def _detect_file_type(source: Path) -> tuple[str, str | None]:
+def detect_file_type(source: Path) -> tuple[str, str | None]:
     """优先使用扩展名；无扩展名时才延迟调用 Magika。"""
 
     extension = source.suffix.casefold()
@@ -155,12 +164,15 @@ def _detect_file_type(source: Path) -> tuple[str, str | None]:
     try:
         from magika import Magika
 
+    except ImportError as exc:
+        raise MissingOptionalDependencyError("magika", "无扩展名文档") from exc
+    try:
         output = Magika().identify_path(source).output
-        extensions = list(getattr(output, "extensions", []) or [])
-        detected_extension = f".{extensions[0].lstrip('.').casefold()}" if extensions else ""
-        return detected_extension, getattr(output, "mime_type", None)
-    except Exception:
-        return "", mime_type
+    except Exception as exc:
+        raise DocumentConversionError(f"无法识别文档格式：{source}: {exc}") from exc
+    extensions = list(output.extensions or [])
+    detected_extension = f".{extensions[0].lstrip('.').casefold()}" if extensions else ""
+    return detected_extension, output.mime_type
 
 
-__all__ = ["MarkItDown"]
+__all__ = ["MarkItDown", "detect_file_type"]

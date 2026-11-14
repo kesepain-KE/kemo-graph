@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from .read_cache import READ_CACHE, file_revision
 
-from dotenv import load_dotenv
+import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,8 +24,7 @@ from pydantic import (
 
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "config.json"
-DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
 GRAPH_EXTRACTION_PROFILE_VERSION = "sparse-v2"
 
 
@@ -111,7 +110,7 @@ class QueryPlanningConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     # 默认模型配置保持关闭，避免库调用方在未显式授权时新增 LLM 请求；
-    # 项目的 config.json 使用 auto 作为面向用户的推荐档位。
+    # 项目的 config.yaml 使用 auto 作为面向用户的推荐档位。
     mode: str = "off"
     max_rewrites: int = Field(default=4, ge=0, le=12)
     max_subqueries: int = Field(default=3, ge=0, le=8)
@@ -162,8 +161,15 @@ class PortableStoreConfig(BaseModel):
         return normalized
 
 
+class WebConfig(BaseModel):
+    """Web 服务监听地址；命令行参数和进程环境变量可覆盖。"""
+
+    host: str = Field(default="127.0.0.1", min_length=1)
+    port: int = Field(default=8000, ge=1, le=65535)
+
+
 class AppConfig(BaseModel):
-    """config/config.json 的权威配置模型。"""
+    """config/config.yaml 的权威配置模型。"""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -174,7 +180,6 @@ class AppConfig(BaseModel):
     web_node_label_threshold: int = Field(default=3, ge=1, le=100)
     summary_trigger_file_count: int = Field(default=5, ge=1, le=1000)
     summary_trigger_time: str = "03:00"
-    recycle_life_days: int = Field(default=30, ge=1, le=365)
 
     rag_similarity_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     default_top_k: int = Field(default=10, ge=1, le=100)
@@ -204,6 +209,9 @@ class AppConfig(BaseModel):
     maintenance_job_history_limit: int = Field(default=100, ge=10, le=1000)
     log_dir: str = "log"
     log_level: str = "INFO"
+    data_dir: str = "data"
+    external_dir: str = "external/markdown"
+    web: WebConfig = Field(default_factory=WebConfig)
     kemo: KemoConfig = Field(default_factory=KemoConfig)
     models: ModelSelectionConfig = Field(default_factory=ModelSelectionConfig)
     vector_search: VectorSearchConfig = Field(default_factory=VectorSearchConfig)
@@ -313,17 +321,17 @@ class AppConfig(BaseModel):
         return hashlib.sha256(encoded).hexdigest()
 
     def resolve_data_dir(self, project_root: Path = PROJECT_ROOT) -> Path:
-        """解析数据目录；相对环境变量以项目根目录为基准。"""
+        """解析数据目录；进程环境变量优先，相对路径以项目根目录为基准。"""
 
         return _resolve_runtime_path(
-            os.getenv("KEMO_GRAPH_DATA_DIR", "data"), project_root
+            os.getenv("KEMO_GRAPH_DATA_DIR", self.data_dir), project_root
         )
 
     def resolve_external_dir(self, project_root: Path = PROJECT_ROOT) -> Path:
         """解析 Markdown 文档目录；相对环境变量以项目根目录为基准。"""
 
         return _resolve_runtime_path(
-            os.getenv("KEMO_GRAPH_EXTERNAL_DIR", "external/markdown"), project_root
+            os.getenv("KEMO_GRAPH_EXTERNAL_DIR", self.external_dir), project_root
         )
 
     def resolve_log_dir(self, project_root: Path = PROJECT_ROOT) -> Path:
@@ -343,20 +351,18 @@ def write_default_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> Path:
 
     path = Path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(path, default_config_dict())
+    write_config(path, AppConfig())
     return path
 
 
 def load_config(
     config_path: Path | str = DEFAULT_CONFIG_PATH,
-    env_path: Path | str | None = DEFAULT_ENV_PATH,
 ) -> AppConfig:
-    """读取配置和 .env，缺失字段兜底，非法字段回退并记录警告。"""
-
-    if env_path is not None:
-        load_dotenv(dotenv_path=Path(env_path), override=False)
+    """安全读取 YAML 配置，缺失字段兜底，非法字段回退并记录警告。"""
 
     path = Path(config_path)
+    if path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ConfigLoadError(f"配置文件必须使用 .yaml 或 .yml：{path}")
     def read_text():
         return READ_CACHE.get_or_load(
             ("config-text", str(path.resolve())), lambda: file_revision(path),
@@ -370,13 +376,14 @@ def load_config(
         text = read_text()
 
     try:
-        raw_config = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ConfigLoadError(f"配置文件不是合法 JSON：{path}: {exc}") from exc
+        raw_config = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        position = f"（第 {mark.line + 1} 行，第 {mark.column + 1} 列）" if mark else ""
+        raise ConfigLoadError(f"配置文件不是合法 YAML：{path}{position}") from exc
 
     if not isinstance(raw_config, dict):
-        LOGGER.warning("配置文件根节点必须是对象，已使用默认配置：%s", path)
-        raw_config = {}
+        raise ConfigLoadError(f"配置文件根节点必须是 YAML 映射：{path}")
 
     defaults = default_config_dict()
     merged = _deep_merge(defaults, _migrate_legacy_provider_config(raw_config))
@@ -460,10 +467,15 @@ def _resolve_runtime_path(value: str, project_root: Path) -> Path:
     return path.resolve()
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def write_config(config_path: Path | str, settings: AppConfig) -> None:
+    """以 UTF-8 YAML 原子保存已经校验的配置。"""
+    path = Path(config_path)
+    if path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ConfigLoadError(f"配置文件必须使用 .yaml 或 .yml：{path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_suffix(path.suffix + ".tmp")
     temporary_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
     os.replace(temporary_path, path)

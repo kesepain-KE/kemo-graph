@@ -10,13 +10,13 @@ venv/
 *.bak.*
 *.orig
 
-# Env
-.env
-*.env.local
+# Local application configuration (contains credentials)
+/config/config.yaml
 
 # Node (web/)
 node_modules/
 dist/
+/web/frontend/public/assets/file-viewer/
 
 # OS
 .DS_Store

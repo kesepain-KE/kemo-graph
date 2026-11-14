@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import io
+import logging
 import re
 import threading
 from datetime import datetime, timezone
@@ -16,7 +18,7 @@ _LEVEL_RANK = {
     "WARNING": 30,
     "ERROR": 40,
 }
-_HEADER = ["time", "level", "module", "action", "detail", "elapsed_ms"]
+LOG_COLUMNS = ("time", "level", "module", "action", "detail", "elapsed_ms")
 _MAX_DETAIL_LENGTH = 1000
 _SENSITIVE_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[^\s,;]+"),
@@ -74,7 +76,7 @@ class DailyTSVLogger:
                 with path.open("a", encoding="utf-8", newline="") as stream:
                     writer = csv.writer(stream, delimiter="\t")
                     if needs_header:
-                        writer.writerow(_HEADER)
+                        writer.writerow(LOG_COLUMNS)
                     writer.writerow(
                         [
                             now.strftime("%H:%M:%S"),
@@ -82,7 +84,7 @@ class DailyTSVLogger:
                             _single_line(module, 80),
                             _single_line(action, 80),
                             _sanitize_detail(detail),
-                            str(elapsed_ms),
+                            _single_line(elapsed_ms, 80),
                         ]
                     )
         except OSError:
@@ -117,3 +119,37 @@ def _sanitize_detail(detail: Any) -> str:
 
 def _single_line(value: Any, limit: int) -> str:
     return str(value).replace("\t", " ").replace("\r", " ").replace("\n", " ")[:limit]
+
+
+class TSVFormatter(logging.Formatter):
+    """与持久化日志使用相同的 TSV 字段和脱敏规则。"""
+
+    def __init__(self, secrets: tuple[str, ...] = ()) -> None:
+        super().__init__()
+        self.secrets = secrets
+
+    def format(self, record: logging.LogRecord) -> str:
+        output = io.StringIO(newline="")
+        csv.writer(output, delimiter="\t", lineterminator="\n").writerow((
+            datetime.fromtimestamp(record.created, timezone.utc).strftime("%H:%M:%S"),
+            "ERROR" if record.levelno >= logging.ERROR else record.levelname,
+            _single_line(record.name, 80),
+            _single_line(getattr(record, "action", "console"), 80),
+            _sanitize_detail(redact_log_text(super().format(record), self.secrets)),
+            _single_line(getattr(record, "elapsed_ms", "-"), 80),
+        ))
+        return output.getvalue().rstrip("\n")
+
+
+class TSVStreamHandler(logging.StreamHandler):
+    """每个终端流写入一次表头，后续逐条写入表格行。"""
+
+    def __init__(self, stream=None) -> None:
+        super().__init__(stream)
+        self._needs_header = True
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self._needs_header:
+            self.stream.write("\t".join(LOG_COLUMNS) + "\n")
+            self._needs_header = False
+        super().emit(record)

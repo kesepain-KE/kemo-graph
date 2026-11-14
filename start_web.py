@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import json
 import logging
 import mimetypes
@@ -15,12 +16,12 @@ import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
 try:
     import uvicorn
-    from dotenv import load_dotenv
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse
@@ -32,7 +33,9 @@ try:
     from api.schemas import RestartRequest
     from core.scheduler import MaintenanceScheduler
     from core.jobs import MaintenanceJobManager
-    from core.terminal_logging import capture_terminal_logs
+    from core.config import DEFAULT_CONFIG_PATH, load_config
+    from core.logger import TSVFormatter, TSVStreamHandler
+    from core.terminal_logging import capture_terminal_logs, configure_console_logging
     from update import ApplicationUpdater, read_local_version
     from restart import (
         RestartPermissionError,
@@ -41,23 +44,26 @@ try:
         schedule_restart,
         write_runtime_state,
     )
-except ModuleNotFoundError as exc:
+except Exception as exc:
     if __name__ == "__main__":
-        missing = exc.name or "未知模块"
-        print(f"kemo-graph Web 启动失败：缺少 Python 依赖 {missing!r}。", file=sys.stderr)
-        print(
-            f"请运行：{sys.executable} -m pip install -r "
-            f'"{Path(__file__).resolve().parent / "requirements.txt"}"',
-            file=sys.stderr,
-        )
+        if isinstance(exc, ModuleNotFoundError):
+            missing = exc.name or "未知模块"
+            detail = (
+                f"缺少 Python 依赖 {missing!r}。请运行：{sys.executable} -m pip install -r "
+                f'"{Path(__file__).resolve().parent / "requirements.txt"}"'
+            )
+        else:
+            detail = f"{type(exc).__name__}: {exc}"
+        writer = csv.writer(sys.stderr, delimiter="\t", lineterminator="\n")
+        writer.writerow(("time", "level", "module", "action", "detail", "elapsed_ms"))
+        writer.writerow((
+            datetime.now(timezone.utc).strftime("%H:%M:%S"), "ERROR", "start_web", "startup",
+            detail.replace("\t", " ").replace("\r", " ").replace("\n", " "), "-",
+        ))
         raise SystemExit(1) from None
     raise
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-# 使用脚本所在项目的环境文件；显式 shell 环境变量仍保持更高优先级。
-load_dotenv(dotenv_path=PROJECT_ROOT / ".env", override=False)
-
-
 LOGGER = logging.getLogger(__name__)
 UVICORN_LOGGER = logging.getLogger("uvicorn.error")
 FRONTEND_DIST = PROJECT_ROOT / "web" / "frontend" / "dist"
@@ -284,16 +290,16 @@ def create_app(
     return application
 
 
-app = create_app()
+if __name__ != "__main__":
+    app = create_app()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="启动 kemo-graph Web API")
-    parser.add_argument("--host", default=os.getenv("KEMO_GRAPH_WEB_HOST", "127.0.0.1"))
+    parser.add_argument("--host")
     parser.add_argument(
         "--port",
         type=_port_number,
-        default=os.getenv("KEMO_GRAPH_WEB_PORT", "8000"),
     )
     parser.add_argument("--data-dir")
     parser.add_argument("--external-dir")
@@ -302,18 +308,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    handler = TSVStreamHandler()
+    handler.setFormatter(TSVFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(raw_arguments)
+    settings = load_config(args.config or os.getenv("KEMO_GRAPH_CONFIG", DEFAULT_CONFIG_PATH))
+    configure_console_logging(settings)
+    args.host = args.host or os.getenv("KEMO_GRAPH_WEB_HOST", settings.web.host)
+    args.port = args.port or _port_number(os.getenv("KEMO_GRAPH_WEB_PORT", str(settings.web.port)))
     service_url = _service_url(args.host, args.port)
     if _listener_is_active(args.host, args.port):
         if _is_kemo_graph_service(args.host, args.port):
-            print(f"kemo-graph Web 已在运行：{service_url}", flush=True)
+            LOGGER.info("kemo-graph Web 已在运行：%s", service_url)
             return 0
-        print(
-            f"kemo-graph Web 启动失败：{args.host}:{args.port} 已被其他程序占用。",
-            file=sys.stderr,
-            flush=True,
-        )
+        LOGGER.error("kemo-graph Web 启动失败：%s:%s 已被其他程序占用。", args.host, args.port)
         return 2
 
     application = create_app(
@@ -325,7 +334,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     application.state.kemo_restart_command = command
     application.state.kemo_restart_cwd = Path(__file__).resolve().parent
     server = uvicorn.Server(
-        uvicorn.Config(application, host=args.host, port=args.port)
+        uvicorn.Config(application, host=args.host, port=args.port, log_config=None)
     )
     application.state.kemo_request_shutdown = lambda: setattr(
         server, "should_exit", True
@@ -348,7 +357,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_path=application.state.kemo_context.config_path,
     ) as terminal:
         terminal.log("start_web", "launch", f"pid={os.getpid()}, address={service_url}")
-        print(f"kemo-graph Web 正在启动：{service_url}", flush=True)
+        LOGGER.info("kemo-graph Web 正在启动：%s", service_url)
         try:
             try:
                 server.run()
@@ -369,16 +378,9 @@ def _run_cli() -> int:
     try:
         return main()
     except Exception as exc:
-        print(
-            f"kemo-graph Web 启动失败：{type(exc).__name__}: {exc}",
-            file=sys.stderr,
-            flush=True,
-        )
-        print(
-            "请检查配置、文件权限和依赖；依赖可使用 "
-            f'`{sys.executable} -m pip check` 验证。',
-            file=sys.stderr,
-            flush=True,
+        LOGGER.error(
+            "kemo-graph Web 启动失败：%s: %s；请检查配置、文件权限和依赖。",
+            type(exc).__name__, exc,
         )
         return 1
 

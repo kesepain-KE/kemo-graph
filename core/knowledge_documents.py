@@ -25,6 +25,7 @@ from provider.tools.document_tools import (
 )
 
 from .config import DEFAULT_CONFIG_PATH, AppConfig, load_config
+from .build_progress import read_builds
 from .db import (
     connect_graph,
     connect_rag,
@@ -48,10 +49,10 @@ from .ingestor import (
     FileMapError,
     IngestError,
     Ingestor,
-    RecycleConflictError,
 )
 from .logger import DailyTSVLogger
 from .locks import get_knowledge_base_lock
+from .search_cache import SearchCacheCleanupError, clear_search_cache_after_mutation
 from .rag_engine import FaissIndexManager, RAGEngine
 from .rebuilder import KnowledgeBaseRebuilder, ProgressCallback
 from .services import (
@@ -304,6 +305,7 @@ class KnowledgeDocumentsMixin:
                 """,
                 (*parameters, page_size, (page - 1) * page_size),
             ).fetchall()
+            builds = read_builds(connection, [row["source_id"] for row in rows])
             summary = (
                 self._read_document_summary(
                     connection,
@@ -343,6 +345,7 @@ class KnowledgeDocumentsMixin:
                     "last_synced_at": row["last_synced_at"],
                     "graph_status": row["graph_status"],
                     "rag_status": row["rag_status"],
+                    "builds": builds.get(row["source_id"], {}),
                     "exists_status": row["exists_status"],
                     "updated_at": row["updated_at"],
                     "created_at": row["created_at"],
@@ -428,75 +431,7 @@ class KnowledgeDocumentsMixin:
         from .library import update_content
         return update_content(self, source_id, content, expected_content_hash)
 
-    def _move_source_to_recycle(self, relative_path: str) -> str | None:
-        """统一回收逻辑：同路径覆盖，并在文件或元数据写入失败时回滚。"""
-        from .ingestor._delete import _move_source_to_recycle
 
-        return _move_source_to_recycle(self, relative_path)
-
-    def _cleanup_recycle_impl(self, *, force: bool = False) -> dict[str, Any]:
-        """清理回收站文件；``force`` 为真时永久清空全部内容。"""
-        started_at = time.perf_counter()
-        external_parent = self.external_dir.parent.resolve()
-        recycle_root = (external_parent / "recycle").resolve()
-        if recycle_root.parent != external_parent or recycle_root.name != "recycle":
-            raise IngestError("回收站目录不安全，拒绝执行清理")
-
-        if not recycle_root.exists():
-            if force:
-                recycle_root.mkdir(parents=True, exist_ok=True)
-            result = {"deleted": 0, "forced": force}
-            self._log_event(
-                "recycle_cleanup",
-                f"force={str(force).lower()}, deleted=0",
-                _elapsed_ms(started_at),
-            )
-            return result
-
-        if not recycle_root.is_dir():
-            raise IngestError("回收站路径不是目录，拒绝执行清理")
-
-        if force:
-            deleted = _clear_directory_contents(recycle_root)
-            result = {"deleted": deleted, "forced": True}
-            self._log_event(
-                "recycle_cleanup",
-                f"force=true, deleted={deleted}",
-                _elapsed_ms(started_at),
-            )
-            return result
-
-        now = datetime.now(timezone.utc)
-        deleted = 0
-        for meta_path in sorted(recycle_root.rglob("*.meta.json")):
-            try:
-                payload = json.loads(meta_path.read_text(encoding="utf-8"))
-                expires_at = datetime.fromisoformat(payload["expires_at"])
-            except (json.JSONDecodeError, KeyError, ValueError):
-                continue
-
-            if expires_at > now:
-                continue
-
-            base = meta_path.with_name(meta_path.name.removesuffix(".meta.json"))
-            if not base.resolve().is_relative_to(recycle_root):
-                raise IngestError("回收站条目路径不安全")
-            if base.exists():
-                if base.is_dir():
-                    deleted += _clear_directory_contents(base)
-                    base.rmdir()
-                else:
-                    base.unlink()
-                    deleted += 1
-            meta_path.unlink(missing_ok=True)
-
-        result = {"deleted": deleted, "forced": False}
-        self._log_event(
-            "recycle_cleanup",
-            f"force=false, deleted={deleted}",
-            _elapsed_ms(started_at),
-        )
-        return result
 
     def _import_document_impl(
         self,
@@ -677,7 +612,7 @@ class KnowledgeDocumentsMixin:
             "original_filename": original.name,
             "original_path": str(original),
             "source_path": original.relative_to(root).as_posix(),
-            "detected_format": _detected_format(suffix),
+            "detected_format": conversion["format"],
             "markdown_relative_path": markdown_relative_path,
             "conversion_status": "completed",
             "ingest_status": ingest_status,
@@ -715,11 +650,13 @@ class KnowledgeDocumentsMixin:
         mode: str = "both",
         *,
         retry_failed: bool = False,
+        force: bool = False,
+        failed_only: bool = False,
     ) -> dict[str, Any]:
         from .library import build_paths
-        if paths is None:
+        if paths is None and not failed_only:
             build_paths(self, "")
-        else:
+        elif paths is not None:
             normalized = []
             for path in paths:
                 path = str(path)
@@ -733,7 +670,7 @@ class KnowledgeDocumentsMixin:
             data_dir=self.data_dir,
             external_dir=self.external_dir,
             settings=self.settings,
-        ).ingest(paths=paths, mode=mode, retry_failed=retry_failed)
+        ).ingest(paths=paths, mode=mode, retry_failed=retry_failed, force=force, failed_only=failed_only)
 
     def _sync_sources_impl(
         self,
@@ -772,7 +709,7 @@ class KnowledgeDocumentsMixin:
         )
 
     def _delete_synced_sources_impl(self, source_uris: Sequence[str]) -> dict[str, Any]:
-        """按稳定 URI 删除外部派生数据，不把派生 Markdown 放入回收站。"""
+        """按稳定 URI 删除外部派生数据，保留上游权威来源。"""
 
         from .source_sync import delete_external_sources
 
@@ -785,12 +722,7 @@ class KnowledgeDocumentsMixin:
             external_dir=self.external_dir,
             settings=self.settings,
         ).delete_document(source_id)
-        # 删除属于隐私边界：旧缓存可能包含已删除正文，因此不保留结果历史。
-        try:
-            result["search_cache_deleted"] = self.clear_search_cache()["deleted"]
-        except Exception:
-            result["search_cache_deleted"] = 0
-        return result
+        return clear_search_cache_after_mutation(self, result)
 
     def _delete_documents_impl(self, source_ids: Sequence[str]) -> dict[str, Any]:
         """逐一精确删除活动文档，并以结构化结果报告部分失败。"""
@@ -831,25 +763,20 @@ class KnowledgeDocumentsMixin:
                             "message": str(exc),
                         }
                     )
-        cache_deleted = 0
-        if deleted:
-            try:
-                cache_deleted = int(self.clear_search_cache()["deleted"])
-            except Exception:
-                cache_deleted = 0
         self._log_event(
             "delete_documents",
             f"requested={len(normalized)}, deleted={len(deleted)}, failed={len(failures)}",
             level="WARNING" if failures else "INFO",
         )
-        return {
+        result = {
             "requested": len(normalized),
             "deleted": len(deleted),
             "failed": len(failures),
             "documents": deleted,
             "failures": failures,
-            "search_cache_deleted": cache_deleted,
+            "search_cache_deleted": 0,
         }
+        return clear_search_cache_after_mutation(self, result) if deleted else result
 
     def _delete_all_documents_impl(self, directory: str | None = None) -> dict[str, Any]:
         """删除当前知识库内的全部活动文档，不跨越 Store 边界。"""
@@ -900,11 +827,23 @@ class KnowledgeDocumentsMixin:
             "search_cache_deleted": 0,
         }
         for offset in range(0, len(source_ids), 1000):
-            result = self.delete_documents(source_ids[offset : offset + 1000])
+            cleanup_error = None
+            try:
+                result = self.delete_documents(source_ids[offset : offset + 1000])
+            except SearchCacheCleanupError as exc:
+                result = exc.result
+                cleanup_error = exc
             aggregate["deleted"] += int(result["deleted"])
             aggregate["failed"] += int(result["failed"])
             aggregate["documents"].extend(result["documents"])
             aggregate["failures"].extend(result["failures"])
+            if cleanup_error is not None:
+                aggregate["search_cache_deleted"] = None
+                aggregate["search_cache_error"] = result["search_cache_error"]
+                aggregate["unprocessed"] = (
+                    aggregate["requested"] - aggregate["deleted"] - aggregate["failed"]
+                )
+                raise SearchCacheCleanupError(aggregate) from cleanup_error
             aggregate["search_cache_deleted"] += int(
                 result.get("search_cache_deleted", 0)
             )

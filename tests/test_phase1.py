@@ -7,10 +7,11 @@ import os
 import sqlite3
 import tempfile
 import unittest
+import yaml
 from pathlib import Path
 from unittest.mock import patch
 
-from core.config import AppConfig, load_config
+from core.config import AppConfig, ConfigLoadError, load_config, write_config
 from core.db import (
     initialize_databases,
     read_graph_meta,
@@ -24,22 +25,22 @@ from core.ingestor import FileMapStore
 class ConfigTests(unittest.TestCase):
     def test_missing_config_is_created_with_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
-            config_path = Path(temporary_dir) / "config" / "config.json"
-            settings = load_config(config_path=config_path, env_path=None)
+            config_path = Path(temporary_dir) / "config" / "config.yaml"
+            settings = load_config(config_path=config_path)
 
             self.assertTrue(config_path.exists())
             self.assertEqual(settings.max_query_depth, 5)
             self.assertEqual(settings.models.embedding_dimensions, 4096)
             self.assertEqual(
-                json.loads(config_path.read_text(encoding="utf-8")),
+                yaml.safe_load(config_path.read_text(encoding="utf-8")),
                 AppConfig().model_dump(mode="json"),
             )
 
     def test_missing_and_invalid_values_fall_back_independently(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
-            config_path = Path(temporary_dir) / "config.json"
+            config_path = Path(temporary_dir) / "config.yaml"
             config_path.write_text(
-                json.dumps(
+                yaml.safe_dump(
                     {
                         "max_query_depth": 99,
                         "default_top_k": 25,
@@ -55,7 +56,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            settings = load_config(config_path=config_path, env_path=None)
+            settings = load_config(config_path=config_path)
 
             self.assertEqual(settings.max_query_depth, 5)
             self.assertEqual(settings.default_top_k, 25)
@@ -96,17 +97,17 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("embedding_api", exported)
         self.assertNotIn("rerank_api", exported)
 
-    def test_dotenv_runtime_paths_are_loaded(self) -> None:
+    def test_yaml_runtime_paths_and_environment_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            env_path = root / ".env"
-            env_path.write_text(
-                "KEMO_GRAPH_DATA_DIR=custom-data\n"
-                "KEMO_GRAPH_EXTERNAL_DIR=custom-markdown\n",
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "data_dir: custom-data\nexternal_dir: custom-markdown\n"
+                "web:\n  host: 0.0.0.0\n  port: 8123\n",
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {}, clear=True):
-                settings = load_config(root / "config.json", env_path)
+                settings = load_config(config_path)
                 self.assertEqual(
                     settings.resolve_data_dir(root), (root / "custom-data").resolve()
                 )
@@ -114,6 +115,35 @@ class ConfigTests(unittest.TestCase):
                     settings.resolve_external_dir(root),
                     (root / "custom-markdown").resolve(),
                 )
+                self.assertEqual(settings.web.host, "0.0.0.0")
+                self.assertEqual(settings.web.port, 8123)
+            with patch.dict(os.environ, {"KEMO_GRAPH_DATA_DIR": "override-data"}):
+                self.assertEqual(settings.resolve_data_dir(root), (root / "override-data").resolve())
+
+    def test_yaml_round_trip_keeps_unicode_time_and_string_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            path = Path(temporary_dir) / "config.yaml"
+            settings = AppConfig(
+                data_dir="知识库/数据",
+                summary_trigger_time="03:00",
+                kemo={"api_key": "0123: # literal", "base_url": "https://gateway.test"},
+                query_planning={"mode": "off"},
+            )
+            write_config(path, settings)
+            self.assertEqual(load_config(path).model_dump(), settings.model_dump())
+            self.assertIn("知识库", path.read_text(encoding="utf-8"))
+
+    def test_invalid_yaml_and_non_mapping_are_rejected_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            path = Path(temporary_dir) / "config.yaml"
+            for content in ("kemo: [secret-value", "- not-a-mapping", "!!python/object:os.system {}"):
+                path.write_text(content, encoding="utf-8")
+                with self.assertRaises(ConfigLoadError) as caught:
+                    load_config(path)
+                self.assertNotIn("secret-value", str(caught.exception))
+                self.assertEqual(path.read_text(encoding="utf-8"), content)
+            with self.assertRaises(ConfigLoadError):
+                load_config(path.with_suffix(".json"))
 
 
 class DatabaseTests(unittest.TestCase):
@@ -124,7 +154,7 @@ class DatabaseTests(unittest.TestCase):
 
             self.assertEqual(
                 _table_names(paths.sources_db),
-                {"sources", "maintenance_jobs", "maintenance_job_events"},
+                {"sources", "source_build_steps", "maintenance_jobs", "maintenance_job_events"},
             )
             self.assertEqual(
                 _table_names(paths.graph_db),

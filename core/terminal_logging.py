@@ -8,13 +8,26 @@ the startup values forever.
 
 from contextlib import contextmanager
 import logging
+import logging.config
 import os
 from pathlib import Path
 from threading import RLock
 
-from .config import load_config
+import yaml
+
+from .config import PROJECT_ROOT, load_config
 from .logger import DailyTSVLogger, redact_log_text
 from .read_cache import file_revision
+
+
+def configure_console_logging(settings) -> None:
+    """使用 YAML 中的标准 logging 配置输出 TSV 终端日志。"""
+    config = yaml.safe_load((PROJECT_ROOT / "config" / "logging.yaml").read_text(encoding="utf-8"))
+    config["root"]["level"] = settings.log_level
+    config["formatters"]["table"]["secrets"] = (
+        settings.kemo.api_key, os.getenv(settings.kemo.api_key_env, ""),
+    )
+    logging.config.dictConfig(config)
 
 
 class TerminalLogHandler(logging.Handler):
@@ -108,7 +121,7 @@ class TerminalLogHandler(logging.Handler):
                     self._apply_settings(refreshed)
                     return
 
-            # Environment variables can change independently of the JSON
+            # Environment variables can change independently of the YAML
             # file.  Update only the redaction set when no valid new config was
             # loaded, preserving the active log destination and level.
             self._environment_name = current_environment_name

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import yaml
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
 from provider.embedding import EmbeddingResult
 
+from api import create_app
+from core import library
 from core.config import AppConfig
 from core.db import (
     connect_graph,
@@ -17,6 +22,7 @@ from core.db import (
     read_graph_meta,
 )
 from core.ingestor import Ingestor
+from core.knowledge_base import KnowledgeBaseService
 
 
 def _settings() -> AppConfig:
@@ -100,14 +106,16 @@ class SourceScanTests(unittest.TestCase):
             document.parent.mkdir()
             document.write_text("version-one", encoding="utf-8")
             ingestor = Ingestor(root / "data", external, settings=_settings())
-            ingestor.file_map.upsert("C:/original/doc.docx", "nested/doc.md")
+            original = root / "doc.docx"
+            original.write_bytes(b"original document")
+            ingestor.file_map.upsert(str(original), "nested/doc.md")
 
             first = ingestor.scan_sources()
             self.assertEqual(len(first.new_source_ids), 1)
             source_id = first.new_source_ids[0]
             row = _source_row(ingestor, source_id)
             first_updated_at = row["updated_at"]
-            self.assertEqual(row["original_path"], "C:/original/doc.docx")
+            self.assertEqual(row["original_path"], str(original))
             self.assertEqual(row["graph_status"], "pending")
             self.assertEqual(row["rag_status"], "pending")
 
@@ -405,6 +413,231 @@ class DeleteCascadeTests(unittest.TestCase):
             self.assertEqual(_table_count(ingestor, "rag", "embeddings"), 0)
             self.assertEqual(ingestor._get_rag_engine().index.count, 0)
             self.assertEqual(_deleted_source_count(ingestor), 2)
+
+
+class LibraryDeleteCascadeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        settings = _settings().model_copy(update={"log_dir": str(self.root / "log")})
+        self.service = KnowledgeBaseService(
+            settings=settings,
+            data_dir=self.root / "data",
+            external_dir=self.root / "external" / "markdown",
+        )
+        originals = library.original_root(self.service)
+        self.removed_original = originals / "discarded" / "nested" / "remove.txt"
+        self.removed_original.parent.mkdir(parents=True)
+        self.removed_original.write_text("version-one Alpha Beta", encoding="utf-8")
+        (originals / "keep.txt").write_text("version-two Alpha Gamma", encoding="utf-8")
+        self.assertEqual(library.refresh_library(self.service)["errors"], [])
+        self.ingestor = Ingestor(
+            self.service.data_dir,
+            self.service.external_dir,
+            settings=settings,
+            embedder=_embedding,
+        )
+        with patch("core.ingestor.chat_with_tools", side_effect=_versioned_tool_graph):
+            result = self.ingestor.ingest()
+        self.assertEqual(result["failed"], 0)
+        self.removed = next(
+            row for row in library.source_rows(self.service)
+            if row["library_path"] == "discarded/nested/remove.txt"
+        )
+        self.assertEqual(_node_ref_counts(self.ingestor), {"Alpha": 2, "Beta": 1, "Gamma": 1})
+        connection = connect_graph(self.ingestor.paths)
+        try:
+            connection.execute(
+                "INSERT INTO groups (group_id, summary, node_count, edge_count) VALUES (?, ?, ?, ?)",
+                ("test-group", "Alpha Beta Gamma", 3, 2),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.ingestor._get_rag_engine().sync_community_vectors([("test-group", "Alpha Beta Gamma")])
+        self.assertGreater(_table_count(self.ingestor, "rag", "entity_embeddings"), 0)
+        self.assertGreater(_table_count(self.ingestor, "rag", "community_embeddings"), 0)
+
+    def assert_removed(self) -> None:
+        source_id = self.removed["source_id"]
+        self.assertEqual(_source_row(self.ingestor, source_id)["exists_status"], "deleted")
+        self.assertFalse(self.removed_original.exists())
+        self.assertFalse((self.service.external_dir / self.removed["relative_path"]).exists())
+        self.assertIsNone(self.ingestor.file_map.get_by_markdown(self.removed["relative_path"]))
+        for connector, tables in (
+            (connect_graph, ("node_sources", "edge_sources", "entity_mentions", "relation_mentions")),
+            (connect_rag, ("chunks", "embeddings")),
+        ):
+            connection = connector(self.ingestor.paths)
+            try:
+                for table in tables:
+                    self.assertEqual(connection.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE source_id = ?", (source_id,),
+                    ).fetchone()[0], 0, table)
+            finally:
+                connection.close()
+        self.assertEqual(_node_ref_counts(self.ingestor), {"Alpha": 1, "Gamma": 1})
+        self.assertEqual(_table_count(self.ingestor, "graph", "edges"), 1)
+        self.assertEqual(_table_count(self.ingestor, "rag", "chunks"), 1)
+        self.assertEqual(_table_count(self.ingestor, "graph", "groups"), 0)
+        self.assertEqual(_table_count(self.ingestor, "rag", "community_embeddings"), 0)
+        # Read the persisted indices directly: constructing a RAGEngine here
+        # could repair a stale index and hide an incomplete delete operation.
+        import faiss
+
+        for path, table in (
+            (self.ingestor.paths.faiss_index, "embeddings"),
+            (self.ingestor.paths.entity_faiss_index, "entity_embeddings"),
+            (self.ingestor.paths.community_faiss_index, "community_embeddings"),
+        ):
+            index = faiss.read_index(str(path))
+            self.assertEqual(
+                set(map(int, faiss.vector_to_array(index.id_map))),
+                _column_values(self.ingestor, "rag", table, "vector_id"),
+            )
+
+    def test_library_api_delete_clears_both_indices_and_mapping(self) -> None:
+        config = self.root / "config.yaml"
+        config.write_text(yaml.safe_dump(self.service.settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
+        app = create_app(
+            config_path=config,
+            data_dir=self.service.data_dir,
+            external_dir=self.service.external_dir,
+        )
+        with TestClient(app) as client:
+            response = client.request("DELETE", "/api/v1/library/entries", json={
+                "path": self.removed["library_path"],
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["data"]["sources_deleted"], 1)
+        self.assert_removed()
+        self.ingestor.scan_sources()
+        self.assert_removed()
+
+    def test_directory_delete_cleans_nested_sources_and_keeps_other_documents(self) -> None:
+        library.delete_entry(self.service, "discarded")
+        self.assert_removed()
+        self.assertFalse((library.original_root(self.service) / "discarded").exists())
+        remaining = library.source_rows(self.service)[0]
+        self.service.delete_document(remaining["source_id"])
+        self.assertEqual(self.ingestor.file_map.list(), [])
+        for database, tables in (
+            ("graph", ("nodes", "edges", "entity_mentions", "relation_mentions", "mention_nodes")),
+            ("rag", ("chunks", "embeddings", "chunk_nodes", "entity_embeddings", "community_embeddings")),
+        ):
+            for table in tables:
+                self.assertEqual(_table_count(self.ingestor, database, table), 0, table)
+        import faiss
+
+        for path in (
+            self.ingestor.paths.faiss_index,
+            self.ingestor.paths.entity_faiss_index,
+            self.ingestor.paths.community_faiss_index,
+        ):
+            self.assertEqual(faiss.read_index(str(path)).ntotal, 0)
+
+    def test_scan_cleans_missing_original_even_when_processed_markdown_remains(self) -> None:
+        self.removed_original.unlink()
+        scan = self.ingestor.scan_sources()
+        self.assertIn(self.removed["source_id"], scan.newly_deleted_source_ids)
+        self.assert_removed()
+        self.ingestor.scan_sources()
+        self.assert_removed()
+
+    def test_scan_cleans_orphans_after_embedding_configuration_changes(self) -> None:
+        from core.rag_engine import RAGEngine
+        from core.rag_errors import IndexIntegrityError
+
+        settings = self.service.settings.model_copy(update={
+            "models": self.service.settings.models.model_copy(update={
+                "embedding": "replacement-embedding",
+                "embedding_dimensions": 4,
+            }),
+        })
+        self.ingestor = Ingestor(
+            self.service.data_dir, self.service.external_dir, settings=settings,
+        )
+        self.removed_original.unlink()
+        scan = self.ingestor.scan_sources()
+        self.assertIn(self.removed["source_id"], scan.newly_deleted_source_ids)
+        self.assert_removed()
+        # Deleting an old index must not relax model checks for new queries.
+        with self.assertRaises(IndexIntegrityError):
+            RAGEngine(self.service.data_dir, settings=settings)
+        remaining = library.source_rows(self.service)[0]
+        self.ingestor.delete_document(remaining["source_id"])
+        self.assertEqual(RAGEngine(self.service.data_dir, settings=settings).index.count, 0)
+
+    def test_refresh_of_removed_directory_cleans_its_mapped_documents(self) -> None:
+        self.removed_original.unlink()
+        self.removed_original.parent.rmdir()
+        result = library.refresh_library(self.service, "discarded/nested")
+        self.assertEqual(result["deleted"], [self.removed["library_path"]])
+        self.assert_removed()
+
+    def test_refresh_handles_added_and_removed_originals_together(self) -> None:
+        self.removed_original.unlink()
+        (library.original_root(self.service) / "new.txt").write_text("new document", encoding="utf-8")
+        result = library.refresh_library(self.service)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["updated"], ["new.txt"])
+        self.assertEqual(result["deleted"], [self.removed["library_path"]])
+        self.assert_removed()
+
+    def test_failed_cascade_remains_retryable_from_original_library_path(self) -> None:
+        with patch.object(Ingestor, "_delete_rag_for_source", side_effect=OSError("index locked")):
+            with self.assertRaisesRegex(OSError, "index locked"):
+                library.delete_entry(self.service, self.removed["library_path"])
+        self.assertEqual(
+            _source_row(self.ingestor, self.removed["source_id"])["exists_status"], "active",
+        )
+        self.assertIsNotNone(self.ingestor.file_map.get_by_markdown(self.removed["relative_path"]))
+        library.delete_entry(self.service, self.removed["library_path"])
+        self.assert_removed()
+
+    def test_failed_mapping_cleanup_can_retry_after_both_stores_were_cleaned(self) -> None:
+        with patch.object(type(self.ingestor.file_map), "delete_by_markdown", side_effect=OSError("map locked")):
+            with self.assertRaisesRegex(OSError, "map locked"):
+                library.delete_entry(self.service, self.removed["library_path"])
+        self.assertEqual(
+            _source_row(self.ingestor, self.removed["source_id"])["exists_status"], "active",
+        )
+        library.delete_entry(self.service, self.removed["library_path"])
+        self.assert_removed()
+
+    def test_refresh_removes_legacy_upload_without_original_and_its_indices(self) -> None:
+        self.removed_original.unlink()
+        connection = connect_sources(self.ingestor.paths)
+        try:
+            connection.execute(
+                "UPDATE sources SET library_path = NULL, original_path = ? WHERE source_id = ?",
+                ("upload://remove.txt", self.removed["source_id"]),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.ingestor.file_map.upsert("upload://remove.txt", self.removed["relative_path"])
+        result = library.refresh_library(self.service)
+        self.assertIn(self.removed["relative_path"], result["deleted"])
+        self.assert_removed()
+        self.ingestor.scan_sources()
+        self.assert_removed()
+
+    def test_scan_cleans_legacy_source_after_its_file_mapping_was_lost(self) -> None:
+        self.removed_original.unlink()
+        connection = connect_sources(self.ingestor.paths)
+        try:
+            connection.execute(
+                "UPDATE sources SET library_path = NULL, original_path = ? WHERE source_id = ?",
+                ("upload://remove.txt", self.removed["source_id"]),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.ingestor.file_map.delete_by_markdown(self.removed["relative_path"])
+        self.ingestor.scan_sources()
+        self.assert_removed()
 
 
 def _source_row(ingestor: Ingestor, source_id: str):

@@ -144,7 +144,7 @@ def delete_node(conn: sqlite3.Connection, node_id: str) -> dict[str, Any]:
     ]
     external_dir = _resolve_external_dir(data_dir, source_rows, settings.resolve_external_dir())
 
-    recycled: list[str] = []
+    deleted_files: list[str] = []
     deleted_sources: list[str] = []
     ingestor = Ingestor(
         data_dir=data_dir,
@@ -154,9 +154,7 @@ def delete_node(conn: sqlite3.Connection, node_id: str) -> dict[str, Any]:
     for source_id in isolated:
         result = ingestor.delete_document(source_id)
         deleted_sources.append(source_id)
-        recycled_path = result.get("recycled_path")
-        if recycled_path:
-            recycled.append(str(recycled_path))
+        deleted_files.append(str(result["relative_path"]))
 
     with _open_sqlite(paths.graph_db) as graph_conn:
         with _transaction(graph_conn):
@@ -198,7 +196,7 @@ def delete_node(conn: sqlite3.Connection, node_id: str) -> dict[str, Any]:
         "keyword": node["keyword"],
         "cascade_deleted_edges": len(edge_ids),
         "deleted_source_ids": deleted_sources,
-        "recycled": recycled,
+        "deleted_files": deleted_files,
         "unlinked": unlinked,
     }
     _log_delete_action(
@@ -248,7 +246,7 @@ def delete_relation(conn: sqlite3.Connection, edge_id: str) -> dict[str, Any]:
 
 
 def delete_document(conn: sqlite3.Connection, source_id: str) -> dict[str, Any]:
-    """委托 Ingestor 完成文档回收及 Graph/RAG/FAISS 全级联。"""
+    """委托 Ingestor 永久删除文档文件及 Graph/RAG/FAISS 数据。"""
 
     source_id = _required_text(source_id, "source_id")
     data_dir = _require_data_dir(conn)

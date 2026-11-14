@@ -106,8 +106,6 @@ class _JobService:
     def generate_group_summaries(self, *, force=False):
         return {"generated": 1, "force": force}
 
-    def cleanup_recycle(self, *, force=False):
-        return {"deleted": 1, "forced": force}
 
 
 class JobManagerTests(unittest.TestCase):
@@ -268,7 +266,7 @@ class MaintenanceEntryTests(unittest.TestCase):
     def test_api_and_cli_expose_all_three_maintenance_levels(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
-            config = root / "config.json"
+            config = root / "config.yaml"
             config.write_text("{}", encoding="utf-8")
             app = create_app(
                 config_path=config,

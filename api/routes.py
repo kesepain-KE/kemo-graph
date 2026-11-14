@@ -7,11 +7,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 from core.knowledge_base import (
     MAX_IMPORT_BYTES,
     SUPPORTED_IMPORT_SUFFIXES,
+    DocumentImportPathError,
     DocumentIngestError,
     DocumentTooLargeError,
     KnowledgeBaseService,
@@ -19,6 +21,13 @@ from core.knowledge_base import (
 )
 
 from core.jobs import MaintenanceJobManager
+from provider import (
+    ProviderAuthenticationError,
+    ProviderConfigurationError,
+    ProviderError,
+    ProviderTimeoutError,
+)
+from provider.model_catalog import list_models
 from update import ApplicationUpdater, UpdateBlockedError, UpdatePermissionError
 from core.config import load_config
 from core.portable_store import (
@@ -30,9 +39,10 @@ from core.portable_store import (
 )
 
 from .deps import RuntimeContext, get_context, get_job_manager, get_service, get_updater
-from .errors import success_response
+from .errors import error_payload, success_response
 from .store_routes import _store_operation, router as store_router
 from .library_routes import router as library_router
+from .build_routes import router as build_router
 from .log_routes import router as log_router
 from .query_progress import router as query_progress_router
 from .schemas import (
@@ -43,6 +53,7 @@ from .schemas import (
     DocumentContentUpdateRequest,
     GlobalQueryRequest,
     GraphQueryRequest,
+    NodeSummaryUpdateRequest,
     HybridQueryRequest,
     IngestRequest,
     OrganizeGraphRequest,
@@ -51,7 +62,6 @@ from .schemas import (
     StoreCacheClearRequest,
     StoreCacheKeyRequest,
     StoreCacheListRequest,
-    StoreCleanupRecycleRequest,
     StoreDocumentListRequest,
     StoreDocumentBatchDeleteRequest,
     StoreDocumentContentUpdateRequest,
@@ -85,6 +95,7 @@ from .schemas import (
 
 router = APIRouter()
 router.include_router(query_progress_router)
+router.include_router(build_router)
 Service = Annotated[KnowledgeBaseService, Depends(get_service)]
 Jobs = Annotated[MaintenanceJobManager, Depends(get_job_manager)]
 Updater = Annotated[ApplicationUpdater, Depends(get_updater)]
@@ -381,6 +392,23 @@ def get_node(node_id: str, service: Service) -> dict:
     return success_response(service.get_node(node_id))
 
 
+@router.patch("/nodes/{node_id}", response_model=APIResponse)
+def patch_node_summary(node_id: str, payload: NodeSummaryUpdateRequest, service: Service) -> dict:
+    return success_response(service.graph.update_node_summary(
+        node_id, payload.summary, payload.expected_summary,
+    ))
+
+
+@router.get("/graph/search", response_model=APIResponse)
+def search_graph_nodes(
+    service: Service,
+    query: Annotated[str, Query(min_length=1, max_length=1000)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict:
+    return success_response(service.graph.search_nodes(query, limit=limit, offset=offset))
+
+
 @router.get("/relations/{edge_id}", response_model=APIResponse)
 def get_relation(edge_id: str, service: Service) -> dict:
     return success_response(service.get_relation(edge_id))
@@ -482,6 +510,40 @@ def get_config(service: Service) -> dict:
 @router.put("/config", response_model=APIResponse)
 def put_config(payload: ConfigSaveRequest, service: Service) -> dict:
     return success_response(service.save_config(payload.model_dump()))
+
+
+@router.get("/config/models", response_model=APIResponse)
+def get_model_catalog(service: Service, response: Response) -> dict | JSONResponse:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        models = list_models(service.settings)
+    except ProviderError as exc:
+        status, code, message = (
+            502,
+            "MODEL_CATALOG_UNAVAILABLE",
+            "无法读取上游模型列表，请检查网关地址和模型目录接口后重试。",
+        )
+        if isinstance(exc, ProviderConfigurationError):
+            status, code, message = (
+                400,
+                "MODEL_CATALOG_NOT_CONFIGURED",
+                "请先在「网关连接」中配置并保存 API Key，或设置对应的密钥环境变量。",
+            )
+        elif isinstance(exc, ProviderAuthenticationError):
+            code = "MODEL_CATALOG_AUTH_FAILED"
+            message = "网关密钥无效或没有读取模型列表的权限，请检查「网关连接」配置。"
+        elif isinstance(exc, ProviderTimeoutError):
+            status, code, message = (
+                504,
+                "MODEL_CATALOG_TIMEOUT",
+                "读取上游模型列表超时，请稍后重试。",
+            )
+        return JSONResponse(
+            status_code=status,
+            content=error_payload(code, message),
+            headers={"Cache-Control": "no-store"},
+        )
+    return success_response({"models": models})
 
 
 # ── 运维 ──
@@ -593,16 +655,8 @@ def post_summarize(service: Service) -> dict:
     return success_response(service.generate_group_summaries())
 
 
-@router.post("/maintenance/cleanup-recycle", response_model=APIResponse)
-def post_cleanup_recycle(service: Service) -> dict:
-    return success_response(service.cleanup_recycle())
 
 
-@router.delete("/maintenance/recycle", response_model=APIResponse)
-def delete_recycle(service: Service) -> dict:
-    """永久清空回收站；调用方应在执行前向用户二次确认。"""
-
-    return success_response(service.cleanup_recycle(force=True))
 
 
 # ── 绝对路径分布式 Store（组织级调用面） ──
@@ -716,7 +770,7 @@ def _validated_upload_filename(value: str | None) -> str:
     if filename != Path(filename).name or any(
         part in filename for part in ("/", "\\", "..")
     ):
-        raise ValueError("上传文件名不能包含路径")
+        raise DocumentImportPathError("上传文件名不能包含路径")
     return filename
 
 router.include_router(store_router)

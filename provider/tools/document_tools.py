@@ -17,45 +17,24 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
-from markitdown import DocumentConversionError, MarkItDown
+from markitdown import DocumentConversionError, DocumentConverterResult, MarkItDown
 from markitdown._exceptions import (
-    DocumentTooLargeError,
-    MarkItDownError,
+    DocumentTooLargeError as ConversionTooLargeError,
+    MissingOptionalDependencyError,
     UnsupportedFormatError,
     UnsafeInputError,
+)
+from core.knowledge_models import (
+    DocumentImportPathError,
+    DocumentTooLargeError,
+    SUPPORTED_IMPORT_SUFFIXES,
+    UnsupportedDocumentFormatError,
 )
 
 
 _MARKITDOWN = MarkItDown()
 
-SUPPORTED_DOCUMENT_SUFFIXES = frozenset(
-    {
-        ".pdf",
-        ".docx",
-        ".pptx",
-        ".xlsx",
-        ".xlsm",
-        ".xls",
-        ".html",
-        ".htm",
-        ".epub",
-        ".rtf",
-        ".eml",
-        ".txt",
-        ".log",
-        ".rst",
-        ".csv",
-        ".tsv",
-        ".json",
-        ".jsonl",
-        ".ndjson",
-        ".yaml",
-        ".yml",
-        ".xml",
-        ".md",
-        ".markdown",
-    }
-)
+SUPPORTED_DOCUMENT_SUFFIXES = SUPPORTED_IMPORT_SUFFIXES
 
 
 def _validate_input_file(value: Path | str, allowed_suffixes: set[str]) -> Path:
@@ -63,82 +42,90 @@ def _validate_input_file(value: Path | str, allowed_suffixes: set[str]) -> Path:
         raise TypeError("path 必须是路径字符串")
     raw = str(value).strip()
     if not raw:
-        raise ValueError("path 不能为空")
+        raise DocumentImportPathError("path 不能为空")
     path = Path(raw).expanduser()
     if ".." in path.parts:
-        raise DocumentConversionError(f"拒绝包含 '..' 的路径：{raw}")
+        raise DocumentImportPathError(f"拒绝包含 '..' 的路径：{raw}")
     if not path.is_absolute():
-        raise DocumentConversionError(f"必须使用绝对路径：{raw}")
+        raise DocumentImportPathError(f"必须使用绝对路径：{raw}")
     if path.suffix.casefold() not in allowed_suffixes:
         expected = "、".join(sorted(allowed_suffixes))
-        raise DocumentConversionError(f"文件格式不匹配，期望 {expected}：{path}")
+        raise UnsupportedDocumentFormatError(f"文件格式不匹配，期望 {expected}：{path}")
     resolved = path.resolve(strict=False)
     if not resolved.exists():
-        raise FileNotFoundError(f"文件不存在：{resolved}")
+        raise DocumentImportPathError(f"文件不存在：{resolved}")
     if not resolved.is_file():
-        raise DocumentConversionError(f"路径不是普通文件：{resolved}")
+        raise DocumentImportPathError(f"路径不是普通文件：{resolved}")
     try:
         with resolved.open("rb") as stream:
             stream.read(1)
     except OSError as exc:
-        raise DocumentConversionError(f"文件不可读：{resolved}: {exc}") from exc
+        raise DocumentImportPathError(f"文件不可读：{resolved}: {exc}") from exc
     return resolved
 
 
-def _convert_with_markitdown(path: Path | str) -> str:
+def _convert_with_markitdown(path: Path | str) -> DocumentConverterResult:
     try:
         result = _MARKITDOWN.convert(path)
-    except (DocumentConversionError, MarkItDownError):
+    except ConversionTooLargeError as exc:
+        raise DocumentTooLargeError(str(exc)) from exc
+    except MissingOptionalDependencyError as exc:
+        raise DocumentConversionError(str(exc)) from exc
+    except UnsafeInputError as exc:
+        raise DocumentImportPathError(str(exc)) from exc
+    except UnsupportedFormatError as exc:
+        raise UnsupportedDocumentFormatError(str(exc)) from exc
+    except DocumentConversionError:
         raise
     except Exception as exc:
         raise DocumentConversionError(f"无法转换文档：{path}: {exc}") from exc
-    return result.markdown or result.text_content
+    return result
 
 
 def convert_pdf(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".pdf"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".pdf"})).text_content
 
 
 def convert_docx(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".docx"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".docx", ".docm"})).text_content
 
 
 def convert_html(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".html", ".htm"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".html", ".htm"})).text_content
 
 
 def convert_txt(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".txt", ".log"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".txt", ".log"})).text_content
 
 
 def convert_rst(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".rst"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".rst"})).text_content
 
 
 def convert_csv(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".csv", ".tsv"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".csv", ".tsv"})).text_content
 
 
 def convert_spreadsheet(path: Path | str) -> str:
     return _convert_with_markitdown(
         _validate_input_file(path, {".xlsx", ".xlsm", ".xls"})
-    )
+    ).text_content
 
 
 def convert_pptx(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".pptx"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".pptx", ".pptm"})).text_content
 
 
 def convert_epub(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".epub"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".epub"})).text_content
 
 
 def convert_rtf(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".rtf"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".rtf"})).text_content
 
 
 def convert_eml(path: Path | str) -> str:
-    return _convert_with_markitdown(_validate_input_file(path, {".eml"}))
+    return _convert_with_markitdown(_validate_input_file(path, {".eml"})).text_content
 
 
 def convert_data(path: Path | str) -> str:
@@ -147,7 +134,7 @@ def convert_data(path: Path | str) -> str:
             path,
             {".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".xml"},
         )
-    )
+    ).text_content
 
 
 def import_document(
@@ -160,10 +147,13 @@ def import_document(
 
     source = _validate_input_file(path, set(SUPPORTED_DOCUMENT_SUFFIXES))
     markdown_dir = _validate_output_dir(external_dir)
-    markdown = _convert_with_markitdown(source)
-    suffix = source.suffix.casefold()
+    result = _convert_with_markitdown(source)
+    markdown = result.text_content
+    suffix = result.file_extension
     format_name = (
-        "markdown" if suffix in {".md", ".markdown"} else suffix.removeprefix(".")
+        "markdown" if suffix in {".md", ".markdown"}
+        else "html" if suffix in {".html", ".htm"}
+        else suffix.removeprefix(".")
     )
 
     markdown_dir.mkdir(parents=True, exist_ok=True)

@@ -49,7 +49,6 @@ from .ingestor import (
     FileMapError,
     IngestError,
     Ingestor,
-    RecycleConflictError,
 )
 from .logger import DailyTSVLogger
 from .locks import get_knowledge_base_lock

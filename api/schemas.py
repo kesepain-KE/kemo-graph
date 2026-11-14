@@ -40,6 +40,11 @@ class GraphQueryRequest(StrictRequest):
         return value.strip()
 
 
+class NodeSummaryUpdateRequest(StrictRequest):
+    summary: str = Field(max_length=200_000)
+    expected_summary: str = Field(max_length=200_000)
+
+
 class RAGQueryRequest(StrictRequest):
     query: str
     top_k: int | None = Field(default=None, ge=1, le=100)
@@ -110,6 +115,7 @@ class CachedQueryListResponse(BaseModel):
 class ErrorDetail(BaseModel):
     code: str
     message: str
+    result: dict[str, Any] | None = None
 
 
 class UploadRequest(StrictRequest):
@@ -504,8 +510,6 @@ class StoreOrganizeGraphRequest(StoreRootRequest):
     summarize: bool = True
 
 
-class StoreCleanupRecycleRequest(StoreRootRequest):
-    force: bool = False
 
 
 class StoreJobsListRequest(StoreRootRequest):

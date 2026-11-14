@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from .._base_converter import DocumentConverter
 from .data import CsvConverter, JsonConverter, XmlConverter, YamlConverter
 from .docx import DocxConverter
 from .html import HtmlConverter
@@ -12,7 +15,7 @@ from .spreadsheet import SpreadsheetConverter
 from .text import MarkdownConverter, PlainTextConverter
 
 
-def default_converters() -> list[object]:
+def default_converters() -> list[DocumentConverter]:
     """返回内置 Converter 实例；各格式依赖均在实际转换时延迟导入。"""
 
     return [
@@ -34,6 +37,15 @@ def default_converters() -> list[object]:
     ]
 
 
+def supported_suffixes(
+    converters: Iterable[DocumentConverter] | None = None,
+) -> frozenset[str]:
+    """从注册表派生格式能力；不包含无扩展名输入的产品准入策略。"""
+
+    registry = default_converters() if converters is None else converters
+    return frozenset(suffix for converter in registry for suffix in converter.extensions)
+
+
 __all__ = [
     "CsvConverter",
     "DocxConverter",
@@ -51,4 +63,5 @@ __all__ = [
     "XmlConverter",
     "YamlConverter",
     "default_converters",
+    "supported_suffixes",
 ]

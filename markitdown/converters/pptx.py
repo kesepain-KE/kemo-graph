@@ -11,7 +11,7 @@ from .._utils import finalize_markdown, markdown_table, title_from_path
 
 
 class PptxConverter(DocumentConverter):
-    extensions = frozenset({".pptx"})
+    extensions = frozenset({".pptx", ".pptm"})
 
     def convert(self, source: Path, info: StreamInfo) -> DocumentConverterResult:
         try:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import MarkItDown
@@ -34,7 +36,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(result.markdown or result.text_content)
         return 0
     except Exception as exc:
-        print(f"转换失败：{exc}", file=sys.stderr)
+        writer = csv.writer(sys.stderr, delimiter="\t", lineterminator="\n")
+        writer.writerow(("time", "level", "module", "action", "detail", "elapsed_ms"))
+        writer.writerow((
+            datetime.now(timezone.utc).strftime("%H:%M:%S"), "ERROR", "markitdown", "convert",
+            str(exc).replace("\t", " ").replace("\r", " ").replace("\n", " "), "-",
+        ))
         return 2
 
 

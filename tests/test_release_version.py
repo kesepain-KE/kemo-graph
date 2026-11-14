@@ -1,5 +1,6 @@
-"""Release metadata must agree with the authoritative root version.json."""
+"""Release metadata must agree with the authoritative root version.yaml."""
 
+import yaml
 import json
 from pathlib import Path
 import re
@@ -36,8 +37,8 @@ def test_api_and_web_openapi_use_root_version(tmp_path):
     from api import create_app
     from core.config import AppConfig
     from start_web import create_app as create_web_app
-    config = tmp_path / "config.json"
-    config.write_text(AppConfig().model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(AppConfig().model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     for factory in (create_app, create_web_app):
         app = factory(config_path=config, data_dir=tmp_path / "data", external_dir=tmp_path / "docs")
         assert app.version == read_local_version(ROOT)

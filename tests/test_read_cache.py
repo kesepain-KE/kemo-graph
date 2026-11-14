@@ -204,17 +204,17 @@ def test_logs_reuse_reads_and_invalidate_append_and_secret_changes(tmp_path, mon
 
 
 def test_config_and_file_replacement_invalidate_without_mutable_sharing(tmp_path):
-    path = tmp_path / "config.json"
-    path.write_text('{"default_top_k": 7}', encoding="utf-8")
-    first = load_config(path, env_path=None)
+    path = tmp_path / "config.yaml"
+    path.write_text("default_top_k: 7\n", encoding="utf-8")
+    first = load_config(path)
     first.default_top_k = 9
-    assert load_config(path, env_path=None).default_top_k == 7
+    assert load_config(path).default_top_k == 7
     previous = file_revision(path)
-    replacement = tmp_path / "new.json"
-    replacement.write_text('{"default_top_k": 8}', encoding="utf-8")
+    replacement = tmp_path / "new.yaml"
+    replacement.write_text("default_top_k: 8\n", encoding="utf-8")
     os.replace(replacement, path)
     assert file_revision(path) != previous
-    assert load_config(path, env_path=None).default_top_k == 8
+    assert load_config(path).default_top_k == 8
 
 
 def test_query_locks_are_reclaimed_including_nested_and_error_paths(tmp_path):

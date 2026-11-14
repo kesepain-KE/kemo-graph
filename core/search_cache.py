@@ -34,6 +34,37 @@ class SearchCacheError(RuntimeError):
     """搜索缓存无法读取、序列化或维护。"""
 
 
+class SearchCacheCleanupError(SearchCacheError):
+    """数据变更已提交，但包含旧正文的搜索缓存未能清理。"""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        super().__init__(
+            "数据变更已经生效，但搜索缓存清理失败，旧检索历史可能仍包含已删除或修改的内容。"
+            "请刷新列表，并单独清理搜索缓存，不要重复提交已完成的变更。"
+        )
+        self.result = result
+
+
+def clear_search_cache_after_mutation(
+    owner: Any,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """保留已提交的变更结果，并显式报告隐私清理失败。"""
+
+    try:
+        result["search_cache_deleted"] = owner.clear_search_cache()["deleted"]
+    except Exception as exc:
+        result["search_cache_deleted"] = None
+        result["search_cache_error"] = f"{type(exc).__name__}: {exc}"
+        owner._log_event(
+            "search_cache_cleanup_failed",
+            result["search_cache_error"],
+            level="ERROR",
+        )
+        raise SearchCacheCleanupError(result) from exc
+    return result
+
+
 _KEY_LOCKS: dict[tuple[Path, str], tuple[threading.RLock, int]] = {}
 _KEY_LOCKS_GUARD = threading.Lock()
 

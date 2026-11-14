@@ -22,11 +22,8 @@ class MaintenanceService(Protocol):
 
     def generate_group_summaries(self) -> dict[str, Any]: ...
 
-    def cleanup_recycle(self) -> dict[str, Any]: ...
-
-
 class MaintenanceScheduler:
-    """按本地时间每日触发群总结和回收站清理。"""
+    """按本地时间每日触发群总结。"""
 
     def __init__(
         self,
@@ -68,10 +65,8 @@ class MaintenanceScheduler:
 
             service = self._service_factory()
             LOGGER.info(
-                "维护调度器已启动：每日 %s 生成群总结并清理过期回收站文件"
-                "（保留 %s 天）",
+                "维护调度器已启动：每日 %s 生成群总结",
                 service.settings.summary_trigger_time,
-                service.settings.recycle_life_days,
             )
             self._stop_event.clear()
             self._thread = threading.Thread(
@@ -118,7 +113,6 @@ class MaintenanceScheduler:
             "run_date": run_date.isoformat(),
             "trigger_time": trigger_time,
             "summary": None,
-            "cleanup": None,
             "errors": {},
         }
         try:
@@ -127,13 +121,6 @@ class MaintenanceScheduler:
             result["errors"]["summary"] = str(exc)
             LOGGER.exception("每日群总结任务执行失败")
             _log_scheduler(service.settings, "scheduler_error", "task=summary", "ERROR")
-
-        try:
-            result["cleanup"] = service.cleanup_recycle()
-        except Exception as exc:
-            result["errors"]["cleanup"] = str(exc)
-            LOGGER.exception("每日回收站清理任务执行失败")
-            _log_scheduler(service.settings, "scheduler_error", "task=cleanup", "ERROR")
 
         LOGGER.info("每日维护任务执行完成：%s", result)
         return result

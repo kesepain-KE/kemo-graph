@@ -23,6 +23,7 @@ class DocumentConverterResult:
     markdown: str | None = None
     source_path: str | None = None
     converter: str | None = None
+    file_extension: str = ""
 
     def __post_init__(self) -> None:
         if self.markdown is None:

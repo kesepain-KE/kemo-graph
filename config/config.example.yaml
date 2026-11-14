@@ -1,0 +1,68 @@
+# Copy to config.yaml and set your gateway key. config.yaml is ignored by Git.
+max_query_depth: 5
+default_confidence: 0.7
+max_documents: 1000
+web_node_load_depth: 2
+web_node_label_threshold: 3
+summary_trigger_file_count: 5
+summary_trigger_time: 03:00
+rag_similarity_threshold: 0.6
+default_top_k: 10
+search_cache_enabled: true
+search_cache_max_entries: 10000
+search_cache_max_bytes: 268435456
+chunking_mode: fixed
+chunking_llm_max_input_chars: 8000
+chunk_small_size: 128
+chunk_size: 512
+chunk_large_size: 1024
+chunk_overlap: 64
+embedding_batch_size: 8
+rerank_top_n: 5
+graph_tool_max_iterations: 40
+graph_build_mode: auto
+graph_extract_granularity: large
+graph_extract_chunk_size: 12000
+graph_extract_concurrency: 3
+graph_path_limit: 50
+graph_organize_similarity: 0.86
+maintenance_job_history_limit: 100
+log_dir: log
+log_level: INFO
+data_dir: data
+external_dir: external/markdown
+web:
+  host: 127.0.0.1
+  port: 8000
+kemo:
+  base_url: http://127.0.0.1:7531
+  api_key: ''
+  api_key_env: KEMO_API_KEY
+  protocol_version: '2.0'
+  request_timeout: 900
+models:
+  llm: deepseek-deepseek-v4-flash
+  embedding: siliconflow-Qwen-Qwen3-VL-Embedding-8B
+  embedding_dimensions: 4096
+  rerank: siliconflow-Qwen-Qwen3-VL-Reranker-8B
+vector_search:
+  entity_weight: 0.8
+  community_weight: 0.6
+  entity_top_k: 5
+  community_top_k: 3
+query_planning:
+  mode: auto
+  max_rewrites: 4
+  max_subqueries: 3
+  max_total_queries: 6
+  semantic_drift_threshold: 0.58
+  candidate_pool_size: 40
+  rrf_k: 60
+  low_confidence_rescue_count: 2
+portable_stores:
+  enabled: true
+  allowed_roots: []
+hybrid_enhancement_factor: 1.2
+entity_extraction:
+  method: llm
+  max_entities: 10

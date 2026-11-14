@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import yaml
 import io
 import json
 import sqlite3
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 import start
@@ -18,6 +21,7 @@ from core.portable_store import (
     initialize_store,
     resolve_store_paths,
 )
+from core.search_cache import SearchCache, SearchCacheCleanupError, SearchCacheError
 
 
 def _settings(root: Path) -> AppConfig:
@@ -45,6 +49,29 @@ def _record(
         "deleted": deleted,
         "ingest_mode": "both",
     }
+
+
+def test_sync_deletion_reports_cache_failure_after_source_is_deleted(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    root = tmp_path / "store"
+    initialize_store(root, scope="memory.user", owner_id="alice", settings=settings)
+    service = create_store_service(root, settings=settings)
+    first_time = datetime.now(timezone.utc)
+    service.sync_sources([_record(updated_at=first_time)])
+    source = service.list_synced_sources()["sources"][0]
+    processed = service.external_dir / source["relative_path"]
+
+    with patch.object(SearchCache, "clear", side_effect=SearchCacheError("database locked")):
+        with pytest.raises(SearchCacheCleanupError) as caught:
+            service.sync_sources([
+                _record(revision="2", updated_at=first_time + timedelta(seconds=1), deleted=True),
+            ])
+
+    assert caught.value.result["deleted"] == 1
+    assert caught.value.result["search_cache_deleted"] is None
+    assert not processed.exists()
+    assert service.list_synced_sources()["pagination"]["total"] == 0
+    assert service.list_synced_sources(include_deleted=True)["sources"][0]["exists_status"] == "deleted"
 
 
 def test_external_source_columns_migrate_old_sources_db(tmp_path: Path) -> None:
@@ -162,8 +189,7 @@ def test_external_source_sync_is_idempotent_and_preserves_source_identity(
     )
     assert deleted["deleted"] == 1
     assert not markdown.exists()
-    recycle = resolve_store_paths(root, settings=settings).recycle_dir
-    assert not list(recycle.rglob("*.md"))
+    assert not (resolve_store_paths(root, settings=settings).external_dir.parent / "recycle").exists()
 
     restored = service.sync_sources(
         [
@@ -182,8 +208,8 @@ def test_external_source_sync_is_idempotent_and_preserves_source_identity(
 
 def test_source_sync_store_api_and_cli(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
-    config_path = tmp_path / "config.json"
-    config_path.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(settings.model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     store_root = tmp_path / "users" / "alice" / "improve"
     initialize_store(store_root, scope="memory.user", owner_id="alice", settings=settings)
     record = _record()

@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import stat
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 from .db import connect_sources, initialize_databases
 from .ingestor import DocumentNotFoundError, FileMapStore, FileMapping
-from .ingestor._utils import _path_key, _write_json_atomic
+from .ingestor._utils import _path_key
 from .knowledge_models import DocumentContentConflictError, MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
 from .knowledge_support import _write_bytes_atomic
 from .locks import get_knowledge_base_lock
@@ -23,6 +25,20 @@ TEXT_SUFFIXES = {
     ".md", ".markdown", ".txt", ".log", ".rst", ".csv", ".tsv",
     ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".xml", ".html", ".htm",
 }
+
+class LibraryNameConflictError(DocumentContentConflictError):
+    """A paste destination already exists; nothing has been overwritten."""
+
+
+@contextmanager
+def _write_lock(owner: Any):
+    lock = get_knowledge_base_lock(owner.data_dir)
+    if not lock.acquire(blocking=False):
+        raise DocumentContentConflictError("知识库正在构建或修改，请稍后再执行文件操作")
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def _is_link(path: Path) -> bool:
@@ -104,53 +120,54 @@ def entry(owner: Any, path: Path, indexed: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_library(owner: Any, directory: str = "", search: str = "") -> dict[str, Any]:
-    with get_knowledge_base_lock(owner.data_dir):
-        root = original_root(owner)
-        root.mkdir(parents=True, exist_ok=True)
-        folder = resolve_path(owner, directory)
-        if not folder.is_dir():
-            raise ValueError("所选路径不是目录")
-        indexed = {row["library_path"]: row for row in source_rows(owner)}
+    # Browsing originals does not need the Graph/RAG write lock, which may be
+    # held for minutes by a model request. SQLite supplies the source snapshot.
+    root = original_root(owner)
+    root.mkdir(parents=True, exist_ok=True)
+    folder = resolve_path(owner, directory)
+    if not folder.is_dir():
+        raise ValueError("所选路径不是目录")
+    indexed = {row["library_path"]: row for row in source_rows(owner)}
 
-        def children(parent: Path) -> list[Path]:
-            return sorted(
-                (path for path in parent.iterdir()
-                 if not path.name.startswith(".") and not _is_link(path)),
-                key=lambda path: (not path.is_dir(), path.name.casefold()),
-            )
+    def children(parent: Path) -> list[Path]:
+        return sorted(
+            (path for path in parent.iterdir()
+             if not path.name.startswith(".") and not _is_link(path)),
+            key=lambda path: (not path.is_dir(), path.name.casefold()),
+        )
 
-        def tree(parent: Path) -> list[dict[str, Any]]:
+    def tree(parent: Path) -> list[dict[str, Any]]:
+        return [
+            {**entry(owner, path, indexed), **({"children": tree(path)} if path.is_dir() else {})}
+            for path in children(parent)
+        ]
+
+    nodes = tree(root)
+    if search.strip():
+        term = search.strip().casefold()
+
+        def matches(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             return [
-                {**entry(owner, path, indexed), **({"children": tree(path)} if path.is_dir() else {})}
-                for path in children(parent)
+                found
+                for item in items
+                for found in (
+                    ([item] if term in item["path"].casefold() else [])
+                    + matches(item.get("children", []))
+                )
             ]
-
-        nodes = tree(root)
-        if search.strip():
-            term = search.strip().casefold()
-
-            def matches(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-                return [
-                    found
-                    for item in items
-                    for found in (
-                        ([item] if term in item["path"].casefold() else [])
-                        + matches(item.get("children", []))
-                    )
-                ]
-            entries = matches(nodes)
-        else:
-            entries = [entry(owner, path, indexed) for path in children(folder)]
-        return {
-            "root": str(root),
-            "directory": directory,
-            "tree": nodes,
-            "entries": entries,
-        }
+        entries = matches(nodes)
+    else:
+        entries = [entry(owner, path, indexed) for path in children(folder)]
+    return {
+        "root": str(root),
+        "directory": directory,
+        "tree": nodes,
+        "entries": entries,
+    }
 
 
 def create_entry(owner: Any, directory: str, name: str, kind: str) -> dict[str, Any]:
-    with get_knowledge_base_lock(owner.data_dir):
+    with _write_lock(owner):
         original_root(owner).mkdir(parents=True, exist_ok=True)
         parent = resolve_path(owner, directory)
         if not parent.is_dir():
@@ -165,23 +182,48 @@ def create_entry(owner: Any, directory: str, name: str, kind: str) -> dict[str, 
             if destination.suffix.casefold() not in {".md", ".markdown", ".txt"}:
                 raise ValueError("新建文档请使用 .md、.markdown 或 .txt 扩展名")
             heading = f"# {destination.stem}\n" if destination.suffix.casefold() in {".md", ".markdown"} else f"{destination.stem}\n"
-            destination.write_bytes(heading.encode("utf-8"))
-            owner.import_document(destination, ingest_after_import=False)
+            _write_bytes_atomic(destination, heading.encode("utf-8"))
+            try:
+                owner.import_document(destination, ingest_after_import=False)
+            except Exception:
+                destination.unlink()
+                raise
         else:
             raise ValueError("kind 必须是 file 或 directory")
         return entry(owner, destination, {})
 
 
-def refresh_library(owner: Any, path: str = "") -> dict[str, Any]:
+def refresh_library(owner: Any, path: str = "", *, force: bool = False) -> dict[str, Any]:
     """Read actual files and refresh derived Markdown without model requests."""
-    with get_knowledge_base_lock(owner.data_dir):
+    with _write_lock(owner):
         original_root(owner).mkdir(parents=True, exist_ok=True)
-        root = resolve_path(owner, path)
+        deleted = []
+        if not path:
+            from .ingestor import Ingestor
+            from .ingestor._scan import cleanup_orphaned_sources
+
+            ingestor = Ingestor(owner.data_dir, owner.external_dir, settings=owner.settings)
+            _, deleted = cleanup_orphaned_sources(ingestor, remove_unmapped=True)
+            if deleted:
+                owner.clear_search_cache()
+        root = resolve_path(owner, path, must_exist=False)
+        indexed = {row["library_path"]: row for row in source_rows(owner)}
+        if not root.exists() and not any(
+            relative == path or relative.startswith(path + "/") for relative in indexed
+        ):
+            raise DocumentNotFoundError(f"文件或目录不存在：{path}")
         files = [root] if root.is_file() else [
             item for item in root.rglob("*")
             if item.is_file() and not any(part.startswith(".") for part in item.relative_to(root).parts)
         ]
-        indexed = {row["library_path"]: row for row in source_rows(owner)}
+        # Clear missing originals before imports run their own source scan.
+        # Otherwise that scan may delete the same source ahead of this pass.
+        for relative, row in indexed.items():
+            if path and relative != path and not relative.startswith(path + "/"):
+                continue
+            if not resolve_path(owner, relative, must_exist=False).is_file():
+                owner.delete_document(row["source_id"])
+                deleted.append(relative)
         updated: list[str] = []
         errors: list[dict[str, str]] = []
         for file in files:
@@ -195,20 +237,13 @@ def refresh_library(owner: Any, path: str = "") -> dict[str, Any]:
                 continue
             row = indexed.get(relative)
             digest = hashlib.sha256(file.read_bytes()).hexdigest()
-            if row and row["origin_hash"] == digest and (owner.external_dir / row["relative_path"]).is_file():
+            if not force and row and row["origin_hash"] == digest and (owner.external_dir / row["relative_path"]).is_file():
                 continue
             try:
                 owner.import_document(file, ingest_after_import=False)
                 updated.append(relative)
             except Exception as exc:
                 errors.append({"path": relative, "message": str(exc)})
-        deleted = []
-        for relative, row in indexed.items():
-            if path and relative != path and not relative.startswith(path.rstrip("/") + "/"):
-                continue
-            if not (original_root(owner) / relative).is_file():
-                owner.delete_document(row["source_id"])
-                deleted.append(relative)
         return {"updated": updated, "deleted": deleted, "errors": errors}
 
 
@@ -254,7 +289,7 @@ def read_content(owner: Any, source_id: str) -> dict[str, Any]:
 
 def update_content(owner: Any, source_id: str, content: str, expected_hash: str | None) -> dict[str, Any]:
     from .knowledge_models import MAX_IMPORT_BYTES, DocumentTooLargeError
-    with get_knowledge_base_lock(owner.data_dir):
+    with _write_lock(owner):
         path = original_for_source(owner, source_id)
         if path.suffix.casefold() not in TEXT_SUFFIXES:
             raise ValueError("只能编辑原始文本文件")
@@ -286,12 +321,15 @@ def update_content(owner: Any, source_id: str, content: str, expected_hash: str 
 
 def relocate_entry(owner: Any, path: str, destination: str) -> dict[str, Any]:
     """Move originals while retaining source IDs and processed artifact paths."""
-    with get_knowledge_base_lock(owner.data_dir):
+    with _write_lock(owner):
         source = resolve_path(owner, path)
         if source == original_root(owner):
             raise ValueError("不能移动知识库根目录")
         target = resolve_path(owner, destination, must_exist=False)
-        validate_name(target.name)
+        name = validate_name(target.name)
+        if name != target.name:
+            destination = (PurePosixPath(destination).parent / name).as_posix()
+            target = resolve_path(owner, destination, must_exist=False)
         if target.exists():
             raise DocumentContentConflictError("目标文件或目录已存在")
         if source.is_file() and source.suffix.casefold() != target.suffix.casefold():
@@ -349,38 +387,107 @@ def relocate_entry(owner: Any, path: str, destination: str) -> dict[str, Any]:
         return {"path": destination}
 
 
-def delete_entry(owner: Any, path: str) -> dict[str, Any]:
-    with get_knowledge_base_lock(owner.data_dir):
+def _copy_file(source: Path | str, destination: Path | str) -> None:
+    # Exclusive creation is essential: a concurrent filesystem writer must
+    # never turn a failed paste into an overwrite.
+    with Path(source).open("rb") as reader, Path(destination).open("xb") as writer:
+        shutil.copyfileobj(reader, writer)
+    shutil.copystat(source, destination)
+
+
+def transfer_entry(
+    owner: Any, path: str, directory: str, mode: str, *, conflict: str = "error",
+) -> dict[str, Any]:
+    """Paste an original into a directory; moves retain the existing mapping."""
+    with _write_lock(owner):
         source = resolve_path(owner, path)
+        root = original_root(owner)
+        if source == root:
+            raise ValueError("不能复制或移动知识库根目录")
+        folder = resolve_path(owner, directory)
+        if not folder.is_dir():
+            raise ValueError("粘贴目标不是目录")
+        if source.is_dir() and folder.is_relative_to(source):
+            raise ValueError("不能将目录复制或移动到自身及其子目录")
+        if mode == "cut" and folder == source.parent:
+            raise ValueError("所选对象已在目标目录中")
+        target = folder / source.name
+        if target.exists():
+            if conflict != "keep_both":
+                raise LibraryNameConflictError(f"目标目录已存在“{source.name}”，请选择保留两者或取消")
+            suffix = source.suffix if source.is_file() else ""
+            stem = source.stem if suffix else source.name
+            number = 1
+            while target.exists():
+                addition = " - 副本" + (f" ({number})" if number > 1 else "")
+                name = stem[:160 - len(addition) - len(suffix)] + addition + suffix
+                target = folder / validate_name(name)
+                number += 1
+        destination = target.relative_to(root).as_posix()
+        resolve_path(owner, destination, must_exist=False)
+        if mode == "cut":
+            return relocate_entry(owner, path, destination)
+        if mode != "copy":
+            raise ValueError("文件操作必须是 copy 或 cut")
+        # Validate nested reparse points before copytree can follow any of
+        # them. Hidden regular files stay with their containing directory.
+        if source.is_dir():
+            for current, directories, files in os.walk(source, followlinks=False):
+                for name in directories + files:
+                    if _is_link(Path(current) / name):
+                        raise ValueError("目录包含符号链接或目录联接，不能复制")
+        created = False
+        try:
+            if source.is_dir():
+                target.mkdir()
+                created = True
+                shutil.copytree(source, target, dirs_exist_ok=True, copy_function=_copy_file)
+            else:
+                # Mark ownership only after the exclusive open succeeds.
+                with source.open("rb") as reader, target.open("xb") as writer:
+                    created = True
+                    shutil.copyfileobj(reader, writer)
+                shutil.copystat(source, target)
+        except Exception as exc:
+            if created:
+                verified = resolve_path(owner, destination)
+                if verified.is_dir():
+                    shutil.rmtree(verified)
+                else:
+                    verified.unlink()
+            if isinstance(exc, FileExistsError):
+                raise LibraryNameConflictError("粘贴时出现同名项目，请选择保留两者或取消") from exc
+            raise
+        # Copies are new originals, not aliases of the old source. Their own
+        # source/Markdown mapping is created by refresh or the next build.
+        return {"path": destination}
+
+
+def delete_entry(owner: Any, path: str) -> dict[str, Any]:
+    with _write_lock(owner):
+        source = resolve_path(owner, path, must_exist=False)
         if source == original_root(owner):
             raise ValueError("不能删除知识库根目录")
         rows = [
             row for row in source_rows(owner)
             if row["library_path"] == path or row["library_path"].startswith(path + "/")
         ]
+        if not source.exists() and not rows:
+            raise DocumentNotFoundError(f"文件或目录不存在：{path}")
         for row in rows:
             owner.delete_document(row["source_id"])
-        # Indexed files are recycled by delete_document; preserve the remaining
-        # original files (including unsupported formats) as a single directory.
+        # resolve_path verifies the target is inside the original file root
+        # and does not traverse symbolic links or directory junctions.
         if source.exists():
-            destination = owner.external_dir.parent / "recycle" / "originals" / uuid4().hex / path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(destination))
-            now = datetime.now(timezone.utc)
-            try:
-                _write_json_atomic(destination.with_name(destination.name + ".meta.json"), {
-                    "original_path": path,
-                    "recycled_at": now.isoformat(),
-                    "expires_at": (now + timedelta(days=owner.settings.recycle_life_days)).isoformat(),
-                })
-            except Exception:
-                shutil.move(str(destination), str(source))
-                raise
+            if source.is_dir():
+                shutil.rmtree(source)
+            else:
+                source.unlink()
         return {"deleted": path, "sources_deleted": len(rows)}
 
 
-def build_paths(owner: Any, path: str) -> list[str]:
-    result = refresh_library(owner, path)
+def build_paths(owner: Any, path: str, *, reprocess: bool = False) -> list[str]:
+    result = refresh_library(owner, path, force=reprocess)
     if result["errors"]:
         raise ValueError("原文件处理失败：" + "；".join(
             f"{item['path']}: {item['message']}" for item in result["errors"]

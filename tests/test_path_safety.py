@@ -7,18 +7,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from core.config import AppConfig
 from core.library import create_entry, original_root, resolve_path, relocate_entry
 from core.ingestor import IngestError
-from core.ingestor._delete import _move_source_to_recycle
+from core.ingestor._delete import _delete_source_file
 from core.knowledge_base import DocumentContentConflictError, KnowledgeBaseService
-from core.knowledge_documents import KnowledgeDocumentsMixin
 
 
 def _symlink(link: Path, target: Path, *, directory: bool = False) -> None:
@@ -43,14 +40,6 @@ def _imported(service: KnowledgeBaseService, tmp_path: Path) -> dict:
     return service.import_document(path, ingest_after_import=False)
 
 
-@pytest.fixture(params=[_move_source_to_recycle, KnowledgeDocumentsMixin._move_source_to_recycle])
-def recycle(request, tmp_path: Path):
-    external = tmp_path / "markdown"
-    external.mkdir()
-    owner = SimpleNamespace(
-        external_dir=external, settings=SimpleNamespace(recycle_life_days=7)
-    )
-    return lambda name: request.param(owner, name)
 
 
 def test_resolve_path_accepts_plain_directories(service: KnowledgeBaseService) -> None:
@@ -98,33 +87,22 @@ def test_relocate_refuses_symlinked_project_target(service: KnowledgeBaseService
     assert (service.external_dir / document["markdown_relative_path"]).is_file()
 
 
-def test_recycle_refuses_symlinked_destination(recycle, tmp_path: Path) -> None:
-    source = tmp_path / "markdown" / "doc.md"
-    source.write_text("active content", encoding="utf-8")
-    destination = tmp_path / "recycle" / "doc.md"
-    destination.parent.mkdir()
+def test_delete_refuses_source_symlink_outside_the_storage(service, tmp_path):
+    service.external_dir.mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "outside.md"
     outside.write_text("protected content", encoding="utf-8")
-    _symlink(destination, outside)
-
-    with pytest.raises(IngestError, match="符号链接"):
-        recycle("doc.md")
-
+    _symlink(service.external_dir / "doc.md", outside)
+    with pytest.raises(IngestError, match="非法 Markdown 相对路径"):
+        _delete_source_file(service, "doc.md")
     assert outside.read_text(encoding="utf-8") == "protected content"
-    assert source.read_text(encoding="utf-8") == "active content"
 
 
-def test_recycle_refuses_symlinked_metadata(recycle, tmp_path: Path) -> None:
-    source = tmp_path / "markdown" / "doc.md"
-    source.write_text("active content", encoding="utf-8")
-    destination = tmp_path / "recycle" / "doc.md"
-    destination.parent.mkdir()
-    outside = tmp_path / "outside.json"
-    outside.write_text('{"protected": true}', encoding="utf-8")
-    _symlink(destination.with_name("doc.md.meta.json"), outside)
 
-    with pytest.raises(IngestError):
-        recycle("doc.md")
-
-    assert json.loads(outside.read_text(encoding="utf-8")) == {"protected": True}
-    assert source.read_text(encoding="utf-8") == "active content"
+def test_delete_refuses_a_path_outside_the_storage(service, tmp_path):
+    service.external_dir.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text("protected content", encoding="utf-8")
+    for relative_path in ("../outside.md", str(outside)):
+        with pytest.raises(IngestError, match="非法 Markdown 相对路径"):
+            _delete_source_file(service, relative_path)
+    assert outside.read_text(encoding="utf-8") == "protected content"

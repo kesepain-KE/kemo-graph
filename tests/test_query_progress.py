@@ -1,3 +1,4 @@
+import yaml
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from unittest.mock import Mock
@@ -29,8 +30,8 @@ def test_query_plan_reports_real_steps_and_fallback():
 
 
 def test_live_progress_is_available_during_query_and_does_not_change_response(tmp_path):
-    config = tmp_path / "config.json"
-    config.write_text(AppConfig().model_dump_json(), encoding="utf-8")
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(AppConfig().model_dump(mode="json"), allow_unicode=True, sort_keys=False), encoding="utf-8")
     app = create_app(config_path=config, data_dir=tmp_path / "data", external_dir=tmp_path / "docs")
     entered, release = threading.Event(), threading.Event()
     def query(*_, **__):

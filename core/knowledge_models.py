@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from provider.tools.document_tools import SUPPORTED_DOCUMENT_SUFFIXES
+from markitdown import supported_suffixes
 
 class KnowledgeBaseNotInitializedError(RuntimeError):
     """知识库的 sources.db 尚不存在。"""
@@ -43,7 +43,9 @@ class DocumentImportConflictError(DocumentImportError):
     """源文件在调用方确认后发生变化，拒绝导入不同内容。"""
 
 
-SUPPORTED_IMPORT_SUFFIXES = SUPPORTED_DOCUMENT_SUFFIXES
+# 产品只接收注册表中的本地文档格式；无扩展名输入留给 Magika 识别，
+# 识别出的格式仍须由已注册 Converter 处理，不按普通文本兜底。
+SUPPORTED_IMPORT_SUFFIXES = supported_suffixes() | {""}
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
 CONFIG_API_KEY_MASK = "************"
 

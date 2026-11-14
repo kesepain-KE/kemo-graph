@@ -166,7 +166,7 @@ class GraphVisualizationAPITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             service = _seed_service(root)
-            config_path = root / "config.json"
+            config_path = root / "config.yaml"
             config_path.write_text("{}", encoding="utf-8")
             app = create_app(
                 config_path=config_path,

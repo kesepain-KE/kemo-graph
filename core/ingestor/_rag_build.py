@@ -27,6 +27,7 @@ def _update_rag_for_source(self, record: _SourceRecord, text: str) -> None:
     )
     chunk_specs = document_chunks(text, settings=self.settings)
     text_chunks = [item.content for item in chunk_specs]
+    self._advance_build_step(record.source_id, "rag", "embed", "生成文档向量")
     embedding_started_at = time.perf_counter()
     try:
         embedding_result = _coerce_embedding_result(self._embedder(text_chunks))
@@ -54,6 +55,7 @@ def _update_rag_for_source(self, record: _SourceRecord, text: str) -> None:
         expected_count=len(text_chunks),
         dimensions=self.settings.models.embedding_dimensions,
     )
+    self._advance_build_step(record.source_id, "rag", "persist", "写入切片与向量")
     chunk_ids = [str(uuid4()) for _ in text_chunks]
     node_ids = self._current_graph_node_ids(record.source_id, record.content_hash)
     rag_engine = self._get_rag_engine()
@@ -145,6 +147,7 @@ def _update_rag_for_source(self, record: _SourceRecord, text: str) -> None:
     finally:
         connection.close()
 
+    self._advance_build_step(record.source_id, "rag", "index", "同步向量索引")
     matrix = (
         np.vstack(vectors).astype(np.float32, copy=False)
         if vectors
@@ -156,6 +159,7 @@ def _update_rag_for_source(self, record: _SourceRecord, text: str) -> None:
         new_vector_ids,
         matrix,
     )
+    self._advance_build_step(record.source_id, "rag", "entities", "更新实体向量")
     entity_result = _build_entity_vectors_for_source(
         self,
         record.source_id,
@@ -312,9 +316,9 @@ def _current_graph_node_ids(self, source_id: str, content_hash: str) -> set[str]
 
 
 def _coerce_embedding_result(
-    value: EmbeddingResult | list[list[float]],
+    value: EmbeddingResult,
 ) -> EmbeddingResult:
-    """消费 EmbeddingResult，并暂时兼容旧测试注入的裸向量列表。"""
+    """验证向量提供方返回的向量空间身份。"""
 
     if isinstance(value, EmbeddingResult):
         if (
@@ -326,8 +330,6 @@ def _coerce_embedding_result(
             vectors=value.vectors,
             vector_space_id=value.vector_space_id.strip(),
         )
-    if isinstance(value, list):
-        return EmbeddingResult(vectors=value, vector_space_id="unknown")
     raise IngestError("Embedding 返回值必须是 EmbeddingResult")
 
 

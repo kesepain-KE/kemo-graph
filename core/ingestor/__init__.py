@@ -15,8 +15,10 @@ from provider.engine import chat_structured, chat_with_tools, supports_structure
 from markitdown._utils import sanitize_knowledge_markdown
 
 from ..config import AppConfig, PROJECT_ROOT, load_config
+from ..build_progress import advance_build, finish_build, start_build
 from ..db import (
     connect_graph,
+    connect_rag,
     connect_sources,
     initialize_databases,
     read_graph_meta,
@@ -38,7 +40,7 @@ class SourceChangedDuringIngest(IngestError):
     """扫描后、整理前文档再次发生变化。"""
 
 
-from ._delete import DocumentNotFoundError, RecycleConflictError  # noqa: E402
+from ._delete import DocumentNotFoundError  # noqa: E402
 from ._file_map import (  # noqa: E402
     FILE_MAP_VERSION,
     FileMapError,
@@ -56,7 +58,7 @@ from ._utils import (  # noqa: E402
 )
 
 
-Embedder = Callable[[list[str]], EmbeddingResult | list[list[float]]]
+Embedder = Callable[[list[str]], EmbeddingResult]
 
 
 class Ingestor:
@@ -113,6 +115,8 @@ class Ingestor:
         mode: str = "both",
         *,
         retry_failed: bool = False,
+        force: bool = False,
+        failed_only: bool = False,
     ) -> dict[str, Any]:
         """扫描并整理 pending 文档，返回 API 约定的统计结构。"""
 
@@ -120,6 +124,15 @@ class Ingestor:
         if mode not in {"graph", "rag", "both"}:
             raise ValueError("mode 必须是 graph、rag 或 both")
         with self._write_lock:
+            # Preserve the failed scope before scan invalidates statuses for
+            # changed content/configuration. Never retry unrelated pending work.
+            failed_targets = {
+                record.source_id: {
+                    "graph": record.graph_status == "failed",
+                    "rag": record.rag_status == "failed",
+                }
+                for record in self._select_active_sources(None, mode, include_failed=True)
+            } if failed_only else {}
             scan = self.scan_sources()
             requested_paths = self._normalize_requested_paths(paths)
             result: dict[str, Any] = {
@@ -160,14 +173,21 @@ class Ingestor:
             records = self._select_active_sources(
                 requested_paths,
                 mode,
-                include_failed=retry_failed,
+                include_failed=retry_failed or failed_only,
             )
             for record in records:
                 graph_requested = mode in {"graph", "both"}
                 rag_requested = mode in {"rag", "both"}
                 graph_should_run = graph_requested and record.graph_status == "pending"
                 rag_should_run = rag_requested and record.rag_status == "pending"
-                if requested_paths is not None:
+                if failed_only:
+                    targets = failed_targets.get(record.source_id, {})
+                    graph_should_run = graph_requested and targets.get("graph", False)
+                    rag_should_run = rag_requested and targets.get("rag", False)
+                elif force:
+                    graph_should_run = graph_requested
+                    rag_should_run = rag_requested
+                elif requested_paths is not None:
                     graph_should_run = graph_requested and record.graph_status in {
                         "pending",
                         "failed",
@@ -204,29 +224,41 @@ class Ingestor:
                     "rag": "skipped",
                 }
                 document_failed = False
+                pipelines = [
+                    pipeline for pipeline, run in
+                    (("graph", graph_should_run), ("rag", rag_should_run)) if run
+                ]
+                for pipeline in pipelines:
+                    start_build(self.paths, record.source_id, pipeline, record.content_hash)
                 try:
                     text = self._read_source_text(record)
-                except SourceChangedDuringIngest as exc:
-                    if graph_should_run:
-                        detail["graph"] = "pending"
-                    if rag_should_run:
-                        detail["rag"] = "pending"
+                except Exception as exc:
+                    status = "pending" if isinstance(exc, SourceChangedDuringIngest) else "failed"
+                    for pipeline in pipelines:
+                        self._set_source_status(record.source_id, pipeline, status)
+                        finish_build(self.paths, record.source_id, pipeline, str(exc))
+                        detail[pipeline] = status
                     detail["error"] = str(exc)
                     result["failed"] += 1
                     result["details"].append(detail)
                     continue
 
+                for pipeline in pipelines:
+                    finish_build(self.paths, record.source_id, pipeline)
                 if graph_should_run:
                     self._set_source_status(record.source_id, "graph", "processing")
                     try:
+                        self._advance_build_step(record.source_id, "graph", "extract", "抽取实体与关系")
                         self._update_graph_for_source(record, text)
                         self._mark_source_ready(
                             record.source_id, "graph", record.content_hash
                         )
+                        finish_build(self.paths, record.source_id, "graph")
                         detail["graph"] = "updated"
                         result["graph_updated"] += 1
                     except Exception as exc:
                         self._set_source_status(record.source_id, "graph", "failed")
+                        finish_build(self.paths, record.source_id, "graph", str(exc))
                         detail["graph"] = "failed"
                         detail["graph_error"] = str(exc)
                         document_failed = True
@@ -239,14 +271,17 @@ class Ingestor:
                 if rag_should_run:
                     self._set_source_status(record.source_id, "rag", "processing")
                     try:
+                        self._advance_build_step(record.source_id, "rag", "chunk", "文档切片")
                         self._update_rag_for_source(record, text)
                         self._mark_source_ready(
                             record.source_id, "rag", record.content_hash
                         )
+                        finish_build(self.paths, record.source_id, "rag")
                         detail["rag"] = "updated"
                         result["rag_updated"] += 1
                     except Exception as exc:
                         self._set_source_status(record.source_id, "rag", "failed")
+                        finish_build(self.paths, record.source_id, "rag", str(exc))
                         detail["rag"] = "failed"
                         detail["rag_error"] = str(exc)
                         document_failed = True
@@ -276,10 +311,10 @@ class Ingestor:
 
         return implementation.delete_document(self, source_id)
 
-    def _move_source_to_recycle(self, relative_path: str) -> str | None:
+    def _delete_source_file(self, relative_path: str) -> None:
         from . import _delete as implementation
 
-        return implementation._move_source_to_recycle(self, relative_path)
+        return implementation._delete_source_file(self, relative_path)
 
     def _normalize_requested_paths(
         self, paths: Sequence[Path | str] | None
@@ -384,6 +419,9 @@ class Ingestor:
         from . import _graph_build as implementation
 
         return implementation._update_graph_for_source(self, record, text)
+
+    def _advance_build_step(self, source_id: str, pipeline: str, step: str, label: str) -> None:
+        advance_build(self.paths, source_id, pipeline, step, label)
 
     def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
         from . import _graph_build as implementation
@@ -521,7 +559,35 @@ class Ingestor:
         except Exception:
             pass
 
-    def _get_rag_engine(self) -> RAGEngine:
+    def _get_rag_engine(self, *, for_deletion: bool = False) -> RAGEngine:
+        if for_deletion:
+            connection = connect_rag(self.paths)
+            try:
+                stored = connection.execute(
+                    """
+                    SELECT model_name, dimensions FROM embeddings
+                    UNION ALL
+                    SELECT model_name, dimensions FROM entity_embeddings
+                    UNION ALL
+                    SELECT model_name, dimensions FROM community_embeddings
+                    LIMIT 1
+                    """
+                ).fetchone()
+            finally:
+                connection.close()
+            if stored is not None and (
+                stored["model_name"] != self.settings.models.embedding
+                or stored["dimensions"] != self.settings.models.embedding_dimensions
+            ):
+                # Deleting stored vectors must remain possible after a model
+                # change. Keep this engine separate from new builds/queries.
+                settings = self.settings.model_copy(update={
+                    "models": self.settings.models.model_copy(update={
+                        "embedding": stored["model_name"],
+                        "embedding_dimensions": stored["dimensions"],
+                    }),
+                })
+                return RAGEngine(self.paths.data_dir, settings=settings)
         if self._rag_engine is None:
             self._rag_engine = RAGEngine(
                 self.paths.data_dir,
@@ -641,7 +707,6 @@ __all__ = [
     "GraphExtractionError",
     "IngestError",
     "Ingestor",
-    "RecycleConflictError",
     "ScanResult",
     "SourceChangedDuringIngest",
     "delete_document",

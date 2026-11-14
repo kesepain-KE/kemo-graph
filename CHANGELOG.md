@@ -1,164 +1,33 @@
-## 1.6.0 — 2026-10-01
+# 更新记录
 
-- 知识图谱版本定档为 1.6.0；与 kemo-agent 1.4.0、kemo-adapter-api 1.0.0 的 Kemo 2.0 协议合同完成对齐。
-- 请求/响应、工具调用、结构化输出、Embedding、Rerank 与能力发现继续使用统一协议基线。
+## 2.0.0 （待发布）
 
-# 更新记录 / Changelog
+本文件从 2.0.0 开始记录，不恢复旧版发布历史。
 
-## 1.5.2 — 2026-10-01
+### 知识库与构建
 
-### 本次更新
+- 按原文件真实路径管理目录、文件和预览，处理稿存放在独立目录并保留原文件映射。
+- 支持目录右键操作、应用内复制／剪切／粘贴、就地重命名及面包屑导航。
+- Graph/RAG 构建使用后台任务，展示文档级流程、失败步骤与重试入口。
+- 处理稿支持预览、编辑，以及保存后选择是否重新构建；普通重建与重新预处理分别执行。
 
-- 文档归一化层新增统一知识文本净化：移除 DOCX/HTML 等转换结果中的图片 Data URI、Base64 二进制、媒体标签、脚本、样式和 HTML 注释，并保留图片说明等可读文本。
-- MarkItDown 单一入口和 Graph/RAG Markdown 读取入口增加第二、第三层防御，历史脏 Markdown 不会继续膨胀图谱片段或向量碎片。
-- 增加 Base64 图片、HTML 媒体、自定义 Converter 脏输出和净化幂等性的回归测试；全量后端测试通过。
+### 检索与网页
 
-### 网关兼容性审查
+- 知识文本和图谱节点检索复用 SQLite FTS5、分词与混合检索能力。
+- 调整知识库、构建状态、图谱、检索、配置和运行状态页面的排版与视觉层级。
+- 运行状态保留“状态”“日志”两个独立详情分栏。
 
-- 已完成 Kemo 1.0 → Kemo 2.0 Provider 适配：请求头和请求体使用 `2.0`，请求 ID 使用网关要求的 `req_` 前缀。
-- LLM 请求已适配 Kemo 2.0 的顶层 `parallel_tool_calls`、严格消息/工具项 ID、原生 `structured_output` 和工具结果 `name` 字段。
-- Embedding/Rerank 请求继续使用同一端点，但已按 Kemo 2.0 严格契约发送 `truncate`、`request_id` 和新响应字段；HTTP 错误包络会提取 `code`、`retryable` 和 `provider_status`。
-- 当前本地 `kemo-adapter-api` 0.8.2 的 Kemo 2.0 模型契约已通过本地请求模型校验；真实模型可达性仍取决于网关密钥、模型注册和上游 Provider 状态。
+### 文档转换
 
-### 升级说明
+- 将转换层超限、不安全路径与不支持格式错误映射到应用异常，分别返回 413、400 和 415；缺依赖以 422 返回具体依赖名。
+- 从 Converter 注册表派生格式能力；无扩展名文档由 Magika 识别，上传、扫描与构建入口采用同一准入策略。
+- PDF 中的有效网格表格保留为 Markdown 表格，按页面位置与正文合并，避免表格文字重复或表旁、表后正文丢失；无表格页保持原输出，支持关闭表格提取。
+- 加入 DOCM 和 PPTM 的导入及原文件预览，保留 XLSM 支持。真实宏启用 Content-Type 的 OOXML 包已有回归；不执行 VBA，DOCM 明确依赖 Mammoth 与 markdownify。
+- 调整依赖范围为 Magika `>=0.6.1,<2.0`、Mammoth `>=1.12.2,<2.0`、pdfplumber `>=0.11.9,<2.0`。
+- 原文件预览有意保持独立，避免索引文本净化移除预览所需的内联图片和 HTML。
 
-- 应用版本统一为 1.5.2：`version.json`、前端包、Python 转换层包元数据和说明文档同步。
-- 原始文档哈希和文件身份不变；净化只作用于转换结果、预览、Graph 和 RAG 输入，不会改写用户原始 DOCX。
-- 已有成功文档不会因为本次版本升级自动全部重建；需要清理历史脏 Markdown 或重新建立向量时，请通过网页端批量重建或 CLI 重建。
+### 升级与验证
 
-### Release summary
-
-Version 1.5.2 adds a shared knowledge-text sanitizer for converter output and Graph/RAG input, removing embedded media and Base64 binary residue while preserving readable descriptions. It also completes the Kemo 1.0 → 2.0 Provider adaptation: strict request IDs, native structured output, tool-history replay, embedding/rerank fields, and Kemo 2.0 error metadata are aligned with the local kemo-adapter-api 0.8.2 contract.
-
-### 发布验证 / Release verification
-
-```bash
-python -m pytest tests/ -q
-python -m compileall -q core api provider markitdown update start.py start_web.py
-python start.py version
-cd web/frontend
-npm run typecheck
-npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
-npm run build
-```
-
-## 1.5.1 — 2026-09-16
-
-### 本次更新
-
-- 独立 Store 补齐文档组织接口：新增 `POST /api/v1/stores/projects/list`、`POST /api/v1/stores/projects/create`、`POST /api/v1/stores/documents/location`、`POST /api/v1/stores/documents/move-batch`，使外部知识库与默认知识库一样可以创建项目文件夹、重命名、单篇移动与批量移动。此前这些能力只有默认知识库提供，独立 Store 只能按项目筛选、无法整理。
-- 批量移动限制 `source_ids` 非空、自动去重、拒绝空字符串、最多 1000 项，项目名最多 160 字符；单篇位置更新继续返回 Store 身份包络，整批检查、整批执行的既有语义不变。
-- 修复文档导入异常处理失效：`core/knowledge_support.py` 的导入列表漏掉 `DocumentImportError`，导致“读取期间超出体积上限”与“导入后未登记来源”两条异常分支在求值 `except` 元组时二次抛出 `NameError`，既掩盖原始错误，也跳过快照描述符清理。该缺陷由 2026-09-08 的知识库领域化拆分引入，与本次新增端点无关，现已补回导入并加回归测试。
-- 修复 Kemo 请求标识符不合规：`provider/__init__.py` 此前用裸 `uuid4()` 作为 `request_id`，而 Kemo 1.0 要求标识符首字符为字母，UUID 十六进制首位约有六成概率是数字，导致 LLM 调用被网关以 400 拒绝、查询规划静默退化为原始查询。现改为 `req-<hex>` 前缀形式；网关与 kemo-agent 的协议校验未做任何放宽，仍与协议定义逐字一致。
-- 网页运行日志改为终端流风格：终端启动日志、查询日志与内部运行日志统一为「时间 · 级别标签 · 正文」单行三列布局，使用等宽字体、按行悬停高亮、错误行整行标红，不再使用分隔线与两行卡片。
-- 系统配置页新增版本检测：显示当前版本与最新版本，可手动检查更新并直接看到结果；该区域仍不提供应用更新与服务重启以外的操作。
-- 运行日志的日期筛选改用站内自研日期选择器，与其他控件统一外观、键盘操作和视口避让行为；日期语义仍为 UTC。
-- 新增 OpenAPI 路径契约测试，固化公开端点数量与 `/api/v1/graph/full` 的隐藏兼容别名状态，端点增删会直接导致测试失败。
-
-### 升级说明
-
-- 应用版本统一为 1.5.1：`version.json`、前端包及锁文件、Python 转换层包元数据和说明文档同步。Kemo 1.0、`/api/v1` 与存储格式版本不随应用版本改号。
-- 更新源码、重新构建前端并重启服务后生效；不必仅为版本升级重建现有知识库。
-- 新增的四个端点只作用于独立 Store 的 `/stores/*` 路径；默认知识库既有的 `/projects` 与 `/documents/*` 端点行为不变。
-- 补回 `DocumentImportError` 后，超限与未登记来源恢复为原有语义的明确错误，不再表现为 `NameError`。普通导入路径不受影响。
-- 网页运行日志不再自动折行，超宽内容改为横向滚动，与终端行为一致。日期筛选、每 5 秒自动刷新与跟随最新等既有行为保持不变。
-- 本次仍不提供应用层 API 鉴权与独立 Store 的后台作业提交端点，网络部署仍须自行保护访问边界。
-
-### Release summary
-
-Portable Stores gain project folders, rename, single and batch move; the missing `DocumentImportError` import in the document import pipeline is restored; Kemo request identifiers now satisfy the letter-initial rule; the runtime log viewer becomes a terminal-style single-line stream; the settings page gains version detection; and an OpenAPI path contract test locks the public surface. Protocol and storage-format versions are unchanged.
-
-### 发布验证 / Release verification
-
-```bash
-python -m pytest tests/ -q
-python -m compileall -q core api provider markitdown update start.py start_web.py
-python start.py version
-cd web/frontend
-npm run typecheck
-npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
-npm run build
-```
-
-## 1.5.0 — 2026-09-13
-
-### 本次更新
-
-- 更新入口新增只读检查：`python update.py --dirty`（别名 `--changes`）与 `start.py update-changes` 列出工作区中未提交的更改，并区分会阻塞更新的程序文件，以及不影响更新的用户配置与运行数据。
-- 更新入口新增强制选项：`python update.py --force` 在存在未提交的程序文件修改时，先备份到 `update/runtime/dirty-backup/<时间戳>/` 并还原工作区，再继续安装；安装失败会把这些修改放回原位置。
-- 更新被拒绝时，错误对象附带 `hint` 字段，直接给出查看未提交更改与强制更新的命令。
-- 重启服务改用无控制台的窗口版解释器：Windows 上 `restart.py` 启动替换进程时，会把命令中的 `python.exe` 换成同目录的 `pythonw.exe`。此前服务进程若因任何路径持有控制台，重启后会带出一个终端窗口，而那个窗口本身就是服务进程——关掉窗口等于停掉服务；使用不持有控制台的解释器后，重启后的服务与终端彻底解耦。`restart.log` 仍完整记录替换进程的输出。
-- 编辑器与手动备份文件（`*.bak`、`*.bak.*`、`*.orig`）不再被计为未提交的程序文件修改。
-- 修复 `restart_required` 无法自动清除：该标志在更新成功后置位，但此前没有任何代码会复位它，服务即便已经重启，状态页仍会一直提示需要重启。服务启动本身就是该标志所要求的那次重启，因此现在在启动时终结它；没有更新记录时不会为此新建状态文件。
-- Web 系统配置页与 `/api/v1/update/*` 接口的既有行为保持不变。
-
-### 升级说明
-
-- 应用版本统一为 1.5.0：`version.json`、前端包及锁文件、Python 转换层包元数据和说明文档同步。Kemo 1.0、`/api/v1` 与存储格式版本不随应用版本改号。
-- 旧版更新入口在检测到未提交的程序文件修改时仍会拒绝更新；需要先更新到 1.5.0 才能使用 `--dirty` 与 `--force`。
-- 未提交修改的备份保存在 `update/runtime/dirty-backup/`，属于运行状态目录，不会被更新覆盖，也不会进入版本库。
-- 前端依赖统一使用 npm：移除仓库中的 `pnpm-lock.yaml` 与 `pnpm-workspace.yaml`。更新器、CI 与文档一直使用 `npm ci` 与 `npm run build`，保留两份锁文件只会让它们各自演进；此前 `pnpm-workspace.yaml` 中的构建脚本审批占位符还会在 pnpm 安装时被反复改写，进而把工作区标记为未提交。
-- `--force` 会临时移除工作区中的未提交修改；需要对照原始内容时保留该备份目录即可。
-
-### Release summary
-
-Read-only worktree inspection before updating; an explicit `--force` that backs up uncommitted program changes and restores them when the update fails; actionable refusal hints; and editor backup files no longer counted as uncommitted program changes.
-
-### 发布验证 / Release verification
-
-```bash
-python -m pytest tests/ -q
-python -m compileall -q core api provider markitdown update start.py start_web.py
-python start.py version
-cd web/frontend
-npm run typecheck
-npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
-npm run build
-```
-
-## 1.4.0 — 2026-09-13
-
-### 本次更新
-
-- 文档管理支持项目文件夹、指定项目上传、重命名、单篇与批量移动；移动和改名保留来源 ID、正文哈希及现有索引。
-- 搜索框上移，Graph / RAG 状态筛选迁入独立“构建状态”页面；每页最多 6 篇文档，支持内部滚动与自动刷新。
-- 检索进度保留简短文字，并显示实际发生的规划、查询向量化、召回、切片聚合、重排序和回答生成；支持缓存命中与 LLM 回退状态。
-- 运行状态新增终端启动、查询和内部运行日志标签，支持日期选择、刷新、内部滚动与脱敏。
-- 新增有界内存读取缓存，减少未变化文档状态、日志、配置及知识库指纹的重复磁盘读取；回收用完的搜索并发锁。
-- 精简系统维护页面，更新区域仅保留重启服务；同路径回收站副本允许覆盖，并处理失败回滚。
-- 保留原有本地文件导入核验、外部 Store 隔离、Markdown 渲染和检索接口。
-
-### 升级说明
-
-- 应用版本统一为 1.4.0：`version.json`、前端包及锁文件、Python 转换层包元数据和说明文档同步。Kemo 1.0、`/api/v1` 与存储格式版本不随应用版本改号。
-- 更新源码并安装所需依赖、构建前端后重启服务；不必仅为版本升级清空或重建现有知识库。正文或抽取设置发生变化时仍按原流程手动重建。
-- 新增终端日志无法补录过去未保存的输出。内存读取缓存与检索步骤记录会在进程重启后清空。
-- 检索步骤记录为进程内状态，多工作进程需要同进程路由；没有步骤回报时不伪造阶段完成情况。
-- 本版本没有新增应用层 API 鉴权，网络部署仍须保护访问边界。
-
-### Release summary
-
-Project-based document organization; dedicated Graph/RAG build status; concise, real query-stage telemetry; categorized runtime logs; bounded read-through memory caching; simpler maintenance controls; and same-path recycle replacement with rollback handling. Existing retrieval response formats and external Store isolation remain compatible.
-
-The application, frontend and converter-package metadata share version 1.4.0. Protocol and storage-format versions are independent. Rebuild the frontend and restart the service after updating; no blanket knowledge-base rebuild is required merely because the application version changed.
-
-### 持续集成 / Continuous integration
-
-- 仓库新增 GitHub Actions 工作流 `CI`，在推送与合并请求时自动执行发布前检查：后端在 Python 3.10 与 3.12 上安装 `requirements-dev.txt`、运行语法检查与全部单元测试；前端执行类型检查、单元测试与生产构建。
-- 这些检查此前只在发布前手工执行，现在由 CI 固定执行，不必依赖本地环境是否完整。
-- 同时补充两类行为测试：失败来源重试开关（`retry_failed`）的默认保守行为与 API 透传，以及知识库的符号链接边界防护。符号链接用例在无法创建链接的平台自动跳过，由 Linux 运行器覆盖。
-- 工作流首次运行即暴露两处只在本机成立、新克隆会复现的缺陷，均已修复：忽略规则中的 `data/` 曾把 `web/frontend/src/features/graph/data/` 源码目录一并排除在仓库之外，导致新克隆无法通过前端类型检查；Web 路由测试隐式依赖本地已执行过 `npm run build` 的前端产物。
-
-### 发布验证 / Release verification
-
-```bash
-python -m pytest tests/ -q
-python -m compileall -q core api provider markitdown update start.py start_web.py
-python start.py version
-cd web/frontend
-npm run typecheck
-npm test -- --run --pool=threads --maxWorkers=1 --minWorkers=1
-npm run build
-```
-
-单工作线程测试是为了降低本地测试进程开销，不改变生产环境的运行方式。真实模型质量、GPU 硬件表现及操作系统差异仍需在目标部署环境验收。
+- 应用、转换包、前端和文档的版本元数据统一为 2.0.0，HTTP 路由仍使用 `/api/v1`。
+- 本次不提供旧文档数据重导入或旧切片兼容脚本，不自动删除已有资料。
+- 验证命令：`python -m pytest tests/ -q`；在 `web/frontend` 中运行 `npm run build`。

@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from core.config import DEFAULT_CONFIG_PATH, load_config
+from core.terminal_logging import configure_console_logging
 from core.graph_engine import GraphQueryError
 from core.graph_organizer import GraphOrganizerError
-from core.ingestor import DocumentNotFoundError, IngestError, RecycleConflictError
+from core.ingestor import DocumentNotFoundError, IngestError
 from core.knowledge_base import (
     DocumentImportError,
     DocumentImportPathError,
@@ -50,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="kemo-graph 知识库命令行工具")
     parser.add_argument("--data-dir", help="知识库数据目录")
     parser.add_argument("--external-dir", help="Markdown 文档目录")
-    parser.add_argument("--config", help="config.json 路径")
+    parser.add_argument("--config", help="YAML 配置文件路径（.yaml / .yml）")
     parser.add_argument(
         "--store-root",
         help="绝对知识位置；数据固定写入其 kemo-graph-storage 目录",
@@ -214,12 +215,6 @@ def build_parser() -> argparse.ArgumentParser:
     neighborhood_parser.add_argument("--edge-limit", type=int, default=10000)
     neighborhood_parser.add_argument("--expected-revision")
     subparsers.add_parser("summarize", help="生成节点群总结")
-    cleanup_parser = subparsers.add_parser(
-        "cleanup-recycle", help="清理过期回收站文件"
-    )
-    cleanup_parser.add_argument(
-        "--force", action="store_true", help="永久清空全部回收站内容"
-    )
     organize_parser = subparsers.add_parser("organize-graph", help="整理重叠节点与关系")
     organize_parser.add_argument(
         "--no-llm", action="store_true", help="仅执行完全术语重叠的确定性整理"
@@ -329,6 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json({"ok": True, "data": data, "error": None})
             return 0
         settings = load_config(config_path)
+        configure_console_logging(settings)
         if args.command == "store-init":
             data = initialize_store(
                 args.root,
@@ -521,8 +517,6 @@ def _dispatch(
         )
     if args.command == "summarize":
         return service.generate_group_summaries()
-    if args.command == "cleanup-recycle":
-        return service.cleanup_recycle(force=args.force)
     if args.command == "organize-graph":
         return service.organize_graph(
             use_llm=not args.no_llm,
@@ -604,7 +598,6 @@ def _map_error(exc: Exception) -> tuple[str, str, int]:
         (
             GraphQueryError,
             RAGQueryError,
-            RecycleConflictError,
             IngestError,
             ValueError,
             TypeError,

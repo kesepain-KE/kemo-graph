@@ -49,7 +49,6 @@ from .ingestor import (
     FileMapError,
     IngestError,
     Ingestor,
-    RecycleConflictError,
 )
 from .logger import DailyTSVLogger
 from .locks import get_knowledge_base_lock
@@ -310,8 +309,6 @@ class KnowledgeBaseService(KnowledgeDocumentsMixin, KnowledgeGraphMixin, Knowled
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self.maintenance.get_job(job_id)
 
-    def cleanup_recycle(self, *, force: bool = False) -> dict[str, Any]:
-        return self.maintenance.cleanup_recycle(force=force)
 
     def generate_group_summaries(self, *, force: bool = False) -> dict[str, Any]:
         return self.maintenance.generate_group_summaries(force=force)

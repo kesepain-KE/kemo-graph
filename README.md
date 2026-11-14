@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.6.0-00a98f" alt="version 1.6.0"></a>
+  <a href="version.yaml"><img src="https://img.shields.io/badge/version-2.0.0-00a98f" alt="version 2.0.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -82,20 +82,23 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-Copy-Item .env.example .env
+Copy-Item config\config.example.yaml config\config.yaml
 ```
 
-在 `.env` 中至少配置网关调用密钥：
+在 `config/config.yaml` 中至少配置网关调用密钥：
 
-```dotenv
-KEMO_API_KEY=你的-kemo-网关调用密钥
+```yaml
+kemo:
+  api_key: "你的-kemo-网关调用密钥"
 ```
 
-图谱抽取默认采用 `large` 粗粒度，可在网页“系统配置”或 `config/config.json` 中调整为 `small`（细）、`medium`（标准）或 `large`（粗）；同时可用 `graph_extract_chunk_size` 调整基准分段大小。粗粒度会限制每段实体和关系预算，细节优先写入节点摘要，避免图谱膨胀。检索会自动保留原始问题，并在安全范围内扩展同义词、批量召回，再用精确词面通道补救中文短词和标识符命中。
+应用配置统一使用 UTF-8 YAML：`config/config.yaml` 保存密钥、模型、存储路径与 `web.host` / `web.port`，该文件不进入 Git；`config/config.example.yaml` 提供无密钥模板，`config/logging.yaml` 使用标准 Python logging 配置，`version.yaml` 保存发布版本。旧 JSON 配置和 `.env` 不再加载；部署环境仍可通过进程环境变量覆盖路径、监听地址或提供网关密钥。npm、TypeScript 和 Python 构建工具的原生清单保留其要求的 JSON/TOML 格式。
+
+图谱抽取默认采用 `large` 粗粒度，可在网页“系统配置”或 `config/config.yaml` 中调整为 `small`（细）、`medium`（标准）或 `large`（粗）；同时可用 `graph_extract_chunk_size` 调整基准分段大小。粗粒度会限制每段实体和关系预算，细节优先写入节点摘要，避免图谱膨胀。检索会自动保留原始问题，并在安全范围内扩展同义词、批量召回，再用精确词面通道补救中文短词和标识符命中。
 
 修改图谱档位后，下一次扫描会自动将已完成文档标记为 Graph 待重建；可运行 `python start.py rebuild-knowledge-base` 重新整理，而无需因此重建未变化的 RAG 向量。
 
-在 `config/config.json` 中确认网关地址与所需模型，然后构建网页前端并启动：
+在 `config/config.yaml` 中确认网关地址与所需模型，然后构建网页前端并启动：
 
 ```powershell
 cd web\frontend
@@ -116,8 +119,8 @@ cd kemo-graph
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
-# 编辑 .env 与 config/config.json，配置网关和模型
+cp config/config.example.yaml config/config.yaml
+# 编辑 config/config.yaml，配置网关、模型、路径与监听地址
 cd web/frontend
 npm ci
 npm run build
@@ -131,7 +134,7 @@ python start_web.py
 
 ### 网页
 
-启动后即可在浏览器中：按实际目录管理原文件、预览多格式资料与编辑文本、查看独立构建状态、浏览知识图谱、使用五种检索模式、管理回收站，并追踪后台任务、检索步骤与运行日志。
+启动后即可在浏览器中：按实际目录管理原文件、预览多格式资料与编辑文本、查看独立构建状态、浏览知识图谱、使用五种检索模式，并追踪后台任务、检索步骤与运行日志。
 
 <p align="center">
   <img src="kemo-graph-web.png" alt="kemo-graph 网页端知识检索界面" width="100%">
@@ -149,7 +152,7 @@ python start_web.py
 - `sources.library_path` 和 `file_map.json` 将原文件路径映射到独立的 Markdown 产物。Graph/RAG 读取处理产物，检索与图谱来源链接定位原文件。
 - 文件菜单提供重命名、移动、构建与删除。改名或移动保留 `source_id`、处理产物路径和已有索引，同时更新来源映射；不调用模型。同目录同名不同内容的导入会返回冲突。
 - 刷新会发现磁盘新增、修改与删除，重新生成变化文件的处理产物；编辑与刷新本身不调用模型，随后可构建指定文件或目录。
-- 删除会回收原文件与处理产物，并清理对应 Graph/RAG 数据。后台构建期间请等待完成再移动资料。
+- 删除会永久移除原文件、处理产物及对应 Graph/RAG 数据。后台构建期间请等待完成再移动资料。
 - Portable Store 使用 `content/originals/` 与 `content/markdown/`，通过 `/api/v1/stores/library/{list,create,move,delete,refresh}` 管理实际目录，`store_root` 在请求体中指定。
 
 旧版仅保留处理后 Markdown 的资料不会被伪装成原文件。升级后请重新导入原始资料以获得原格式预览；旧索引与处理产物保留在磁盘。旧项目组织 API 已移除，调用方需改用目录 API。
@@ -162,11 +165,15 @@ python start_web.py
 
 #### 构建状态
 
-知识库的名称/路径搜索位于页面右上角。Graph / RAG 状态筛选集中到侧边栏的“构建状态”页：可查看两条构建链路的待处理、处理中、就绪和失败数量，组合文件名与状态筛选，每页最多显示 6 篇文档，列表内部滚动。支持手动刷新或每 5 秒自动刷新；离开页面停止轮询，不中断后台构建任务。导入、编辑和按文件或目录构建的入口位于知识库中。
+“构建状态”采用顶部概览、左侧文档队列、右侧处理稿的布局。顶部并排显示 RAG 与知识图谱的四种状态数量，点击数量可组合筛选；右侧仅保留重新构建失败项、搜索与刷新。文档卡片同时显示两条链路，展开后可查看真实成功步骤、失败位置和错误，定位原文件或重新构建单个文件。旧文档没有步骤记录时如实显示暂无记录。
+
+右侧直接预览独立处理目录中的 Markdown，显示文件大小、原文件位置和处理稿路径，并支持编辑。“确认保存，不构建”只保存处理稿；“保存并重新构建”保存后重建该文件的两条链路。编辑不改原实体文件；旧索引保留至重建替换。批量失败重建仅重试失败链路，不带入其他待处理文档。每页最多显示 6 篇文档，列表和预览各自滚动；支持手动或每 5 秒刷新，离开页面不影响后台构建。
 
 #### 运行状态与日志
 
 “运行状态”页提供独立的运行日志卡片，可切换**终端启动日志、查询日志、内部运行日志**，按 UTC 日期查看；支持手动刷新、每 5 秒自动刷新与跟随最新记录。日志在卡片内部滚动，不撑长整页。
+
+日志文件和终端输出均采用 TSV 表格，固定六列：`time`、`level`、`module`、`action`、`detail`、`elapsed_ms`。网页同样显示六列，表头固定，长详情自动换行，窄屏在表格内部横向滚动。重启辅助日志保存为 `update/runtime/restart.tsv`。
 
 终端标签展示启用记录后的 Web 启停及 Python/Uvicorn 日志，不回补历史 shell 输出，也不捕获未接入 logging 的第三方直接输出。查询日志包含开始、完成、失败、耗时、缓存和召回事件，使用 `query_id` 关联查询生命周期，不额外记录问题正文或模型回答。默认显示最近 200 条，单次只扫描当天日志文件末尾 2 MB；密钥、Bearer、Token 等敏感内容会脱敏。升级后需重启服务才能开始记录新增终端日志。
 
@@ -182,7 +189,9 @@ python start_web.py
 
 #### 知识文档预览与渲染
 
-网页直接读取原文件：PDF 使用浏览器阅读器，图片直接显示；DOCX 显示正文、表格与图片，XLS/XLSX/XLSM 展示所有工作表，PPTX 按顺序展示全部幻灯片的文本、图片和表格，另支持 EPUB、RTF、EML 与 HTML。Office 预览保留内容，不保证与桌面 Office 的分页、字体或动画完全一致；二进制文件可下载后本地编辑。HTML 在受限沙箱中显示。
+网页直接读取原文件：Word、PDF 和 PowerPoint 使用 Apache-2.0 开源项目 File Viewer 的 React 组件及对应渲染模块，PDF 引擎为 Mozilla PDF.js；支持分页、缩放、搜索及原件下载。官方 Vite 插件在构建时将配套 Worker、WASM 和字体资源放入 `dist/assets/file-viewer`，随网页一起部署，不依赖设备安装桌面 Office、LibreOffice 或公共 CDN，也不向第三方预览服务上传文档。Word 和 PowerPoint 保留文档与幻灯片版式；特殊字体、动画及复杂 Office 特性仍以桌面应用显示为准。
+
+图片直接显示，XLS/XLSX/XLSM 展示所有工作表，另支持 EPUB、RTF、EML 与 HTML。二进制文件可下载后本地编辑。HTML 在受限沙箱中显示。原文件预览与图谱使用的 Markdown 转换独立；展开预览约占屏幕宽度的 84%、高度的 90%，点击外部遮罩可关闭。
 
 Markdown 预览读取原始 `.md` / `.markdown` 文件，使用 `react-markdown`、GFM、KaTeX 和按需加载的 Mermaid 渲染器，支持：
 
@@ -293,9 +302,11 @@ kemo-graph 不试图成为替代所有文件管理、所有数据库或所有搜
 
 核心闭环已经可以实际运行：统一导入、增量更新、图谱与向量检索、混合问答、安全删除、定时维护，以及本地 Web、CLI、HTTP API 三个入口和面向 kemo-agent 等智能体的外部知识服务接口。
 
-当前版本为 **1.6.0**。本次更新在文档归一化层增加统一的知识文本净化：DOCX、HTML 及其他格式转换结果中的图片、Data URI、Base64 二进制、脚本和样式不会再进入图谱与向量化流程，同时保留图片说明等可读文本；Graph/RAG 读取入口也增加了历史脏 Markdown 的防御性清理。此前 1.5.1 的独立 Store 文档组织、导入异常修复、Kemo 请求标识符修复、网页运行日志和版本检测能力保持不变。
+当前版本为 **2.0.0**。知识库按真实文件目录管理原始资料，通过独立映射维护处理稿；Graph/RAG 构建提供后台任务、逐文档进度、失败重试及处理稿编辑。图谱与全文检索使用统一的分词和检索能力，网页工作区同步更新。转换层统一异常语义和格式能力声明，并支持按内容识别无扩展名文件。原文件预览与索引转换保持独立，处理产物继续过滤图片二进制、Data URI、脚本和样式。
 
-完整更新摘要、升级注意事项与发布验证命令见 [CHANGELOG.md](CHANGELOG.md)。应用版本以根目录 `version.json` 为准，前端包和转换层包的发布元数据同步为同一版本；本版本已完成 Kemo 2.0 Provider 适配，继续使用 `/api/v1` 的项目 HTTP API 路径。
+PDF 中可识别的网格表格会保留为 Markdown 表格，表旁及表后正文不丢弃，无表格页面保持原有输出。新增 DOCM、PPTM 内容读取，延续 XLSM 支持，不执行 VBA；DOCM 必须使用 Mammoth 与 markdownify，不回退到 python-docx。完整格式边界、依赖及限制见 [转换层说明](markitdown/README.md)。
+
+完整更新摘要、升级注意事项与发布验证命令见 [CHANGELOG.md](CHANGELOG.md)。应用版本以根目录 `version.yaml` 为准，前端包和转换层包的发布元数据同步为同一版本；本版本已完成 Kemo 2.0 Provider 适配，继续使用 `/api/v1` 的项目 HTTP API 路径。
 
 仍在持续打磨：复杂文档版式的转换质量、大知识库与高并发下的存储与索引策略、外部 API 的内建鉴权与权限分层、更丰富的图谱人工校正与来源审查界面。
 

@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_path_hash ON sources(path_hash);
 CREATE INDEX IF NOT EXISTS idx_sources_graph_status ON sources(graph_status);
 CREATE INDEX IF NOT EXISTS idx_sources_rag_status ON sources(rag_status);
+CREATE TABLE IF NOT EXISTS source_build_steps (
+    source_id TEXT NOT NULL,
+    pipeline TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    step TEXT NOT NULL,
+    label TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    PRIMARY KEY (source_id, pipeline, position),
+    FOREIGN KEY(source_id) REFERENCES sources(source_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS maintenance_jobs (
     job_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -449,7 +464,15 @@ def connect_search_cache(paths: DatabasePaths) -> sqlite3.Connection:
 
 
 def connect_graph(paths: DatabasePaths) -> sqlite3.Connection:
-    return _connect(paths.graph_db)
+    from .fulltext import load_simple
+
+    connection = _connect(paths.graph_db)
+    try:
+        load_simple(connection)
+    except Exception:
+        connection.close()
+        raise
+    return connection
 
 
 def connect_rag(paths: DatabasePaths) -> sqlite3.Connection:

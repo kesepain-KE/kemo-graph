@@ -18,9 +18,10 @@ from ._exceptions import (
     UnsupportedFormatError,
     UnsafeInputError,
 )
-from ._markitdown import MarkItDown
+from ._markitdown import MarkItDown, detect_file_type
+from .converters import supported_suffixes
 
-__version__ = "1.6.0"
+__version__ = "2.0.0"
 
 __all__ = [
     "DocumentConversionError",
@@ -32,5 +33,7 @@ __all__ = [
     "MissingOptionalDependencyError",
     "UnsupportedFormatError",
     "UnsafeInputError",
+    "detect_file_type",
+    "supported_suffixes",
     "__version__",
 ]

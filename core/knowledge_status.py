@@ -49,7 +49,6 @@ from .ingestor import (
     FileMapError,
     IngestError,
     Ingestor,
-    RecycleConflictError,
 )
 from .logger import DailyTSVLogger
 from .locks import get_knowledge_base_lock
@@ -227,7 +226,7 @@ class KnowledgeStatusMixin:
 
     def _save_config_impl(self, data: dict[str, Any]) -> dict[str, Any]:
         """保存配置并校验；密钥掩码表示保留当前显式密钥。"""
-        from .config import AppConfig
+        from .config import AppConfig, write_config
 
         candidate = deepcopy(data)
         raw_kemo = candidate.get("kemo")
@@ -238,12 +237,7 @@ class KnowledgeStatusMixin:
             raw_kemo.pop("api_key_source", None)
 
         new_config = AppConfig.model_validate(candidate)
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
-        temporary.write_text(
-            new_config.model_dump_json(indent=2) + "\n", encoding="utf-8"
-        )
-        os.replace(temporary, self.config_path)
+        write_config(self.config_path, new_config)
         self.settings = new_config
         self.data_dir = self._data_dir_override or new_config.resolve_data_dir()
         self.external_dir = (

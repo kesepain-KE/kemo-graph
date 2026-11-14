@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="version.json"><img src="https://img.shields.io/badge/version-1.6.0-00a98f" alt="version 1.6.0"></a>
+  <a href="version.yaml"><img src="https://img.shields.io/badge/version-2.0.0-00a98f" alt="version 2.0.0"></a>
   <a href="https://github.com/kesepain-KE/kemo-graph"><img src="https://img.shields.io/badge/status-early%20development-5966d9" alt="status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="license"></a>
   <a href="api.md"><img src="https://img.shields.io/badge/API-agent%20integration-0ea5e9" alt="API"></a>
@@ -82,20 +82,23 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-Copy-Item .env.example .env
+Copy-Item config\config.example.yaml config\config.yaml
 ```
 
-At minimum, configure your gateway key in `.env`:
+At minimum, configure your gateway key in `config/config.yaml`:
 
-```dotenv
-KEMO_API_KEY=your-kemo-gateway-key
+```yaml
+kemo:
+  api_key: "your-kemo-gateway-key"
 ```
 
-Graph extraction defaults to `large` (coarse) and can be adjusted in the Web “System settings” panel or `config/config.json` to `small` (fine), `medium` (standard), or `large` (coarse). Use `graph_extract_chunk_size` to tune the baseline section size. Coarse mode also applies per-section entity/relation budgets and puts details into summaries instead of creating graph fragments. Retrieval keeps the original query, adds bounded synonym/concept expansions, fuses multi-query candidates, and uses an exact-term fallback for short keywords and identifiers.
+Application settings use UTF-8 YAML: `config/config.yaml` holds credentials, models, storage paths and `web.host` / `web.port` and is ignored by Git; `config/config.example.yaml` is the credential-free template, `config/logging.yaml` uses standard Python logging configuration, and `version.yaml` holds release metadata. Legacy JSON settings and `.env` are no longer loaded. Process environment variables may still override paths and Web binding or provide the gateway key. npm, TypeScript and Python build manifests retain their required JSON/TOML formats.
+
+Graph extraction defaults to `large` (coarse) and can be adjusted in the Web “System settings” panel or `config/config.yaml` to `small` (fine), `medium` (standard), or `large` (coarse). Use `graph_extract_chunk_size` to tune the baseline section size. Coarse mode also applies per-section entity/relation budgets and puts details into summaries instead of creating graph fragments. Retrieval keeps the original query, adds bounded synonym/concept expansions, fuses multi-query candidates, and uses an exact-term fallback for short keywords and identifiers.
 
 After changing the graph profile, the next scan marks completed documents as Graph-pending automatically. Run `python start.py rebuild-knowledge-base` to rebuild the graph without rebuilding unchanged RAG vectors.
 
-Confirm the gateway address and models in `config/config.json`, then build the web frontend and start:
+Confirm the gateway address and models in `config/config.yaml`, then build the web frontend and start:
 
 ```powershell
 cd web\frontend
@@ -116,8 +119,8 @@ cd kemo-graph
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
-# Edit .env and config/config.json for your gateway and models
+cp config/config.example.yaml config/config.yaml
+# Edit config/config.yaml for gateway, models, paths and Web binding
 cd web/frontend
 npm ci
 npm run build
@@ -131,7 +134,7 @@ python start_web.py
 
 ### Web
 
-The browser provides original-file directory management, multi-format previews, text editing, dedicated build status, graph exploration, five retrieval modes, recycle-bin management, background task tracking, query-stage progress and runtime logs.
+The browser provides original-file directory management, multi-format previews, text editing, dedicated build status, graph exploration, five retrieval modes, background task tracking, query-stage progress and runtime logs.
 
 <p align="center">
   <img src="kemo-graph-web.png" alt="kemo-graph web knowledge retrieval interface" width="100%">
@@ -149,7 +152,7 @@ The library has three resizable panes: the original-file directory tree, immedia
 - `sources.library_path` and `file_map.json` map each original to its processed artifact. Graph/RAG reads processed Markdown; retrieval and graph source links open the original.
 - File menus rename, move, build or delete entries. Moves preserve source IDs, processed paths and existing indexes while updating source mappings, with no model calls. Importing different content under an occupied name returns a conflict.
 - Refresh discovers additions, changes and deletions on disk. Refreshing and editing update processed artifacts without calling models; build a selected file or directory afterward.
-- Deletion recycles originals and processed files and removes corresponding Graph/RAG data. Wait for background builds before relocating files.
+- Deletion permanently removes originals, processed files and corresponding Graph/RAG data. Wait for background builds before relocating files.
 - Portable Stores use `content/originals/` and `content/markdown/`, with `/api/v1/stores/library/{list,create,move,delete,refresh}` and `store_root` in the JSON body.
 
 Files retained only as processed Markdown by older versions are not presented as originals. Reimport the original materials for native-format previews; existing indexes and processed files remain on disk. The previous project-organization API has been removed.
@@ -162,11 +165,15 @@ Document chunking and document embedding belong to ingestion. Retrieval processe
 
 #### Build status
 
-Name/path search is at the top right of the library. Graph / RAG filters live on the sidebar's **Build Status** page, alongside pending, processing, ready and failed counts. Combine filename and status filters, browse up to six documents per page, and scroll inside the list. Refresh manually or every five seconds; leaving the page stops polling without interrupting builds. Import, edit and file/directory build actions are in the library.
+**Build Status** has compact pipeline summaries above a document queue and a processed-Markdown panel. Click RAG / Graph status counts to combine filters. The top-right actions are retry failed builds, search, and refresh. Each document card shows both pipelines; expand it for real completed steps, the exact failure and error, a link to the original, and a single-document rebuild. Sources without step history show no fabricated progress.
+
+The right panel previews and edits the separate processed Markdown, with file size and original/processed paths. Save without building, or save and rebuild both pipelines for that file. Originals are never changed; existing indexes remain available until replaced. Bulk retry runs only failed pipelines, not unrelated pending work. Browse six documents per page with independent panel scrolling and optional five-second refresh. Leaving the page does not interrupt background builds.
 
 #### Runtime status and logs
 
 The Runtime Status page includes a log card with **Terminal startup**, **Queries**, and **Internal events** tabs. Select a UTC date, refresh manually or every five seconds, and optionally follow the newest entries. Logs scroll inside the card.
+
+Persisted and console logs use TSV tables with six fixed columns: `time`, `level`, `module`, `action`, `detail`, and `elapsed_ms`. The Web viewer displays the same columns with sticky headings, wrapped details and internal horizontal scrolling on narrow screens. Restart helper logs are stored in `update/runtime/restart.tsv`.
 
 Terminal logging starts after the upgraded service restarts and covers Web lifecycle events and Python/Uvicorn logging; previous shell output and arbitrary third-party stdout are not captured. Query lifecycle events include a `query_id`, outcome and duration, without newly recording question bodies or model answers. The viewer shows up to 200 entries and reads at most the final 2 MB of the selected daily log. API keys, Bearer tokens and other credential patterns are redacted.
 
@@ -182,7 +189,9 @@ Long-running Web/API processes share a bounded read-through cache for knowledge-
 
 #### Knowledge-document preview and rendering
 
-The preview reads originals directly: browser PDF viewing and images; DOCX text, tables and images; every XLS/XLSX/XLSM sheet; text, images and tables from every PPTX slide in order; and EPUB, RTF, EML and HTML. Office previews preserve content without guaranteeing desktop Office pagination, fonts or animations. Binary files can be downloaded for local editing. HTML is displayed in a restricted sandbox.
+The preview reads originals directly. Word, PDF and PowerPoint use the Apache-2.0 File Viewer React component and matching renderers, with Mozilla PDF.js powering PDF rendering. The official Vite plugin bundles the workers, WASM and fonts into `dist/assets/file-viewer` for deployment with the application. Previewing requires no desktop Office or LibreOffice installation, public CDN, or third-party document upload. Documents and slides retain their layout; special fonts, animations and complex Office features can still differ from desktop applications.
+
+Images display directly; XLS/XLSX/XLSM previews include every worksheet, with EPUB, RTF, EML and sandboxed HTML also supported. Binary originals remain downloadable for local editing. Original previews remain independent of the Markdown indexing pipeline. Expanded previews occupy approximately 84% of viewport width and 90% of viewport height; clicking the surrounding overlay closes them.
 
 Markdown preview reads the original `.md` / `.markdown` file. It uses `react-markdown`, GFM, KaTeX and a Mermaid renderer loaded on demand. Supported features include:
 
@@ -288,9 +297,11 @@ An agent that truly accompanies a long-lived project should not only have a long
 
 The core loop is already runnable: unified import, incremental updates, graph and vector retrieval, hybrid Q&A, safe deletion, scheduled maintenance, plus three entry points (Web, CLI, HTTP API) and an external knowledge-service interface for agents such as kemo-agent.
 
-The current release is **1.6.0**. This release adds a unified knowledge-text sanitizer to the document normalization layer: images, Data URIs, Base64 binary payloads, scripts, and styles produced by DOCX, HTML, and other converters no longer enter graph or vector processing, while readable image descriptions are preserved. The Graph/RAG source-reading boundary also defensively cleans legacy Markdown containing binary residue. The portable-Store organization, import-error fix, Kemo request-ID fix, terminal-style runtime logs, and version detection from 1.5.1 remain unchanged.
+The current release is **2.0.0**. The library manages original documents through their real filesystem paths and maintains processed files through a separate mapping. Background Graph/RAG jobs provide per-document progress, failed-task retries, and processed-document editing. Graph and full-text search share tokenization and retrieval capabilities, alongside an updated web workspace. The conversion layer unifies error semantics and registered format capabilities and recognizes extensionless files by content. Original-file previews remain independent of indexing conversion; processed output still excludes binary image payloads, Data URIs, scripts, and styles.
 
-See [CHANGELOG.md](CHANGELOG.md) for the release summary, upgrade notes and verification commands. The root `version.json` is the application-version source; frontend and converter-package release metadata share the same version. This release includes the Kemo 2.0 Provider adaptation and keeps kemo-graph's own HTTP routes under `/api/v1`.
+Recognized grid tables in PDFs are retained as Markdown tables, with surrounding prose preserved and table-free pages unchanged. DOCM and PPTM content reading joins existing XLSM support without executing VBA. DOCM requires Mammoth and markdownify and never falls back to python-docx. See the [conversion-layer guide](markitdown/README.md) for supported formats, dependencies and limits.
+
+See [CHANGELOG.md](CHANGELOG.md) for the release summary, upgrade notes and verification commands. The root `version.yaml` is the application-version source; frontend and converter-package release metadata share the same version. This release includes the Kemo 2.0 Provider adaptation and keeps kemo-graph's own HTTP routes under `/api/v1`.
 
 Still being polished: conversion quality for complex document layouts, storage and index strategy for large knowledge bases and high concurrency, built-in authentication and permission tiers for the external API, and richer manual graph correction and provenance review interfaces.
 
