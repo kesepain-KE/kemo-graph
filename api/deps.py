@@ -8,8 +8,9 @@ from pathlib import Path
 
 from fastapi import Depends, Request
 
-from core.config import AppConfig, DEFAULT_CONFIG_PATH, load_config
-from core.knowledge_base import KnowledgeBaseService
+from core.settings.schema import AppConfig, DEFAULT_CONFIG_PATH
+from core.settings.loader import load_config
+from core.service.facade import KnowledgeBaseService
 from core.jobs import MaintenanceJobManager
 from update import ApplicationUpdater
 

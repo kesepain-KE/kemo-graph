@@ -8,13 +8,18 @@ from fastapi.testclient import TestClient
 from api import create_app
 from api.schemas import APIResponse
 from core import library
-from core.config import AppConfig
-from core.db import connect_sources, initialize_databases
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_sources
+from core.storage.schema import initialize_databases
 from core.document_preview import preview_document
-from core.ingestor import FileMapStore, Ingestor
-from core.knowledge_base import KnowledgeBaseService, DocumentContentConflictError, DocumentImportError
-from core.rag_engine import RAGEngine
-from core.search_cache import SearchCache, SearchCacheCleanupError, SearchCacheError, compute_state_hash, make_cache_key
+from core.ingestor._file_map import FileMapStore
+from core.ingestor import Ingestor
+from core.service.facade import KnowledgeBaseService
+from core.documents.errors import DocumentContentConflictError, DocumentImportError
+from core.rag.engine import RAGEngine
+from core.retrieval.cache.store import SearchCache
+from core.retrieval.cache.errors import SearchCacheCleanupError, SearchCacheError
+from core.retrieval.cache.keys import compute_state_hash, make_cache_key
 
 
 @pytest.fixture
@@ -476,7 +481,7 @@ def test_copy_rejects_nested_links_before_creating_a_destination(service, tmp_pa
 
 def test_directory_browsing_remains_available_while_graph_write_lock_is_held(service):
     from threading import Event, Thread
-    from core.locks import get_knowledge_base_lock
+    from core.storage.locks import get_knowledge_base_lock
     library.create_entry(service, "", "A", "directory")
     locked, release = Event(), Event()
     def building():

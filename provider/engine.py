@@ -12,7 +12,8 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from core.config import AppConfig, load_config
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
 
 from . import (
     ProviderError,

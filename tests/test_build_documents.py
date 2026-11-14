@@ -10,12 +10,13 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from core import build_documents, library
-from core.config import AppConfig
-from core.db import connect_sources
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_sources
 from core.ingestor import Ingestor
 from core.jobs import MaintenanceJobManager
-from core.knowledge_base import KnowledgeBaseService, DocumentContentConflictError
-from core.locks import get_knowledge_base_lock
+from core.service.facade import KnowledgeBaseService
+from core.documents.errors import DocumentContentConflictError
+from core.storage.locks import get_knowledge_base_lock
 from provider.embedding import EmbeddingResult
 
 

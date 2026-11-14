@@ -8,14 +8,16 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from core.config import AppConfig, load_config
-from core.db import connect_sources, initialize_databases
-from core.knowledge_base import KnowledgeBaseService
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.connections import connect_sources
+from core.storage.schema import initialize_databases
+from core.service.facade import KnowledgeBaseService
 from core.logger import DailyTSVLogger
 from core.log_viewer import read_logs
 from core.read_cache import MemoryReadCache, READ_CACHE, database_revision, file_revision
-from core.search_cache import cache_key_lock, compute_state_hash
-import core.search_cache as search_cache
+from core.retrieval.cache.keys import cache_key_lock, compute_state_hash
+import core.retrieval.cache.keys as search_cache
 
 
 @pytest.fixture(autouse=True)
@@ -218,7 +220,7 @@ def test_config_and_file_replacement_invalidate_without_mutable_sharing(tmp_path
 
 
 def test_query_locks_are_reclaimed_including_nested_and_error_paths(tmp_path):
-    from core.db import get_database_paths
+    from core.storage.paths import get_database_paths
     paths = get_database_paths(tmp_path)
     for index in range(100):
         with cache_key_lock(paths, str(index)):

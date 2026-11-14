@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 import start
 from api import create_app
 from api.deps import get_job_manager
-from core.config import AppConfig
-from core.db import connect_graph, connect_sources
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph, connect_sources
 from core.ingestor import Ingestor
 from core.jobs import MaintenanceJobManager
 from core.rebuilder import KnowledgeBaseRebuilder, RebuildError

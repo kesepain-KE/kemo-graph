@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from core.config import AppConfig, load_config
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
 
 
-from .paths import DatabasePaths, get_database_paths
-from .connections import _connect
-from .meta import default_graph_meta, default_rag_meta, write_graph_meta, write_rag_meta
+from core.storage.paths import DatabasePaths, get_database_paths
+from core.storage.connections import _connect
+from core.storage.meta import default_graph_meta, default_rag_meta, write_graph_meta, write_rag_meta
 
 SOURCES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (

@@ -8,11 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.config import AppConfig
-from core.db import connect_graph, connect_rag, initialize_databases
-from core.graph_organizer import GraphOrganizer
-from core.knowledge_base import KnowledgeBaseService
-from core.rag_engine import RAGEngine
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph, connect_rag
+from core.storage.schema import initialize_databases
+from core.graph.organizer import GraphOrganizer
+from core.service.facade import KnowledgeBaseService
+from core.rag.engine import RAGEngine
 from provider.embedding import EmbeddingResult
 
 
@@ -404,7 +405,7 @@ class GlobalSearchTests(unittest.TestCase):
 
             service = KnowledgeBaseService(settings=settings, data_dir=root / "data")
             with (
-                patch("core.rag_engine.embed", side_effect=embedding),
+                patch("core.rag.vectors.embed", side_effect=embedding),
                 patch(
                     "core.service.context.chat",
                     return_value="知识库主要讨论知识图谱与向量检索。",

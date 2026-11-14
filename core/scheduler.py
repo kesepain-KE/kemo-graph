@@ -8,8 +8,8 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any, Protocol
 
-from .config import AppConfig
-from .logger import DailyTSVLogger
+from core.settings.schema import AppConfig
+from core.logger import DailyTSVLogger
 
 
 LOGGER = logging.getLogger(__name__)

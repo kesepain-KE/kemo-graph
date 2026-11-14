@@ -1,14 +1,14 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
-from core.settings import AppConfig
-from core.graph_visualization import GraphDirection
+from core.settings.schema import AppConfig
+from core.graph.visualization import GraphDirection
 from core.rebuilder import ProgressCallback
-from .context import ServiceContext
-from .documents import DocumentService
-from .graph import GraphService
-from .retrieval import RetrievalService
-from .maintenance import MaintenanceService
+from core.service.context import ServiceContext
+from core.service.documents import DocumentService
+from core.service.graph import GraphService
+from core.service.retrieval import RetrievalService
+from core.service.maintenance import MaintenanceService
 
 class KnowledgeBaseService:
     def __init__(self, *, settings: AppConfig | None = None, data_dir: Path | str | None = None, external_dir: Path | str | None = None, config_path: Path | str | None = None) -> None:

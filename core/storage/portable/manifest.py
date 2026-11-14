@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from .paths import _absolute_root
+from core.storage.portable.paths import _absolute_root
 
 import json
 import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID
-from core.config import AppConfig
+from core.settings.schema import AppConfig
 
 
-from .models import STORAGE_DIRECTORY_NAME, STORE_MANIFEST_VERSION, STORE_SCOPES, PortableStoreError, PortableStoreManifest
-from .paths import resolve_store_paths
+from core.storage.portable.models import STORAGE_DIRECTORY_NAME, STORE_MANIFEST_VERSION, STORE_SCOPES, PortableStoreError, PortableStoreManifest
+from core.storage.portable.paths import resolve_store_paths
 
 def load_store_manifest(
     store_root: Path | str,

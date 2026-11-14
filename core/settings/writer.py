@@ -5,8 +5,8 @@ from pathlib import Path
 import yaml
 
 
-from .schema import AppConfig
-from .errors import ConfigLoadError
+from core.settings.schema import AppConfig
+from core.settings.errors import ConfigLoadError
 
 def write_config(config_path: Path | str, settings: AppConfig) -> None:
     """以 UTF-8 YAML 原子保存已经校验的配置。"""

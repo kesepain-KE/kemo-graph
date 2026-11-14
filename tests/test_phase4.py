@@ -14,15 +14,11 @@ from provider.embedding import EmbeddingResult
 
 from api import create_app
 from core import library
-from core.config import AppConfig
-from core.db import (
-    connect_graph,
-    connect_rag,
-    connect_sources,
-    read_graph_meta,
-)
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.storage.meta import read_graph_meta
 from core.ingestor import Ingestor
-from core.knowledge_base import KnowledgeBaseService
+from core.service.facade import KnowledgeBaseService
 
 
 def _settings() -> AppConfig:
@@ -546,8 +542,8 @@ class LibraryDeleteCascadeTests(unittest.TestCase):
         self.assert_removed()
 
     def test_scan_cleans_orphans_after_embedding_configuration_changes(self) -> None:
-        from core.rag_engine import RAGEngine
-        from core.rag_errors import IndexIntegrityError
+        from core.rag.engine import RAGEngine
+        from core.rag.errors import IndexIntegrityError
 
         settings = self.service.settings.model_copy(update={
             "models": self.service.settings.models.model_copy(update={

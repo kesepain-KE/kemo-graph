@@ -14,14 +14,13 @@ from fastapi.testclient import TestClient
 
 import start
 from api import create_app
-from core.config import AppConfig
-from core.db import initialize_databases
-from core.portable_store import (
-    create_store_service,
-    initialize_store,
-    resolve_store_paths,
-)
-from core.search_cache import SearchCache, SearchCacheCleanupError, SearchCacheError
+from core.settings.schema import AppConfig
+from core.storage.schema import initialize_databases
+from core.service.federation import create_store_service
+from core.service.federation import initialize_store
+from core.storage.portable.paths import resolve_store_paths
+from core.retrieval.cache.store import SearchCache
+from core.retrieval.cache.errors import SearchCacheCleanupError, SearchCacheError
 
 
 def _settings(root: Path) -> AppConfig:

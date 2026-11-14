@@ -14,10 +14,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import create_app
-from core.config import AppConfig
+from core.settings.schema import AppConfig
 from core.logger import DailyTSVLogger, LOG_COLUMNS, TSVFormatter, TSVStreamHandler, redact_log_text
 from core.log_viewer import read_logs
-from core.query_logging import trace_query
+from core.observability.query_logging import trace_query
 from core.terminal_logging import TerminalLogHandler, capture_terminal_logs
 
 

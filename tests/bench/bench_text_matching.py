@@ -67,9 +67,10 @@ def main():
     parser.add_argument("--baseline-timeout", type=float, default=120.0)
     parser.add_argument("--baseline-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    from core.entity_extractor import Entity
-    from core.graph_engine import GraphEngine, _indexed_nodes
-    from core.graph_organizer import _find_candidates
+    from core.graph.entity import Entity
+    from core.graph.engine import GraphEngine
+    from core.graph.matching import _indexed_nodes
+    from core.graph.candidates import _find_candidates
     if args.baseline_only:
         connection, _ = fixture(args.nodes[0])
         try:
@@ -109,7 +110,7 @@ def main():
                     cold, _ = timed(lambda: engine._match_nodes(connection, entities, 0.7))
                     after, actual = timed(lambda: engine._match_nodes(connection, entities, 0.7), repeats=3)
                     expected_values = [original._matched_node_to_dict(item) for item in expected]
-                    from core.graph_engine import _matched_node_to_dict
+                    from core.graph.matching import _matched_node_to_dict
                     assert [_matched_node_to_dict(item) for item in actual] == expected_values
                     print(f"| matching | {count} | {entities_count} | {before:.6f} | {cold:.6f} | {after:.6f} | {before / after:.2f}x | yes |", flush=True)
         finally:

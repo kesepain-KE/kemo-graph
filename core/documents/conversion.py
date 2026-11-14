@@ -24,14 +24,10 @@ from markitdown._exceptions import (
     UnsupportedFormatError,
     UnsafeInputError,
 )
-from .errors import (
-    DocumentImportPathError,
-    DocumentTooLargeError,
-    UnsupportedDocumentFormatError,
-)
+from core.documents.errors import DocumentImportPathError, DocumentTooLargeError, UnsupportedDocumentFormatError
 
 
-from .formats import SUPPORTED_IMPORT_SUFFIXES
+from core.documents.formats import SUPPORTED_IMPORT_SUFFIXES
 
 _MARKITDOWN = MarkItDown()
 

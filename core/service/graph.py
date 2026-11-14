@@ -1,19 +1,20 @@
 from __future__ import annotations
-from core.db import connect_graph, connect_sources
+from core.storage.connections import connect_graph, connect_sources
 
 from datetime import datetime, timezone
 from typing import Any
-from core.db import connect_graph, connect_rag, connect_sources
-from core.graph_visualization import get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
-from core.ingestor import DocumentNotFoundError, Ingestor
-from core.locks import get_knowledge_base_lock
-from core.search_cache import clear_search_cache_after_mutation
-from core.rag_engine import RAGEngine
-from core.service.errors import DocumentContentConflictError
-from core.common import parse_json_list as _parse_json_list
+from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.graph.visualization import get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
+from core.ingestor._delete import DocumentNotFoundError
+from core.ingestor import Ingestor
+from core.storage.locks import get_knowledge_base_lock
+from core.retrieval.cache.store import clear_search_cache_after_mutation
+from core.rag.engine import RAGEngine
+from core.documents.errors import DocumentContentConflictError
+from core.common.text import parse_json_list as _parse_json_list
 
 
-from .context import ServiceContext
+from core.service.context import ServiceContext
 from core.graph.meta import refresh_graph_meta
 
 class GraphService:
@@ -146,7 +147,7 @@ class GraphService:
         }
 
     def search_nodes(self, query: str, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        from core.graph_search import prepare_node_search, search_nodes
+        from core.graph.search import prepare_node_search, search_nodes
 
         self.context._require_available("graph")
         connection = connect_graph(self.context.paths)
@@ -159,7 +160,7 @@ class GraphService:
     def update_node_summary(
         self, node_id: str, summary: str, expected_summary: str,
     ) -> dict[str, Any]:
-        from core.rag_engine import RAGEngine
+        from core.rag.engine import RAGEngine
 
         owner = self.context
         lock = get_knowledge_base_lock(owner.data_dir)
@@ -396,7 +397,7 @@ class GraphService:
 
     def get_visualization_meta(self) -> dict[str, Any]:
         self.context._require_available("graph")
-        from core.graph_visualization import get_visualization_meta
+        from core.graph.visualization import get_visualization_meta
 
         return get_visualization_meta(self.context.paths)
 
@@ -408,7 +409,7 @@ class GraphService:
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
         self.context._require_available("graph")
-        from core.graph_visualization import list_visualization_nodes
+        from core.graph.visualization import list_visualization_nodes
 
         return list_visualization_nodes(
             self.context.paths,
@@ -425,7 +426,7 @@ class GraphService:
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
         self.context._require_available("graph")
-        from core.graph_visualization import list_visualization_edges
+        from core.graph.visualization import list_visualization_edges
 
         return list_visualization_edges(
             self.context.paths,
@@ -445,7 +446,7 @@ class GraphService:
         expected_revision: str | None = None,
     ) -> dict[str, Any]:
         self.context._require_available("graph")
-        from core.graph_visualization import get_neighborhood
+        from core.graph.visualization import get_neighborhood
 
         return get_neighborhood(
             self.context.paths,

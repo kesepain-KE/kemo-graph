@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 
-from .paths import DatabasePaths
+from core.storage.paths import DatabasePaths
 
 def connect_sources(paths: DatabasePaths) -> sqlite3.Connection:
     return _connect(paths.sources_db)
@@ -15,7 +15,7 @@ def connect_search_cache(paths: DatabasePaths) -> sqlite3.Connection:
 
 
 def connect_graph(paths: DatabasePaths) -> sqlite3.Connection:
-    from core.fulltext import load_simple
+    from core.storage.fulltext import load_simple
 
     connection = _connect(paths.graph_db)
     try:

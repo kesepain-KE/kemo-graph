@@ -9,15 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from ..chunker import chunking_signature
-from ..db import (
-    connect_rag,
-    connect_sources,
-    read_graph_meta,
-    read_rag_meta,
-)
-from . import IngestError
-from ._utils import _elapsed_ms, _hash_relative_path, _now_iso, _path_key, _safe_source_path
+from core.chunker import chunking_signature
+from core.storage.connections import connect_rag, connect_sources
+from core.storage.meta import read_graph_meta, read_rag_meta
+from core.ingestor import IngestError
+from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.ingestor._utils import _hash_relative_path, _path_key, _safe_source_path
 
 
 @dataclass(frozen=True)
@@ -45,7 +42,7 @@ def cleanup_orphaned_sources(
 ) -> tuple[list[str], list[str]]:
     """Remove derived files whose original source no longer exists."""
 
-    from ..library import resolve_path
+    from core.library import resolve_path
 
     with self._write_lock:
         connection = connect_sources(self.paths)

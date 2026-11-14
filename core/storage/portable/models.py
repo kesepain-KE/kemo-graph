@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from core.db import DatabasePaths
+from core.storage.paths import DatabasePaths
 
 
 STORAGE_DIRECTORY_NAME = "kemo-graph-storage"

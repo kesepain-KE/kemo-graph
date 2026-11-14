@@ -3,11 +3,14 @@ import sqlite3
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
-from core.config import AppConfig, load_config
-from core.db import DatabasePaths, connect_graph, initialize_databases
-from core.entity_extractor import Entity, extract
-from core.query_planner import QueryPlan, plan_query
-from core.query_progress import step_status
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.paths import DatabasePaths
+from core.storage.connections import connect_graph
+from core.storage.schema import initialize_databases
+from core.graph.entity import Entity, extract
+from core.documents.query_planner import QueryPlan, plan_query
+from core.observability.progress import step_status
 from core.graph.matching import _CONTAINS_MATCH_SCORE, _MAX_SUMMARY_FALLBACK_NODES, _SUMMARY_CONTAINS_MATCH_SCORE, _build_paths, _build_relations, _entities_from_query_plan, _entity_keys, _get_neighbors, _indexed_nodes, _matched_node_to_dict, _node_match_score, _validate_depth_and_direction, _validate_query_parameters
 from core.graph.models import _MatchedNode
 from core.graph.errors import GraphQueryError

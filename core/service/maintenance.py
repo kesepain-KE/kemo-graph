@@ -5,18 +5,21 @@ import time
 from copy import deepcopy
 from typing import Any
 from uuid import uuid4
-from core.config import AppConfig
-from core.db import connect_graph, connect_rag, connect_sources, get_database_paths, read_graph_meta, write_graph_meta
-from core.graph_organizer import GraphOrganizer
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.storage.paths import get_database_paths
+from core.storage.meta import read_graph_meta, write_graph_meta
+from core.graph.organizer import GraphOrganizer
 from core.logger import DailyTSVLogger
-from core.rag_engine import FaissIndexManager, RAGEngine
+from core.rag.index import FaissIndexManager
+from core.rag.engine import RAGEngine
 from core.rebuilder import KnowledgeBaseRebuilder, ProgressCallback
 from core.service.errors import CONFIG_API_KEY_MASK
-from core.common import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
 
 
-from .context import ServiceContext
-from . import context as runtime
+from core.service.context import ServiceContext
+from core.service import context as runtime
 from core.graph.meta import refresh_graph_meta
 
 class MaintenanceService:
@@ -461,7 +464,8 @@ class MaintenanceService:
 
     def save_config(self, data: dict[str, Any]) -> dict[str, Any]:
         """保存配置并校验；密钥掩码表示保留当前显式密钥。"""
-        from core.config import AppConfig, write_config
+        from core.settings.schema import AppConfig
+        from core.settings.writer import write_config
 
         candidate = deepcopy(data)
         raw_kemo = candidate.get("kemo")

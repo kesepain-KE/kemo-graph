@@ -9,25 +9,16 @@ from typing import Annotated, Any, Callable, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 
-from core.knowledge_base import (
-    MAX_IMPORT_BYTES,
-    SUPPORTED_IMPORT_SUFFIXES,
-    DocumentIngestError,
-    DocumentTooLargeError,
-    KnowledgeBaseService,
-    UnsupportedDocumentFormatError,
-)
+from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
+from core.documents.errors import DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
+from core.service.facade import KnowledgeBaseService
 
 from core.jobs import MaintenanceJobManager
 from update import ApplicationUpdater, UpdateBlockedError, UpdatePermissionError
-from core.config import load_config
-from core.portable_store import (
-    create_store_service,
-    describe_store,
-    federated_query,
-    initialize_store,
-    load_store_manifest,
-)
+from core.settings.loader import load_config
+from core.service.federation import create_store_service, describe_store, federated_query
+from core.service.federation import initialize_store
+from core.storage.portable.manifest import load_store_manifest
 
 from .deps import RuntimeContext, get_context, get_job_manager, get_service, get_updater
 from .errors import success_response

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import httpx
 
-from core.config import KemoConfig
+from core.settings.schema import KemoConfig
 
 
 DEFAULT_TIMEOUT_SECONDS = 60.0

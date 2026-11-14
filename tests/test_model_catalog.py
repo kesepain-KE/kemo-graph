@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import create_app
-from core.config import AppConfig
+from core.settings.schema import AppConfig
 
 
 @pytest.fixture

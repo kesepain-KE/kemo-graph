@@ -17,16 +17,13 @@ from fastapi.testclient import TestClient
 import start
 from api import create_app
 from api.deps import get_service
-from core.config import AppConfig
-from core.db import connect_graph, connect_sources, initialize_databases
-from core.knowledge_base import KnowledgeBaseService
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph, connect_sources
+from core.storage.schema import initialize_databases
+from core.service.facade import KnowledgeBaseService
 from core.rebuilder import _copy_search_cache_history
-from core.search_cache import (
-    SearchCache,
-    compute_state_hash,
-    make_cache_key,
-    normalize_query,
-)
+from core.retrieval.cache.store import SearchCache
+from core.retrieval.cache.keys import compute_state_hash, make_cache_key, normalize_query
 
 
 def _settings(**overrides) -> AppConfig:

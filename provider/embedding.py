@@ -11,7 +11,8 @@ from urllib.parse import quote
 
 import numpy as np
 
-from core.config import AppConfig, load_config
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
 
 from . import (
     ProviderResponseError,

@@ -15,9 +15,10 @@ from threading import RLock
 
 import yaml
 
-from .config import PROJECT_ROOT, load_config
-from .logger import DailyTSVLogger, redact_log_text
-from .read_cache import file_revision
+from core.settings.schema import PROJECT_ROOT
+from core.settings.loader import load_config
+from core.logger import DailyTSVLogger, redact_log_text
+from core.read_cache import file_revision
 
 
 def configure_console_logging(settings) -> None:

@@ -14,20 +14,16 @@ from provider.embedding import EmbeddingResult, embed
 from provider.engine import chat_structured, chat_with_tools, supports_structured_output
 from markitdown._utils import sanitize_knowledge_markdown
 
-from ..config import AppConfig, PROJECT_ROOT, load_config
-from ..build_progress import advance_build, finish_build, start_build
-from ..db import (
-    connect_graph,
-    connect_rag,
-    connect_sources,
-    initialize_databases,
-    read_graph_meta,
-    write_graph_meta,
-)
-from ..graph_draft import GraphDraft
-from ..graph.tools import get_graph_tools
-from ..logger import DailyTSVLogger
-from ..rag_engine import RAGEngine
+from core.settings.schema import AppConfig, PROJECT_ROOT
+from core.settings.loader import load_config
+from core.build_progress import advance_build, finish_build, start_build
+from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.storage.schema import initialize_databases
+from core.storage.meta import read_graph_meta, write_graph_meta
+from core.graph.draft import GraphDraft
+from core.graph.tools import get_graph_tools
+from core.logger import DailyTSVLogger
+from core.rag.engine import RAGEngine
 
 DEFAULT_GRAPH_PROMPT_PATH = PROJECT_ROOT / "config" / "graph_agent.md"
 DEFAULT_GRAPH_EXTRACT_PROMPT_PATH = PROJECT_ROOT / "config" / "graph_extract.md"
@@ -41,22 +37,12 @@ class SourceChangedDuringIngest(IngestError):
     """扫描后、整理前文档再次发生变化。"""
 
 
-from ._delete import DocumentNotFoundError  # noqa: E402
-from ._file_map import (  # noqa: E402
-    FILE_MAP_VERSION,
-    FileMapError,
-    FileMapping,
-    FileMapStore,
-)
-from ._graph_build import GraphExtractionError  # noqa: E402
-from ._scan import ScanResult, _SourceRecord, _source_record_from_row  # noqa: E402
-from ._utils import (  # noqa: E402
-    _elapsed_ms,
-    _get_write_lock,
-    _now_iso,
-    _resolve_external_dir,
-    _safe_source_path,
-)
+from core.ingestor._delete import DocumentNotFoundError
+from core.ingestor._file_map import FILE_MAP_VERSION, FileMapError, FileMapping, FileMapStore
+from core.ingestor._graph_build import GraphExtractionError
+from core.ingestor._scan import ScanResult, _SourceRecord, _source_record_from_row
+from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.ingestor._utils import _get_write_lock, _resolve_external_dir, _safe_source_path
 
 
 Embedder = Callable[[list[str]], EmbeddingResult]
@@ -98,17 +84,17 @@ class Ingestor:
         self._write_lock = _get_write_lock(self.paths.data_dir)
 
     def scan_sources(self) -> ScanResult:
-        from . import _scan as implementation
+        from core.ingestor import _scan as implementation
 
         return implementation.scan_sources(self)
 
     def _rag_chunking_config_changed(self) -> bool:
-        from . import _scan as implementation
+        from core.ingestor import _scan as implementation
 
         return implementation._rag_chunking_config_changed(self)
 
     def _graph_extraction_config_changed(self) -> bool:
-        from . import _scan as implementation
+        from core.ingestor import _scan as implementation
 
         return implementation._graph_extraction_config_changed(self)
 
@@ -310,12 +296,12 @@ class Ingestor:
             return result
 
     def delete_document(self, source_id: str) -> dict[str, Any]:
-        from . import _delete as implementation
+        from core.ingestor import _delete as implementation
 
         return implementation.delete_document(self, source_id)
 
     def _delete_source_file(self, relative_path: str) -> None:
-        from . import _delete as implementation
+        from core.ingestor import _delete as implementation
 
         return implementation._delete_source_file(self, relative_path)
 
@@ -419,7 +405,7 @@ class Ingestor:
             connection.close()
 
     def _update_graph_for_source(self, record: _SourceRecord, text: str) -> None:
-        from . import _graph_build as implementation
+        from core.ingestor import _graph_build as implementation
 
         return implementation._update_graph_for_source(self, record, text)
 
@@ -427,29 +413,29 @@ class Ingestor:
         advance_build(self.paths, source_id, pipeline, step, label)
 
     def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
-        from . import _graph_build as implementation
+        from core.ingestor import _graph_build as implementation
 
         return implementation._extract_graph_with_tools(self, record, text)
 
     def _extract_graph_structured(self, record: _SourceRecord, text: str) -> None:
-        from . import _graph_build as implementation
+        from core.ingestor import _graph_build as implementation
 
         return implementation._extract_graph_structured(self, record, text)
 
     def _extract_graph_sections(
         self, record: _SourceRecord, sections: list[str]
     ) -> list[GraphDraft]:
-        from . import _graph_build as implementation
+        from core.ingestor import _graph_build as implementation
 
         return implementation._extract_graph_sections(self, record, sections)
 
     def _build_graph_system_prompt(self, record: _SourceRecord) -> str:
-        from . import _graph_build as implementation
+        from core.ingestor import _graph_build as implementation
 
         return implementation._build_graph_system_prompt(self, record)
 
     def _update_rag_for_source(self, record: _SourceRecord, text: str) -> None:
-        from . import _rag_build as implementation
+        from core.ingestor import _rag_build as implementation
 
         return implementation._update_rag_for_source(self, record, text)
 
@@ -458,7 +444,7 @@ class Ingestor:
         source_id: str,
         content_hash: str,
     ) -> dict[str, Any]:
-        from . import _rag_build as implementation
+        from core.ingestor import _rag_build as implementation
 
         return implementation._build_entity_vectors_for_source(
             self,
@@ -467,17 +453,17 @@ class Ingestor:
         )
 
     def _delete_source_data(self, source_id: str) -> tuple[bool, bool]:
-        from . import _delete as implementation
+        from core.ingestor import _delete as implementation
 
         return implementation._delete_source_data(self, source_id)
 
     def _delete_graph_for_source(self, source_id: str) -> bool:
-        from . import _delete as implementation
+        from core.ingestor import _delete as implementation
 
         return implementation._delete_graph_for_source(self, source_id)
 
     def _delete_rag_for_source(self, source_id: str) -> bool:
-        from . import _delete as implementation
+        from core.ingestor import _delete as implementation
 
         return implementation._delete_rag_for_source(self, source_id)
 
@@ -488,7 +474,7 @@ class Ingestor:
         add_ids: Sequence[int],
         vectors: np.ndarray,
     ) -> None:
-        from . import _rag_build as implementation
+        from core.ingestor import _rag_build as implementation
 
         return implementation._replace_rag_vectors_with_recovery(
             self, rag_engine, remove_ids, add_ids, vectors
@@ -497,19 +483,19 @@ class Ingestor:
     def _sync_chunk_nodes_for_source(
         self, source_id: str, content_hash: str, node_ids: set[str]
     ) -> None:
-        from . import _rag_build as implementation
+        from core.ingestor import _rag_build as implementation
 
         return implementation._sync_chunk_nodes_for_source(
             self, source_id, content_hash, node_ids
         )
 
     def _remove_chunk_node_ids(self, node_ids: set[str]) -> None:
-        from . import _rag_build as implementation
+        from core.ingestor import _rag_build as implementation
 
         return implementation._remove_chunk_node_ids(self, node_ids)
 
     def _current_graph_node_ids(self, source_id: str, content_hash: str) -> set[str]:
-        from . import _rag_build as implementation
+        from core.ingestor import _rag_build as implementation
 
         return implementation._current_graph_node_ids(self, source_id, content_hash)
 

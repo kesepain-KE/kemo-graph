@@ -2,11 +2,11 @@
 
 import pytest
 
-from core.config import AppConfig
-from core.db import connect_rag, connect_sources
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_rag, connect_sources
 from core.ingestor import Ingestor
-from core.rag_engine import RAGEngine
-from core.rag_errors import IndexIntegrityError
+from core.rag.engine import RAGEngine
+from core.rag.errors import IndexIntegrityError
 from provider.embedding import EmbeddingResult
 
 

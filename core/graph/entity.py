@@ -7,9 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from provider.engine import chat
-from core.config import AppConfig, load_config
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
 from core.logger import DailyTSVLogger
-from core.text_norm import norm_key
+from core.common.normalization import norm_key
 
 _QUOTED_PATTERN = re.compile(r"[\"'“”‘’《》]([^\"'“”‘’《》]{1,80})[\"'“”‘’《》]")
 

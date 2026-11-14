@@ -6,10 +6,10 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Any
 from rapidfuzz.fuzz import ratio
-from core.text_norm import norm_key
-from core.entity_extractor import Entity
-from core.node_index import NodeMatcher
-from core.query_planner import QueryPlan
+from core.common.normalization import norm_key
+from core.graph.entity import Entity
+from core.graph.index import NodeMatcher
+from core.documents.query_planner import QueryPlan
 from core.graph.models import _EntityKeys, _MatchedNode, _Node, _NodeKeys
 from core.graph.errors import GraphIntegrityError, GraphQueryError
 

@@ -1,9 +1,5 @@
 """Public exceptions and configuration constants for the service facade."""
-from core.documents.errors import (
-    DocumentImportError, UnsupportedDocumentFormatError, DocumentImportPathError,
-    DocumentTooLargeError, DocumentIngestError, DocumentContentConflictError,
-    DocumentImportConflictError,
-)
+from core.documents.errors import DocumentImportError, UnsupportedDocumentFormatError, DocumentImportPathError, DocumentTooLargeError, DocumentIngestError, DocumentContentConflictError, DocumentImportConflictError
 from core.documents.formats import SUPPORTED_IMPORT_SUFFIXES, MAX_IMPORT_BYTES
 
 

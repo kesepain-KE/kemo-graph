@@ -5,4 +5,4 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable
-from core.text_norm import norm_key
+from core.common.normalization import norm_key

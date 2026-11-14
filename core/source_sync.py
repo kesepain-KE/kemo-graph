@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.common import write_bytes_atomic as _write_bytes_atomic
+from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic
 
 import hashlib
 import json
@@ -14,10 +14,11 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from .db import connect_sources, initialize_databases
-from .ingestor import Ingestor
-from .ingestor._utils import _hash_relative_path
-from .search_cache import clear_search_cache_after_mutation
+from core.storage.connections import connect_sources
+from core.storage.schema import initialize_databases
+from core.ingestor import Ingestor
+from core.ingestor._utils import _hash_relative_path
+from core.retrieval.cache.store import clear_search_cache_after_mutation
 
 
 MAX_SOURCE_CONTENT_BYTES = 50 * 1024 * 1024

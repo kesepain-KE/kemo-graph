@@ -6,10 +6,10 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from api import create_app
-from core.config import AppConfig
+from core.settings.schema import AppConfig
 from core import library
-from core.db import connect_sources
-from core.knowledge_base import KnowledgeBaseService
+from core.storage.connections import connect_sources
+from core.service.facade import KnowledgeBaseService
 
 
 def _service(tmp_path: Path) -> KnowledgeBaseService:

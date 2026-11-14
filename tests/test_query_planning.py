@@ -9,11 +9,12 @@ from unittest.mock import patch
 
 import numpy as np
 
-from core.config import AppConfig
+from core.settings.schema import AppConfig
 from core.chunker import document_chunks
-from core.db import connect_rag, connect_sources, initialize_databases
-from core.query_planner import filter_semantic_drift, plan_query
-from core.rag_engine import RAGEngine
+from core.storage.connections import connect_rag, connect_sources
+from core.storage.schema import initialize_databases
+from core.documents.query_planner import filter_semantic_drift, plan_query
+from core.rag.engine import RAGEngine
 from provider.embedding import EmbeddingResult
 
 
@@ -227,7 +228,7 @@ class MultiQueryRetrievalTests(unittest.TestCase):
                     (index, 0.05) for index in range(min(top_n, len(documents)))
                 ],
             )
-            with patch("core.query_planner.chat_structured", return_value=_plan_payload()):
+            with patch("core.documents.query_planner.chat_structured", return_value=_plan_payload()):
                 result = engine.query("看书", top_k=2, threshold=0.6)
 
             self.assertEqual(embedding_calls, [["看书", "阅读", "阅读理解"]])

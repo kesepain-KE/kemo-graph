@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
-from core.db import connect_sources
+from core.storage.connections import connect_sources
 from core.documents.errors import DocumentImportConflictError, DocumentImportError, DocumentImportPathError, DocumentTooLargeError
 from core.documents.formats import MAX_IMPORT_BYTES, _ImportSnapshot
 

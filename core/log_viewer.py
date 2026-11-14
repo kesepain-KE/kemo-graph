@@ -6,8 +6,8 @@ from datetime import date, datetime, timezone
 import io
 import os
 
-from .logger import redact_log_text
-from .read_cache import READ_CACHE, file_revision
+from core.logger import redact_log_text
+from core.read_cache import READ_CACHE, file_revision
 
 MAX_READ_BYTES = 2 * 1024 * 1024
 CATEGORIES = {"terminal", "query", "internal"}

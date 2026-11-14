@@ -11,13 +11,11 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from api.deps import get_service
-from core.config import AppConfig
-from core.db import connect_graph, initialize_databases
-from core.graph_visualization import (
-    GraphNodeNotFoundError,
-    GraphRevisionChangedError,
-)
-from core.knowledge_base import KnowledgeBaseService
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph
+from core.storage.schema import initialize_databases
+from core.graph.errors import GraphNodeNotFoundError, GraphRevisionChangedError
+from core.service.facade import KnowledgeBaseService
 
 
 class GraphVisualizationServiceTests(unittest.TestCase):

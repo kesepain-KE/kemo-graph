@@ -10,8 +10,9 @@ from typing import Any
 
 from markitdown import detect_file_type
 from markitdown._utils import read_text
-from .library import TEXT_SUFFIXES
-from core.service.errors import MAX_IMPORT_BYTES, DocumentTooLargeError
+from core.library import TEXT_SUFFIXES
+from core.documents.formats import MAX_IMPORT_BYTES
+from core.documents.errors import DocumentTooLargeError
 
 HTML_STYLE = """
 body{margin:0;padding:32px;color:#202124;font:15px/1.8 system-ui,sans-serif;overflow-wrap:anywhere}

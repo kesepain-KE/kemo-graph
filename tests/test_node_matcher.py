@@ -5,11 +5,13 @@ import json
 import pytest
 
 from bench.bench_text_matching import fixture, load_baseline
-from core.config import AppConfig
-from core.db import connect_graph
-from core.entity_extractor import Entity
-from core.graph_engine import GraphEngine, GraphQueryError, _matched_node_to_dict
-from core.node_index import NodeMatcher
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph
+from core.graph.entity import Entity
+from core.graph.engine import GraphEngine
+from core.graph.errors import GraphQueryError
+from core.graph.matching import _matched_node_to_dict
+from core.graph.index import NodeMatcher
 
 
 def insert_node(connection, node_id, keyword, *, aliases=(), summary='', tags=(), ref_count=1):

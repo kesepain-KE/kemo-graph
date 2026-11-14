@@ -9,10 +9,10 @@ import yaml
 from pydantic import ValidationError
 
 
-from .schema import AppConfig, DEFAULT_CONFIG_PATH, _migrate_legacy_provider_config
-from .errors import ConfigLoadError
-from .defaults import default_config_dict, write_default_config
-from .writer import write_config as write_config
+from core.settings.schema import AppConfig, DEFAULT_CONFIG_PATH, _migrate_legacy_provider_config
+from core.settings.errors import ConfigLoadError
+from core.settings.defaults import default_config_dict, write_default_config
+from core.settings.writer import write_config as write_config
 
 LOGGER = logging.getLogger(__name__)
 

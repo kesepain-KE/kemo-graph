@@ -12,7 +12,8 @@ from pathlib import Path
 
 from provider.engine import chat_structured
 
-from .config import AppConfig, load_config
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
 
 
 _TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.UNICODE)

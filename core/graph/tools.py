@@ -4,8 +4,8 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 from core.common.tool_registration import _register, ToolFunction, ToolRegistration
-from . import tool_store as graph_tools
-from .tool_schemas import GRAPH_TOOL_SCHEMAS, FINISH_SCHEMA
+from core.graph import tool_store as graph_tools
+from core.graph.tool_schemas import GRAPH_TOOL_SCHEMAS, FINISH_SCHEMA
 
 def get_graph_tools(
     conn: sqlite3.Connection,

@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from core.fulltext import _prune_expression, compile_fulltext, load_simple
+from core.storage.fulltext import _prune_expression, compile_fulltext, load_simple
 
 
 @pytest.fixture

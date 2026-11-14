@@ -7,7 +7,7 @@ import math
 import pytest
 
 from bench.bench_text_matching import fixture, load_baseline
-from core.graph_organizer import _find_candidates
+from core.graph.candidates import _find_candidates
 
 
 def insert_node(connection, node_id, keyword, *, aliases=(), summary=''):

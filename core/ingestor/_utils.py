@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from core.common import now_iso as _now_iso, elapsed_ms as _elapsed_ms, write_json_atomic as _write_json_atomic, validated_path as _validated_path
+from core.common.time import now_iso as _now_iso, elapsed_ms as _elapsed_ms
+from core.common.jsonio import write_json_atomic as _write_json_atomic
+from core.common.fs import validated_path as _validated_path
 
 import hashlib
 import json
@@ -15,13 +17,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..config import AppConfig, PROJECT_ROOT
-from ..locks import get_knowledge_base_lock
-from . import IngestError
+from core.settings.schema import AppConfig, PROJECT_ROOT
+from core.storage.locks import get_knowledge_base_lock
+from core.ingestor import IngestError
 
 
 def _graph_extraction_error(message: str) -> RuntimeError:
-    from ._graph_build import GraphExtractionError
+    from core.ingestor._graph_build import GraphExtractionError
 
     return GraphExtractionError(message)
 

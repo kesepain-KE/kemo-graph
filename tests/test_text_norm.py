@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from core.config import AppConfig
-from core.entity_extractor import extract
-from core.text_norm import norm_key
+from core.settings.schema import AppConfig
+from core.graph.entity import extract
+from core.common.normalization import norm_key
 
 
 @pytest.mark.parametrize(("left", "right"), [

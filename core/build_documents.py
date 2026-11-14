@@ -6,13 +6,13 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import connect_sources
-from .ingestor import DocumentNotFoundError
-from .ingestor._utils import _safe_source_path
+from core.storage.connections import connect_sources
+from core.ingestor._delete import DocumentNotFoundError
+from core.ingestor._utils import _safe_source_path
 from core.documents.errors import DocumentContentConflictError, DocumentTooLargeError
 from core.documents.formats import MAX_IMPORT_BYTES
-from core.common import write_bytes_atomic as _write_bytes_atomic
-from .locks import get_knowledge_base_lock
+from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic
+from core.storage.locks import get_knowledge_base_lock
 
 
 def processed_source(owner, source_id: str):

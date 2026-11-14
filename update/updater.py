@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.common import now_iso as _now_iso
+from core.common.time import now_iso as _now_iso
 
 import json
 import os

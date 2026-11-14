@@ -1,5 +1,5 @@
 from __future__ import annotations
-from core.common import now_iso as _now_iso
+from core.common.time import now_iso as _now_iso
 import json
 import sqlite3
 import time
@@ -7,12 +7,16 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
 from provider.engine import chat, chat_with_tools
-from core.text_norm import norm_key
-from core.config import AppConfig, PROJECT_ROOT, load_config
-from core.db import DatabasePaths, connect_graph, initialize_databases, read_graph_meta, write_graph_meta
-from core.locks import get_knowledge_base_lock
+from core.common.normalization import norm_key
+from core.settings.schema import AppConfig, PROJECT_ROOT
+from core.settings.loader import load_config
+from core.storage.paths import DatabasePaths
+from core.storage.connections import connect_graph
+from core.storage.schema import initialize_databases
+from core.storage.meta import read_graph_meta, write_graph_meta
+from core.storage.locks import get_knowledge_base_lock
 from core.logger import DailyTSVLogger
-from core.rag_engine import RAGEngine
+from core.rag.engine import RAGEngine
 from core.graph.candidates import _find_candidates, _get_entity
 from core.graph.errors import GraphOrganizerError
 

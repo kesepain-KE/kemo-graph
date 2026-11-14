@@ -6,4 +6,4 @@ from collections.abc import Iterable
 from ahocorasick_rs import AhoCorasick
 import numpy as np
 from rapidfuzz import fuzz, process
-from core.text_norm import norm_key
+from core.common.normalization import norm_key

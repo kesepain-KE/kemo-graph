@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 from provider.engine import chat
-from core.config import DEFAULT_CONFIG_PATH, AppConfig, load_config
-from core.db import connect_sources, get_database_paths
-from core.graph_engine import GraphEngine
-from core.hybrid import HybridEngine
+from core.settings.schema import DEFAULT_CONFIG_PATH, AppConfig
+from core.settings.loader import load_config
+from core.storage.connections import connect_sources
+from core.storage.paths import get_database_paths
+from core.graph.engine import GraphEngine
+from core.retrieval.hybrid import HybridEngine
 from core.logger import DailyTSVLogger
-from core.rag_engine import RAGEngine
+from core.rag.engine import RAGEngine
 from core.service.errors import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
 
 

@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Any
 
 
-from .schema import AppConfig, DEFAULT_CONFIG_PATH
-from .writer import write_config
+from core.settings.schema import AppConfig, DEFAULT_CONFIG_PATH
+from core.settings.writer import write_config
 
 def default_config_dict() -> dict[str, Any]:
     """返回一份可安全修改的默认配置字典。"""

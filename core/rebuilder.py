@@ -14,18 +14,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .config import AppConfig, load_config
-from .db import (
-    DatabasePaths,
-    connect_graph,
-    connect_rag,
-    connect_sources,
-    initialize_databases,
-)
-from .ingestor import Ingestor
-from .locks import get_knowledge_base_lock
-from .logger import DailyTSVLogger
-from .rag_engine import RAGEngine
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.paths import DatabasePaths
+from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.storage.schema import initialize_databases
+from core.ingestor import Ingestor
+from core.storage.locks import get_knowledge_base_lock
+from core.logger import DailyTSVLogger
+from core.rag.engine import RAGEngine
 
 
 ProgressCallback = Callable[[float, str], None]

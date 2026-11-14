@@ -13,10 +13,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from rapidfuzz.fuzz import ratio
-from core.text_norm import norm_key
-from core.config import AppConfig, load_config
-from core.db import DatabasePaths, connect_graph, initialize_databases
-from core.entity_extractor import Entity, extract
-from core.node_index import NodeMatcher
-from core.query_planner import QueryPlan, plan_query
-from core.query_progress import step_status
+from core.common.normalization import norm_key
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.paths import DatabasePaths
+from core.storage.connections import connect_graph
+from core.storage.schema import initialize_databases
+from core.graph.entity import Entity, extract
+from core.graph.index import NodeMatcher
+from core.documents.query_planner import QueryPlan, plan_query
+from core.observability.progress import step_status

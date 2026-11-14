@@ -18,14 +18,12 @@ import start
 from api import create_app as create_api_app
 from api.deps import get_service
 from core import library
-from core.config import AppConfig
-from core.db import connect_graph, connect_rag, connect_sources
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.ingestor import Ingestor
-from core.knowledge_base import (
-    DocumentContentConflictError,
-    KnowledgeBaseNotInitializedError,
-    KnowledgeBaseService,
-)
+from core.documents.errors import DocumentContentConflictError
+from core.service.errors import KnowledgeBaseNotInitializedError
+from core.service.facade import KnowledgeBaseService
 from start_web import create_app as create_web_app
 
 

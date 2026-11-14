@@ -6,10 +6,11 @@ from typing import Any
 
 import numpy as np
 
-from ..db import connect_graph, connect_rag, connect_sources
-from . import IngestError
-from ._graph_build import _recalculate_edges, _recalculate_nodes
-from ._utils import _now_iso, _safe_source_path
+from core.storage.connections import connect_graph, connect_rag, connect_sources
+from core.ingestor import IngestError
+from core.ingestor._graph_build import _recalculate_edges, _recalculate_nodes
+from core.common.time import now_iso as _now_iso
+from core.ingestor._utils import _safe_source_path
 
 
 class DocumentNotFoundError(IngestError):
@@ -40,7 +41,7 @@ def delete_document(self, source_id: str) -> dict[str, Any]:
         relative_path = row["relative_path"]
         original = None
         if row["library_path"] is not None:
-            from ..library import resolve_path
+            from core.library import resolve_path
             original = resolve_path(self, row["library_path"], must_exist=False)
         self._delete_source_file(relative_path)
         if original is not None:

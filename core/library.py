@@ -13,13 +13,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from .db import connect_sources, initialize_databases
-from .ingestor import DocumentNotFoundError, FileMapStore, FileMapping
-from .ingestor._utils import _path_key
+from core.storage.connections import connect_sources
+from core.storage.schema import initialize_databases
+from core.ingestor._delete import DocumentNotFoundError
+from core.ingestor._file_map import FileMapStore, FileMapping
+from core.ingestor._utils import _path_key
 from core.documents.errors import DocumentContentConflictError
 from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
-from core.common import write_bytes_atomic as _write_bytes_atomic
-from .locks import get_knowledge_base_lock
+from core.common.jsonio import write_bytes_atomic as _write_bytes_atomic
+from core.storage.locks import get_knowledge_base_lock
 from markitdown._utils import read_text
 
 TEXT_SUFFIXES = {
@@ -200,8 +202,8 @@ def refresh_library(owner: Any, path: str = "", *, force: bool = False) -> dict[
         original_root(owner).mkdir(parents=True, exist_ok=True)
         deleted = []
         if not path:
-            from .ingestor import Ingestor
-            from .ingestor._scan import cleanup_orphaned_sources
+            from core.ingestor import Ingestor
+            from core.ingestor._scan import cleanup_orphaned_sources
 
             ingestor = Ingestor(owner.data_dir, owner.external_dir, settings=owner.settings)
             _, deleted = cleanup_orphaned_sources(ingestor, remove_unmapped=True)

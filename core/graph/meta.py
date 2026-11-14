@@ -1,4 +1,5 @@
-from core.db import connect_graph, read_graph_meta, write_graph_meta
+from core.storage.connections import connect_graph
+from core.storage.meta import read_graph_meta, write_graph_meta
 
 def refresh_graph_meta(context, *, changed: bool) -> None:
     """刷新 graph_meta.json，并在有变更时递增 changed_since_summary。"""

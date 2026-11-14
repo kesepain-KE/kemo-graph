@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.common import now_iso as _now_iso
+from core.common.time import now_iso as _now_iso
 
 import json
 import queue
@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .config import AppConfig, load_config
-from .db import DatabasePaths, connect_sources, initialize_databases
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.paths import DatabasePaths
+from core.storage.connections import connect_sources
+from core.storage.schema import initialize_databases
 from update import ApplicationUpdater
 
 
@@ -195,7 +198,7 @@ class MaintenanceJobManager:
         if kind == "ingest":
             paths = options.get("paths")
             if "library_path" in options:
-                from .library import build_paths
+                from core.library import build_paths
                 reprocess = bool(options.get("reprocess"))
                 progress(0.02, "重新预处理原文件" if reprocess else "同步原文件与处理稿")
                 paths = build_paths(service, options["library_path"], reprocess=reprocess)

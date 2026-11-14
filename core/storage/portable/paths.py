@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Sequence
-from core.config import AppConfig, load_config
-from core.db import get_database_paths
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.paths import get_database_paths
 
 
-from .models import STORAGE_DIRECTORY_NAME, PortableStoreError, PortableStoreNotInitializedError, PortableStoreAccessError, PortableStorePaths
+from core.storage.portable.models import STORAGE_DIRECTORY_NAME, PortableStoreError, PortableStoreNotInitializedError, PortableStoreAccessError, PortableStorePaths
 
 def resolve_store_paths(
     store_root: Path | str,

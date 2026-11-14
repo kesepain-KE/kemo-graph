@@ -9,36 +9,18 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from core.graph_engine import GraphQueryError
-from core.graph_visualization import (
-    GraphNodeNotFoundError,
-    GraphRevisionChangedError,
-)
-from core.ingestor import (
-    DocumentNotFoundError,
-    IngestError,
-)
-from core.knowledge_base import (
-    DocumentImportError,
-    DocumentContentConflictError,
-    DocumentImportConflictError,
-    DocumentImportPathError,
-    DocumentIngestError,
-    DocumentTooLargeError,
-    KnowledgeBaseNotInitializedError,
-    KnowledgeBaseProcessingError,
-    UnsupportedDocumentFormatError,
-)
+from core.graph.errors import GraphQueryError
+from core.graph.errors import GraphNodeNotFoundError, GraphRevisionChangedError
+from core.ingestor._delete import DocumentNotFoundError
+from core.ingestor import IngestError
+from core.documents.errors import DocumentImportError, DocumentContentConflictError, DocumentImportConflictError, DocumentImportPathError, DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
+from core.service.errors import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
 from core.logger import DailyTSVLogger
 from core.jobs import JobNotFoundError
 from core.library import LibraryNameConflictError
-from core.rag_engine import RAGQueryError
-from core.search_cache import SearchCacheCleanupError
-from core.portable_store import (
-    PortableStoreAccessError,
-    PortableStoreError,
-    PortableStoreNotInitializedError,
-)
+from core.rag.errors import RAGQueryError
+from core.retrieval.cache.errors import SearchCacheCleanupError
+from core.storage.portable.models import PortableStoreAccessError, PortableStoreError, PortableStoreNotInitializedError
 from provider.tools.document_tools import DocumentConversionError
 from markitdown import MissingOptionalDependencyError
 from update import (

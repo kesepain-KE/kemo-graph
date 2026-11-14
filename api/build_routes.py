@@ -7,7 +7,7 @@ from pydantic import Field
 
 from core import build_documents
 from core.jobs import MaintenanceJobManager
-from core.knowledge_base import KnowledgeBaseService
+from core.service.facade import KnowledgeBaseService
 from .deps import get_job_manager, get_service
 from .errors import success_response
 from .schemas import StrictRequest

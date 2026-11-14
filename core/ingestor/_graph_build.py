@@ -11,40 +11,28 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from ..db import connect_graph
-from ..graph_draft import (
-    GRAPH_DRAFT_SCHEMA,
-    DraftEntity,
-    GraphDraft,
-    merge_graph_drafts,
-    split_markdown_for_graph,
-    validate_graph_draft,
-)
-from . import IngestError
-from ._scan import _SourceRecord
-from ._utils import (
-    _elapsed_ms,
-    _load_json_string_list,
-    _now_iso,
-    _semantic_key,
-    _unique_texts,
-)
+from core.storage.connections import connect_graph
+from core.graph.draft import GRAPH_DRAFT_SCHEMA, DraftEntity, GraphDraft, merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
+from core.ingestor import IngestError
+from core.ingestor._scan import _SourceRecord
+from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
+from core.ingestor._utils import _load_json_string_list, _semantic_key, _unique_texts
 
 
 def _public_chat_with_tools(*args: Any, **kwargs: Any) -> Any:
-    from . import chat_with_tools
+    from core.ingestor import chat_with_tools
 
     return chat_with_tools(*args, **kwargs)
 
 
 def _public_chat_structured(*args: Any, **kwargs: Any) -> Any:
-    from . import chat_structured
+    from core.ingestor import chat_structured
 
     return chat_structured(*args, **kwargs)
 
 
 def _public_supports_structured_output(*args: Any, **kwargs: Any) -> Any:
-    from . import supports_structured_output
+    from core.ingestor import supports_structured_output
 
     return supports_structured_output(*args, **kwargs)
 
@@ -172,7 +160,7 @@ def _update_graph_for_source(self, record: _SourceRecord, text: str) -> None:
 def _extract_graph_with_tools(self, record: _SourceRecord, text: str) -> None:
     """使用工具调用循环构建图谱，全部工具写入共享文档事务。"""
 
-    from ..graph.tools import get_graph_tool_schemas
+    from core.graph.tools import get_graph_tool_schemas
 
     # 工具模式以前把整篇文档作为一次请求发送，长文档容易超出网关上下文
     # 或让模型在一次循环中遗漏后半段。沿用结构化模式的 Markdown 语义分段，

@@ -8,11 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import create_app
-from core.config import AppConfig
-from core.db import connect_graph, initialize_databases
-from core.knowledge_base import KnowledgeBaseService
-from core.service.errors import DocumentContentConflictError
-from core.search_cache import SearchCache, SearchCacheCleanupError, SearchCacheError
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_graph
+from core.storage.schema import initialize_databases
+from core.service.facade import KnowledgeBaseService
+from core.documents.errors import DocumentContentConflictError
+from core.retrieval.cache.store import SearchCache
+from core.retrieval.cache.errors import SearchCacheCleanupError, SearchCacheError
 
 
 @pytest.fixture

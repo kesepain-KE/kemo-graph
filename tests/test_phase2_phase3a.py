@@ -11,26 +11,14 @@ from unittest.mock import patch
 import httpx
 import numpy as np
 
-from core.chunker import (
-    _pre_split_by_paragraphs,
-    chunk,
-    chunking_signature,
-    document_chunks,
-    estimate_token_count,
-)
-from core.config import AppConfig
-from core.db import (
-    connect_rag,
-    connect_sources,
-    initialize_databases,
-    read_rag_meta,
-)
-from core.rag_engine import (
-    FaissIndexManager,
-    IndexIntegrityError,
-    RAGEngine,
-    RAGQueryError,
-)
+from core.chunker import _pre_split_by_paragraphs, chunk, chunking_signature, document_chunks, estimate_token_count
+from core.settings.schema import AppConfig
+from core.storage.connections import connect_rag, connect_sources
+from core.storage.schema import initialize_databases
+from core.storage.meta import read_rag_meta
+from core.rag.index import FaissIndexManager
+from core.rag.errors import IndexIntegrityError, RAGQueryError
+from core.rag.engine import RAGEngine
 from provider import (
     ProviderAuthenticationError,
     ProviderConfigurationError,

@@ -41,10 +41,10 @@ class DomainServiceDelegationTests(unittest.TestCase):
     def test_domain_services_expose_separate_areas(self) -> None:
         from tempfile import TemporaryDirectory
         from pathlib import Path
-        from core.settings import AppConfig
-        from core.storage import initialize_databases
-        from core.service import KnowledgeBaseService
-        from core.db import connect_graph
+        from core.settings.schema import AppConfig
+        from core.storage.schema import initialize_databases
+        from core.service.facade import KnowledgeBaseService
+        from core.storage.connections import connect_graph
         from core.graph.tool_store import add_entity, add_relation
 
         with TemporaryDirectory() as directory:

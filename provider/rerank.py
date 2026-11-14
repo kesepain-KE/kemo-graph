@@ -10,8 +10,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from core.config import AppConfig, load_config
-from core.db import get_database_paths
+from core.settings.schema import AppConfig
+from core.settings.loader import load_config
+from core.storage.paths import get_database_paths
 
 from . import (
     ProviderResponseError,

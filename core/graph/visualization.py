@@ -1,12 +1,13 @@
 from __future__ import annotations
-from core.common import required_text as _required_text
+from core.common.text import required_text as _required_text
 import hashlib
 import json
 import sqlite3
 from collections import deque
 from contextlib import contextmanager
 from typing import Any, Iterator, Literal, Sequence
-from core.db import DatabasePaths, connect_graph
+from core.storage.paths import DatabasePaths
+from core.storage.connections import connect_graph
 from core.graph.pagination import _pagination, _require_revision, _validate_integer, _validate_pagination
 from core.graph.errors import GraphNodeNotFoundError
 

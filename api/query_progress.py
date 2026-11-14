@@ -2,7 +2,7 @@
 
 from uuid import UUID
 from fastapi import APIRouter, Request
-from core.query_progress import QueryProgressStore, bind_trace
+from core.observability.progress import QueryProgressStore, bind_trace
 from .errors import success_response
 
 router = APIRouter()

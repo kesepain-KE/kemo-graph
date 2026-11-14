@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.common import required_text as _required_text
+from core.common.text import required_text as _required_text
 from core.graph.errors import GraphRevisionChangedError
 
 def _validate_pagination(
