@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # 任意分支的推送都跑一次，包括 kemo-preview 这类开发分支。
+  # 不写 branches 过滤等价于匹配全部分支。
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
