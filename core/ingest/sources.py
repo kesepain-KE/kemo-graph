@@ -8,7 +8,7 @@ from core.settings.schema import PROJECT_ROOT
 from core.storage.connections import connect_sources
 from core.ingest.scan import _SourceRecord, _source_record_from_row
 from core.common.time import now_iso as _now_iso
-from core.ingest.paths import _safe_source_path
+from core.documents.paths import _safe_source_path
 
 def _normalize_requested_paths(
     self, paths: Sequence[Path | str] | None

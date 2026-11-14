@@ -8,7 +8,7 @@ from core.storage.connections import connect_sources
 from core.storage.paths import get_database_paths
 from core.graph.engine import GraphEngine
 from core.retrieval.hybrid import HybridEngine
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from core.rag.engine import RAGEngine
 from core.service.errors import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
 

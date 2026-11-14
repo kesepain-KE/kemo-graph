@@ -1,7 +1,7 @@
 from __future__ import annotations
 from uuid import uuid4
 from core.documents.chunker.engine import document_chunks
-from core.ingest.errors import IngestError
+from core.documents.errors import IngestError
 
 def _update_rag_for_source(self, record: _SourceRecord, text: str) -> None:
     started_at = time.perf_counter()

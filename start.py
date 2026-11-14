@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config import DEFAULT_CONFIG_PATH, load_config
-from core.terminal_logging import configure_console_logging
+from core.observability.terminal_logging import configure_console_logging
 from core.graph_engine import GraphQueryError
 from core.graph_organizer import GraphOrganizerError
 from core.ingestor import DocumentNotFoundError, IngestError
@@ -25,8 +25,8 @@ from core.knowledge_base import (
     UnsupportedDocumentFormatError,
 )
 from core.rag_engine import RAGQueryError
-from core.rebuilder import RebuildError
-from core.jobs import JobNotFoundError
+from core.maintenance.rebuild import RebuildError
+from core.maintenance.jobs import JobNotFoundError
 from core.portable_store import (
     PortableStoreAccessError,
     PortableStoreError,

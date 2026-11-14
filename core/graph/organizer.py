@@ -15,7 +15,7 @@ from core.storage.connections import connect_graph
 from core.storage.schema import initialize_databases
 from core.storage.meta import read_graph_meta, write_graph_meta
 from core.storage.locks import get_knowledge_base_lock
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from core.rag.engine import RAGEngine
 from core.graph.candidates import _find_candidates, _get_entity
 from core.graph.errors import GraphOrganizerError

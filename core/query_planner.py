@@ -13,5 +13,5 @@ import numpy as np
 from provider.engine import chat_structured
 from core.settings.schema import AppConfig
 from core.settings.loader import load_config
-from core.read_cache import READ_CACHE, file_revision
+from core.common.cache import READ_CACHE, file_revision
 from core.observability.progress import query_step, step_status, tracked_step

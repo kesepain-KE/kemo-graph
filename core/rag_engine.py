@@ -19,7 +19,7 @@ from core.settings.loader import load_config
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.storage.schema import initialize_databases
 from core.storage.meta import read_rag_meta, write_rag_meta
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from core.rag.index import FaissIndexManager, _as_float32_matrix
 from core.observability.progress import query_step, step_status, tracked_step
 from core.rag.errors import FaissUnavailableError, IndexIntegrityError, RAGError, RAGQueryError

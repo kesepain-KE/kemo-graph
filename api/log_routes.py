@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
 from core.settings.loader import load_config
-from core.log_viewer import read_logs
+from core.observability.log_viewer import read_logs
 from .deps import RuntimeContext, get_context
 from .errors import success_response
 from .schemas import APIResponse

@@ -11,13 +11,13 @@ from fastapi.responses import JSONResponse
 
 from core.graph.errors import GraphQueryError
 from core.graph.errors import GraphNodeNotFoundError, GraphRevisionChangedError
-from core.ingest.errors import DocumentNotFoundError
-from core.ingest.errors import IngestError
+from core.documents.errors import DocumentNotFoundError
+from core.documents.errors import IngestError
 from core.documents.errors import DocumentImportError, DocumentContentConflictError, DocumentImportConflictError, DocumentImportPathError, DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
 from core.service.errors import KnowledgeBaseNotInitializedError, KnowledgeBaseProcessingError
-from core.logger import DailyTSVLogger
-from core.jobs import JobNotFoundError
-from core.library import LibraryNameConflictError
+from core.observability.logger import DailyTSVLogger
+from core.maintenance.jobs import JobNotFoundError
+from core.documents.library import LibraryNameConflictError
 from core.rag.errors import RAGQueryError
 from core.retrieval.cache.errors import SearchCacheCleanupError
 from core.storage.portable.models import PortableStoreAccessError, PortableStoreError, PortableStoreNotInitializedError

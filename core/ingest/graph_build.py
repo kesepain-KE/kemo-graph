@@ -1,6 +1,6 @@
 from __future__ import annotations
 from provider.engine import chat_with_tools, chat_structured, supports_structured_output
-from core.ingest.errors import GraphExtractionError
+from core.documents.errors import GraphExtractionError
 import json
 import math
 import sqlite3
@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 from core.storage.connections import connect_graph
 from core.graph.draft import DraftEntity, GraphDraft, merge_graph_drafts, split_markdown_for_graph, validate_graph_draft
-from core.ingest.errors import IngestError
+from core.documents.errors import IngestError
 from core.ingest.scan import _SourceRecord
 from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
 from core.ingest.validation import _load_json_string_list, _semantic_key, _unique_texts

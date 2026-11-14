@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from core.settings.schema import AppConfig
-from core.library import create_entry, original_root, resolve_path, relocate_entry
-from core.ingest.errors import IngestError
+from core.documents.library import create_entry, original_root, resolve_path, relocate_entry
+from core.documents.errors import IngestError
 from core.ingest.delete import _delete_source_file
 from core.documents.errors import DocumentContentConflictError
 from core.service.facade import KnowledgeBaseService

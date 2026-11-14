@@ -15,7 +15,7 @@ from uuid import uuid4
 from core.settings.loader import load_config
 from core.storage.paths import DatabasePaths, get_database_paths
 from core.storage.meta import read_graph_meta, write_graph_meta
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 
 
 def search_documents(conn: sqlite3.Connection, query: str) -> list[dict[str, Any]]:

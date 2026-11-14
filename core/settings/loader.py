@@ -4,7 +4,7 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from core.read_cache import READ_CACHE, file_revision
+from core.common.cache import READ_CACHE, file_revision
 import yaml
 from pydantic import ValidationError
 

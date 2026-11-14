@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from core.settings.schema import AppConfig
 from core.graph.visualization import GraphDirection
-from core.rebuilder import ProgressCallback
+from core.maintenance.rebuild import ProgressCallback
 from core.service.context import ServiceContext
 from core.service.documents import DocumentService
 from core.service.graph import GraphService

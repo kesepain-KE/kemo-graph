@@ -15,10 +15,10 @@ from fastapi.testclient import TestClient
 
 from api import create_app
 from core.settings.schema import AppConfig
-from core.logger import DailyTSVLogger, LOG_COLUMNS, TSVFormatter, TSVStreamHandler, redact_log_text
-from core.log_viewer import read_logs
+from core.observability.logger import DailyTSVLogger, LOG_COLUMNS, TSVFormatter, TSVStreamHandler, redact_log_text
+from core.observability.log_viewer import read_logs
 from core.observability.query_logging import trace_query
-from core.terminal_logging import TerminalLogHandler, capture_terminal_logs
+from core.observability.terminal_logging import TerminalLogHandler, capture_terminal_logs
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def test_limit_tail_and_partial_lines(settings, monkeypatch):
         path = logger.log("kb", "query_complete", "x" * 50 + str(i))
     with path.open("ab") as stream:
         stream.write(b"12:30:00\tINFO\tkb\tquery_complete\tincomplete")
-    monkeypatch.setattr("core.log_viewer.MAX_READ_BYTES", 600)
+    monkeypatch.setattr("core.observability.log_viewer.MAX_READ_BYTES", 600)
     result = read_logs(settings, category="query", limit=3)
     assert len(result["entries"]) == 3
     assert result["entries"][-1]["detail"].endswith("29")

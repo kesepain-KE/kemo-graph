@@ -11,7 +11,7 @@ from fastapi import Depends, Request
 from core.settings.schema import AppConfig, DEFAULT_CONFIG_PATH
 from core.settings.loader import load_config
 from core.service.facade import KnowledgeBaseService
-from core.jobs import MaintenanceJobManager
+from core.maintenance.jobs import MaintenanceJobManager
 from update import ApplicationUpdater
 
 

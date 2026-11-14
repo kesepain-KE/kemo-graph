@@ -9,9 +9,9 @@ from markitdown import detect_file_type
 from pydantic import Field
 
 from core import library
-from core.document_preview import preview_document
+from core.documents.preview import preview_document
 from core.service.facade import KnowledgeBaseService
-from core.jobs import MaintenanceJobManager
+from core.maintenance.jobs import MaintenanceJobManager
 from .deps import get_service, get_job_manager
 from .errors import success_response
 from .schemas import StrictRequest

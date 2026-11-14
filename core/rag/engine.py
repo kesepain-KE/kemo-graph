@@ -7,7 +7,7 @@ from provider.embedding import EmbeddingResult
 from core.settings.schema import AppConfig
 from core.settings.loader import load_config
 from core.storage.schema import initialize_databases
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from core.rag.index import FaissIndexManager
 from core.observability.progress import tracked_step
 from core.rag.models import PreparedQuery, _Candidate, _ChunkContext

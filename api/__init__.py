@@ -8,8 +8,8 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from core.jobs import MaintenanceJobManager
-from core.terminal_logging import capture_terminal_logs
+from core.maintenance.jobs import MaintenanceJobManager
+from core.observability.terminal_logging import capture_terminal_logs
 from .query_progress import install_query_progress
 from update import ApplicationUpdater, read_local_version
 

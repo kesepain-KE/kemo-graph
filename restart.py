@@ -22,7 +22,7 @@ from uuid import uuid4
 import httpx
 
 from update import migrate_legacy_runtime
-from core.logger import LOG_COLUMNS, redact_log_text
+from core.observability.logger import LOG_COLUMNS, redact_log_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent

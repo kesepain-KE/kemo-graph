@@ -13,9 +13,9 @@ from core.settings.loader import load_config
 from core.storage.connections import connect_sources
 from core.storage.schema import initialize_databases
 from core.service.facade import KnowledgeBaseService
-from core.logger import DailyTSVLogger
-from core.log_viewer import read_logs
-from core.read_cache import MemoryReadCache, READ_CACHE, database_revision, file_revision
+from core.observability.logger import DailyTSVLogger
+from core.observability.log_viewer import read_logs
+from core.common.cache import MemoryReadCache, READ_CACHE, database_revision, file_revision
 from core.retrieval.cache.keys import cache_key_lock, compute_state_hash
 import core.retrieval.cache.keys as search_cache
 
@@ -189,7 +189,7 @@ def test_documents_and_health_share_reads_across_service_instances_and_invalidat
 
 
 def test_logs_reuse_reads_and_invalidate_append_and_secret_changes(tmp_path, monkeypatch):
-    import core.log_viewer as log_viewer
+    import core.observability.log_viewer as log_viewer
     settings = AppConfig(log_dir=str(tmp_path / "log"), kemo={"api_key_env": "KEMO_CACHE_TEST_KEY"})
     logger = DailyTSVLogger(settings.resolve_log_dir())
     logger.log("test", "event", "sensitive-value")

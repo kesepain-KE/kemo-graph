@@ -13,7 +13,7 @@ from starlette.requests import Request
 import start
 from api.routes import _is_loopback_host, post_update_apply
 from api.schemas import UpdateApplyRequest
-from core.jobs import MaintenanceJobManager
+from core.maintenance.jobs import MaintenanceJobManager
 from update import (
     ApplicationUpdater,
     SemanticVersion,

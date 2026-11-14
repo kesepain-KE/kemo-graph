@@ -21,7 +21,7 @@ from core.settings.schema import AppConfig
 from core.storage.connections import connect_graph, connect_sources
 from core.storage.schema import initialize_databases
 from core.service.facade import KnowledgeBaseService
-from core.rebuilder import _copy_search_cache_history
+from core.maintenance.rebuild import _copy_search_cache_history
 from core.retrieval.cache.store import SearchCache
 from core.retrieval.cache.keys import compute_state_hash, make_cache_key, normalize_query
 

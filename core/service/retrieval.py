@@ -417,7 +417,7 @@ class RetrievalService:
         cache_key: str,
     ) -> dict[str, Any]:
         self.context._require_initialized()
-        from core.ingest.errors import DocumentNotFoundError
+        from core.documents.errors import DocumentNotFoundError
         from core.retrieval.cache.store import SearchCache
 
         detail = SearchCache(self.context.paths, self.context.settings).detail(cache_key)

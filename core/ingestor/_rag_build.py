@@ -10,6 +10,6 @@ from provider.embedding import EmbeddingResult
 from core.documents.chunker.engine import document_chunks
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.rag.engine import RAGEngine
-from core.ingest.errors import IngestError
+from core.documents.errors import IngestError
 from core.ingest.scan import _SourceRecord
 from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso

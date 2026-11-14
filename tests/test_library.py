@@ -11,8 +11,8 @@ from core import library
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_sources
 from core.storage.schema import initialize_databases
-from core.document_preview import preview_document
-from core.ingest.file_map import FileMapStore
+from core.documents.preview import preview_document
+from core.documents.file_map import FileMapStore
 from core.ingest.pipeline import Ingestor
 from core.service.facade import KnowledgeBaseService
 from core.documents.errors import DocumentContentConflictError, DocumentImportError

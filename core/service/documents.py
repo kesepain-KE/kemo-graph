@@ -8,7 +8,7 @@ from typing import Any, Sequence
 from core.documents.conversion import DocumentConversionError, import_document as convert_document
 from core.ingest.progress import read_builds
 from core.storage.connections import connect_sources
-from core.ingest.file_map import FileMapError
+from core.documents.file_map import FileMapError
 from core.ingest.pipeline import Ingestor
 from core.storage.locks import get_knowledge_base_lock
 from core.retrieval.cache.errors import SearchCacheCleanupError
@@ -140,7 +140,7 @@ class DocumentService:
             rag_status=rag_status,
         )
 
-        from core.read_cache import READ_CACHE, database_revision
+        from core.common.cache import READ_CACHE, database_revision
 
         cache_key = (
             "document-page",
@@ -357,13 +357,13 @@ class DocumentService:
         }
 
     def get_document_content(self, source_id: str) -> dict[str, Any]:
-        from core.library import read_content
+        from core.documents.library import read_content
         return read_content(self, source_id)
 
     def update_document_content(
         self, source_id: str, content: str, *, expected_content_hash: str | None = None,
     ) -> dict[str, Any]:
-        from core.library import update_content
+        from core.documents.library import update_content
         return update_content(self, source_id, content, expected_content_hash)
 
     def import_document(
@@ -398,7 +398,7 @@ class DocumentService:
             raise UnsupportedDocumentFormatError(
                 f"不支持的文档格式：{suffix or '<无扩展名>'}"
             )
-        from core.library import original_root, resolve_path, validate_name
+        from core.documents.library import original_root, resolve_path, validate_name
         with get_knowledge_base_lock(self.context.data_dir):
             root = original_root(self)
             root.mkdir(parents=True, exist_ok=True)
@@ -567,7 +567,7 @@ class DocumentService:
         return result
 
     def upload_file(self, content: str, filename: str) -> dict[str, Any]:
-        from core.library import validate_name
+        from core.documents.library import validate_name
         name = validate_name(filename)
         if not Path(name).suffix:
             name += ".md"
@@ -586,7 +586,7 @@ class DocumentService:
         force: bool = False,
         failed_only: bool = False,
     ) -> dict[str, Any]:
-        from core.library import build_paths
+        from core.maintenance.library import build_paths
         if paths is None and not failed_only:
             build_paths(self, "")
         elif paths is not None:
@@ -613,7 +613,7 @@ class DocumentService:
     ) -> dict[str, Any]:
         """同步上游表记录；kemo-graph 只维护派生 Markdown、Graph 与 RAG。"""
 
-        from core.source_sync import sync_external_sources
+        from core.maintenance.source_sync import sync_external_sources
 
         return sync_external_sources(
             self,
@@ -631,7 +631,7 @@ class DocumentService:
     ) -> dict[str, Any]:
         """分页读取由外部权威数据源同步而来的记录。"""
 
-        from core.source_sync import list_external_sources
+        from core.maintenance.source_sync import list_external_sources
 
         return list_external_sources(
             self,
@@ -644,7 +644,7 @@ class DocumentService:
     def delete_synced_sources(self, source_uris: Sequence[str]) -> dict[str, Any]:
         """按稳定 URI 删除外部派生数据，保留上游权威来源。"""
 
-        from core.source_sync import delete_external_sources
+        from core.maintenance.source_sync import delete_external_sources
 
         return delete_external_sources(self, source_uris)
 

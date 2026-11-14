@@ -5,9 +5,9 @@ from copy import deepcopy
 from typing import Any
 from core.storage.connections import connect_graph
 from core.graph.draft import GRAPH_DRAFT_SCHEMA
-from core.ingest.errors import IngestError
+from core.documents.errors import IngestError
 from core.ingest.scan import _SourceRecord
-from core.ingest.errors import GraphExtractionError
+from core.documents.errors import GraphExtractionError
 
 _GRAPH_EXTRACTION_BUDGETS: dict[str, tuple[int, int]] = {
     "small": (36, 54),

@@ -10,10 +10,10 @@ from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.storage.paths import get_database_paths
 from core.storage.meta import read_graph_meta, write_graph_meta
 from core.graph.organizer import GraphOrganizer
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from core.rag.index import FaissIndexManager
 from core.rag.engine import RAGEngine
-from core.rebuilder import KnowledgeBaseRebuilder, ProgressCallback
+from core.maintenance.rebuild import KnowledgeBaseRebuilder, ProgressCallback
 from core.service.errors import CONFIG_API_KEY_MASK
 from core.common.time import elapsed_ms as _elapsed_ms, now_iso as _now_iso
 
@@ -311,7 +311,7 @@ class MaintenanceService:
     ) -> dict[str, Any]:
         """重读新增、变化、删除和失败文档；未变化文档保持跳过。"""
 
-        from core.library import build_paths
+        from core.maintenance.library import build_paths
         build_paths(self.context.documents, "")
         return KnowledgeBaseRebuilder(
             self.context.data_dir,
@@ -326,7 +326,7 @@ class MaintenanceService:
     ) -> dict[str, Any]:
         """在影子目录重建 Graph、RAG、FAISS，验证后切换正式目录。"""
 
-        from core.library import build_paths
+        from core.maintenance.library import build_paths
         build_paths(self.context.documents, "")
         return KnowledgeBaseRebuilder(
             self.context.data_dir,
@@ -335,19 +335,19 @@ class MaintenanceService:
         ).rebuild_all(progress=progress)
 
     def list_jobs(self, *, limit: int | None = None) -> list[dict[str, Any]]:
-        from core.jobs import list_jobs
+        from core.maintenance.jobs import list_jobs
 
         return list_jobs(self.context.data_dir, settings=self.context.settings, limit=limit)
 
     def get_job(self, job_id: str) -> dict[str, Any]:
-        from core.jobs import get_job
+        from core.maintenance.jobs import get_job
 
         return get_job(job_id, self.context.data_dir, settings=self.context.settings)
 
     def status(self) -> dict[str, Any]:
         """返回 03 文档约定的知识库状态，不隐式初始化数据库。"""
 
-        from core.read_cache import READ_CACHE, databases_revision, file_revision
+        from core.common.cache import READ_CACHE, databases_revision, file_revision
 
         def revision():
             databases = databases_revision(self.context.paths.sources_db, self.context.paths.graph_db, self.context.paths.rag_db)

@@ -13,7 +13,7 @@ from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
 from core.documents.errors import DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
 from core.service.facade import KnowledgeBaseService
 
-from core.jobs import MaintenanceJobManager
+from core.maintenance.jobs import MaintenanceJobManager
 from update import ApplicationUpdater, UpdateBlockedError, UpdatePermissionError
 from core.settings.loader import load_config
 from core.service.federation import create_store_service, describe_store, federated_query

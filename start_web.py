@@ -31,11 +31,11 @@ try:
     from api.routes import _is_loopback_host, router
     from api.query_progress import install_query_progress
     from api.schemas import RestartRequest
-    from core.scheduler import MaintenanceScheduler
-    from core.jobs import MaintenanceJobManager
+    from core.maintenance.scheduler import MaintenanceScheduler
+    from core.maintenance.jobs import MaintenanceJobManager
     from core.config import DEFAULT_CONFIG_PATH, load_config
-    from core.logger import TSVFormatter, TSVStreamHandler
-    from core.terminal_logging import capture_terminal_logs, configure_console_logging
+    from core.observability.logger import TSVFormatter, TSVStreamHandler
+    from core.observability.terminal_logging import capture_terminal_logs, configure_console_logging
     from update import ApplicationUpdater, read_local_version
     from restart import (
         RestartPermissionError,

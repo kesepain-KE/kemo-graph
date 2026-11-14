@@ -405,11 +405,11 @@ def test_portable_full_rebuild_preserves_manifest_content_and_origin_metadata(
 
     with (
         patch(
-            "core.rebuilder.Ingestor.ingest",
+            "core.maintenance.rebuild.Ingestor.ingest",
             return_value={"failed": 0, "processed": 1, "details": []},
         ),
         patch(
-            "core.rebuilder._validate_shadow",
+            "core.maintenance.rebuild._validate_shadow",
             return_value={"active_sources": 1, "faiss_healthy": True},
         ),
     ):

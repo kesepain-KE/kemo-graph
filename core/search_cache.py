@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 from core.settings.schema import AppConfig
-from core.read_cache import READ_CACHE, databases_revision, files_revision
+from core.common.cache import READ_CACHE, databases_revision, files_revision
 from core.storage.paths import DatabasePaths
 from core.storage.connections import connect_graph, connect_rag, connect_search_cache, connect_sources
 from core.storage.schema import initialize_search_cache

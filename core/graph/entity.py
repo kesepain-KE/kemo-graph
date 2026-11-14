@@ -9,7 +9,7 @@ from typing import Any
 from provider.engine import chat
 from core.settings.schema import AppConfig
 from core.settings.loader import load_config
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from core.common.normalization import norm_key
 
 _QUOTED_PATTERN = re.compile(r"[\"'“”‘’《》]([^\"'“”‘’《》]{1,80})[\"'“”‘’《》]")

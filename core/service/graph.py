@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.graph.visualization import get_neighborhood, get_visualization_meta, list_visualization_edges, list_visualization_nodes
-from core.ingest.errors import DocumentNotFoundError
+from core.documents.errors import DocumentNotFoundError
 from core.ingest.pipeline import Ingestor
 from core.storage.locks import get_knowledge_base_lock
 from core.retrieval.cache.store import clear_search_cache_after_mutation

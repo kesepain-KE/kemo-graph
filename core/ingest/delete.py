@@ -4,8 +4,8 @@ import numpy as np
 from core.storage.connections import connect_graph, connect_rag, connect_sources
 from core.ingest.graph_build import _recalculate_edges, _recalculate_nodes
 from core.common.time import now_iso as _now_iso
-from core.ingest.paths import _safe_source_path
-from core.ingest.errors import DocumentNotFoundError
+from core.documents.paths import _safe_source_path
+from core.documents.errors import DocumentNotFoundError
 
 def delete_document(self, source_id: str) -> dict[str, Any]:
     """按 source_id 永久删除文档文件及其派生数据。"""
@@ -31,7 +31,7 @@ def delete_document(self, source_id: str) -> dict[str, Any]:
         relative_path = row["relative_path"]
         original = None
         if row["library_path"] is not None:
-            from core.library import resolve_path
+            from core.documents.library import resolve_path
             original = resolve_path(self, row["library_path"], must_exist=False)
         self._delete_source_file(relative_path)
         if original is not None:

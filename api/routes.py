@@ -14,7 +14,7 @@ from core.documents.formats import MAX_IMPORT_BYTES, SUPPORTED_IMPORT_SUFFIXES
 from core.documents.errors import DocumentImportPathError, DocumentIngestError, DocumentTooLargeError, UnsupportedDocumentFormatError
 from core.service.facade import KnowledgeBaseService
 
-from core.jobs import MaintenanceJobManager
+from core.maintenance.jobs import MaintenanceJobManager
 from provider import (
     ProviderAuthenticationError,
     ProviderConfigurationError,

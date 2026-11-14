@@ -1,10 +1,10 @@
 from __future__ import annotations
-from core.ingest.errors import IngestError, GraphExtractionError
+from core.documents.errors import IngestError, GraphExtractionError
 import json
 import unicodedata
 from collections.abc import Sequence
 from typing import Any
-from core.ingest.errors import IngestError
+from core.documents.errors import IngestError
 
 
 def _semantic_key(value: str) -> str:

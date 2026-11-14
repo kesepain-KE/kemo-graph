@@ -11,7 +11,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from core.settings.schema import AppConfig
-from core.scheduler import MaintenanceScheduler
+from core.maintenance.scheduler import MaintenanceScheduler
 from start_web import create_app
 
 
@@ -50,7 +50,7 @@ class MaintenanceSchedulerTests(unittest.TestCase):
         service = _FakeMaintenanceService(fail_summary=True)
         scheduler = MaintenanceScheduler(lambda: service)
 
-        with self.assertLogs("core.scheduler", level="ERROR"):
+        with self.assertLogs("core.maintenance.scheduler", level="ERROR"):
             result = scheduler.run_pending(datetime(2026, 7, 31, 3, 0))
 
         self.assertEqual(result["errors"]["summary"], "summary failed")
@@ -64,7 +64,7 @@ class MaintenanceSchedulerTests(unittest.TestCase):
             clock=lambda: datetime(2026, 7, 31, 2, 0),
         )
 
-        with self.assertLogs("core.scheduler", level="INFO") as captured:
+        with self.assertLogs("core.maintenance.scheduler", level="INFO") as captured:
             self.assertTrue(scheduler.start())
             thread = scheduler._thread
             self.assertFalse(scheduler.start())

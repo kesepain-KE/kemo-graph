@@ -13,7 +13,7 @@ from core import build_documents, library
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_sources
 from core.ingest.pipeline import Ingestor
-from core.jobs import MaintenanceJobManager
+from core.maintenance.jobs import MaintenanceJobManager
 from core.service.facade import KnowledgeBaseService
 from core.documents.errors import DocumentContentConflictError
 from core.storage.locks import get_knowledge_base_lock
@@ -83,7 +83,7 @@ def test_failed_atomic_save_leaves_processed_file_and_statuses_unchanged(service
     source_id = document["source_id"]
     mark_ready(service, source_id)
     previous = build_documents.read_processed(service, source_id)
-    with patch("core.build_documents._write_bytes_atomic", side_effect=OSError("disk full")):
+    with patch("core.documents.build._write_bytes_atomic", side_effect=OSError("disk full")):
         with pytest.raises(OSError, match="disk full"):
             build_documents.update_processed(service, source_id, "changed", previous["content_hash"])
     after = build_documents.read_processed(service, source_id)

@@ -19,8 +19,8 @@ from api.deps import get_job_manager
 from core.settings.schema import AppConfig
 from core.storage.connections import connect_graph, connect_sources
 from core.ingest.pipeline import Ingestor
-from core.jobs import MaintenanceJobManager
-from core.rebuilder import KnowledgeBaseRebuilder, RebuildError
+from core.maintenance.jobs import MaintenanceJobManager
+from core.maintenance.rebuild import KnowledgeBaseRebuilder, RebuildError
 from provider.embedding import EmbeddingResult
 
 

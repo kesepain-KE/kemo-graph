@@ -21,10 +21,10 @@ from api import create_app
 from api.deps import get_service
 from core.settings.schema import AppConfig
 from core.settings.loader import load_config
-from core.ingest.errors import IngestError
+from core.documents.errors import IngestError
 from core.documents.errors import DocumentImportConflictError, DocumentImportError, DocumentImportPathError, UnsupportedDocumentFormatError
 from core.service.facade import KnowledgeBaseService
-from core.logger import DailyTSVLogger
+from core.observability.logger import DailyTSVLogger
 from provider.tools.document_tools import DocumentConversionError
 
 
