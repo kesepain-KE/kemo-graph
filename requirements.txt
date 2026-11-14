@@ -23,3 +23,4 @@ EbookLib>=0.18,<1.0
 striprtf>=0.0.26,<1.0
 PyYAML>=6.0,<7.0
 rapidfuzz>=3.10,<4.0
+ahocorasick_rs>=0.22,<2.0

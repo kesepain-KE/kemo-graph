@@ -7,15 +7,17 @@ import sqlite3
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from rapidfuzz.fuzz import ratio
-from typing import Any
 
 from .text_norm import norm_key
 from .config import AppConfig, load_config
 from .db import DatabasePaths, connect_graph, initialize_databases
 from .entity_extractor import Entity, extract
+from .node_index import NodeMatcher
 from .query_planner import QueryPlan, plan_query
 from .query_progress import step_status
 
@@ -37,8 +39,8 @@ class _Node:
     node_id: str
     keyword: str
     summary: str
-    aliases: list[str]
-    tags: list[str]
+    aliases: tuple[str, ...]
+    tags: tuple[str, ...]
     weight: float
     ref_count: int
 
@@ -129,7 +131,7 @@ class GraphEngine:
 
         connection = connect_graph(self.paths)
         try:
-            matched = self._match_nodes(connection, entities, float(effective_confidence))
+            matched = self._match_nodes(connection, entities, float(effective_confidence), raw_query=active_plan.original)
             expanded, edges, path_traces = self._expand_graph(
                 connection,
                 [item.node.node_id for item in matched],
@@ -214,6 +216,8 @@ class GraphEngine:
         connection: sqlite3.Connection,
         entities: list[Entity],
         threshold: float,
+        *,
+        raw_query: str | None = None,
     ) -> list[_MatchedNode]:
         if any(not isinstance(entity, Entity) for entity in entities):
             raise GraphQueryError("实体抽取器必须返回 Entity 列表")
@@ -224,22 +228,30 @@ class GraphEngine:
             ORDER BY keyword, node_id
             """
         ).fetchall()
-        nodes = [_node_from_row(row) for row in rows]
-        node_keys = [_node_keys(node) for node in nodes]
+        indexed, matcher = _indexed_nodes(tuple(rows))
         best_by_node: dict[str, _MatchedNode] = {}
         for entity in entities:
             if not 0.0 <= entity.confidence <= 1.0:
                 raise GraphQueryError("Entity.confidence 必须在 0 到 1 之间")
             entity_keys = _entity_keys(entity)
             fuzzy_cutoff = min(_CONTAINS_MATCH_SCORE, threshold / entity.confidence if entity.confidence else 1.0)
-            scored_nodes: list[tuple[_Node, float]] = []
-            has_strong_match = False
-            for node, keys in zip(nodes, node_keys):
-                lexical_score = _node_match_score(entity_keys, keys, fuzzy_cutoff=fuzzy_cutoff)
-                scored_nodes.append((node, lexical_score))
-                has_strong_match = has_strong_match or (
-                    lexical_score >= _CONTAINS_MATCH_SCORE
-                )
+            candidate_ids = set(matcher.match_terms(entity_keys.terms))
+            # Fuzzy hits can also be strong; literal candidates alone are insufficient.
+            candidate_ids.update(matcher.fuzzy_candidates(entity_keys.terms, cutoff=_CONTAINS_MATCH_SCORE))
+            scores = {
+                node_id: _node_match_score(entity_keys, indexed[node_id][1], fuzzy_cutoff=fuzzy_cutoff)
+                for node_id in candidate_ids
+            }
+            has_strong_match = any(score >= _CONTAINS_MATCH_SCORE for score in scores.values())
+            if has_strong_match:
+                scored_nodes = [(indexed[node_id][0], score) for node_id, score in scores.items()]
+            else:
+                # Preserve descriptive fallback and its existing global 20-node cap.
+                scored_nodes = [
+                    (node, scores[node.node_id] if node.node_id in scores else
+                     _node_match_score(entity_keys, keys, fuzzy_cutoff=fuzzy_cutoff))
+                    for node, keys in indexed.values()
+                ]
 
             if has_strong_match:
                 # If the query already names a canonical keyword/alias (or a
@@ -294,6 +306,14 @@ class GraphEngine:
                         node=node,
                         match_score=match_score,
                     )
+        if raw_query:
+            raw_keys = _entity_keys(Entity(raw_query, "concept", raw_query, [], 1.0))
+            for node_id in matcher.match_terms([raw_query], include_containing=False):
+                node, keys = indexed[node_id]
+                score = _node_match_score(raw_keys, keys)
+                previous = best_by_node.get(node_id)
+                if score >= threshold and (previous is None or score > previous.match_score):
+                    best_by_node[node_id] = _MatchedNode(node, score)
         return sorted(
             best_by_node.values(),
             key=lambda item: (-item.match_score, item.node.keyword, item.node.node_id),
@@ -452,8 +472,8 @@ def _node_from_row(row: sqlite3.Row) -> _Node:
         node_id=row["node_id"],
         keyword=row["keyword"],
         summary=row["summary"],
-        aliases=_parse_string_array(row["aliases"], "nodes.aliases", row["node_id"]),
-        tags=_parse_string_array(row["tags"], "nodes.tags", row["node_id"]),
+        aliases=tuple(_parse_string_array(row["aliases"], "nodes.aliases", row["node_id"])),
+        tags=tuple(_parse_string_array(row["tags"], "nodes.tags", row["node_id"])),
         weight=float(row["weight"] or 0.0),
         ref_count=int(row["ref_count"] or 0),
     )
@@ -469,6 +489,16 @@ def _parse_string_array(value: str | None, field: str, node_id: str) -> list[str
     if not isinstance(parsed, list) or any(not isinstance(item, str) for item in parsed):
         raise GraphIntegrityError(f"{field} 必须是字符串数组：node_id={node_id}")
     return parsed
+
+
+@lru_cache(maxsize=4)
+def _indexed_nodes(rows: tuple[sqlite3.Row, ...]):
+    # The immutable row snapshot is the cache key, so edits, transactions and
+    # database replacement all invalidate without a separate mutation counter.
+    nodes = tuple(_node_from_row(row) for row in rows)
+    indexed = {node.node_id: (node, _node_keys(node)) for node in nodes}
+    matcher = NodeMatcher((node_id, keys.terms) for node_id, (_, keys) in indexed.items())
+    return indexed, matcher
 
 
 def _node_keys(node: _Node) -> _NodeKeys:
@@ -590,8 +620,8 @@ def _matched_node_to_dict(item: _MatchedNode) -> dict[str, Any]:
         "node_id": item.node.node_id,
         "keyword": item.node.keyword,
         "summary": item.node.summary,
-        "aliases": item.node.aliases,
-        "tags": item.node.tags,
+        "aliases": list(item.node.aliases),
+        "tags": list(item.node.tags),
         "weight": item.node.weight,
         "ref_count": item.node.ref_count,
         "match_score": item.match_score,
@@ -719,6 +749,8 @@ def _validate_query_parameters(
 ) -> None:
     if not isinstance(query, str) or not query.strip():
         raise GraphQueryError("query 必须是非空字符串")
+    if "\0" in query or len(query) > 1000:
+        raise GraphQueryError("query 不能包含 NUL，且最多 1000 个字符")
     _validate_depth_and_direction(depth, direction, max_depth)
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
         raise GraphQueryError("confidence 必须是数字")

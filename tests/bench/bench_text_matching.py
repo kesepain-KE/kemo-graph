@@ -66,11 +66,11 @@ def main():
     parser.add_argument("--organizer", action="store_true")
     args = parser.parse_args()
     from core.entity_extractor import Entity
-    from core.graph_engine import GraphEngine
+    from core.graph_engine import GraphEngine, _indexed_nodes
     from core.graph_organizer import _find_candidates
     engine = object.__new__(GraphEngine)
-    print("| mode | nodes | entities | original seconds | current seconds | speedup | equal |")
-    print("|---|---:|---:|---:|---:|---:|---|")
+    print("| mode | nodes | entities | original seconds | cold seconds | warm seconds | warm speedup | equal |")
+    print("|---|---:|---:|---:|---:|---:|---:|---|")
     for count in args.nodes:
         connection, rows = fixture(count)
         try:
@@ -79,17 +79,19 @@ def main():
                 before, expected = timed(lambda: original._find_candidates(connection, threshold=0.86))
                 after, actual = timed(lambda: _find_candidates(connection, threshold=0.86))
                 assert [item.as_dict() for item in actual] == [item.as_dict() for item in expected]
-                print(f"| organizer | {count} | - | {before:.6f} | {after:.6f} | {before / after:.2f}x | yes |", flush=True)
+                print(f"| organizer | {count} | - | {before:.6f} | {after:.6f} | - | {before / after:.2f}x | yes |", flush=True)
             else:
                 original = load_baseline("graph_engine")
                 for entities_count in args.entities:
                     entities = [Entity(row[1], "concept", row[1], [], 1.0) for row in rows[:entities_count]]
                     before, expected = timed(lambda: original.GraphEngine._match_nodes(engine, connection, entities, 0.7))
-                    after, actual = timed(lambda: engine._match_nodes(connection, entities, 0.7))
+                    _indexed_nodes.cache_clear()
+                    cold, _ = timed(lambda: engine._match_nodes(connection, entities, 0.7))
+                    after, actual = timed(lambda: engine._match_nodes(connection, entities, 0.7), repeats=3)
                     expected_values = [original._matched_node_to_dict(item) for item in expected]
                     from core.graph_engine import _matched_node_to_dict
                     assert [_matched_node_to_dict(item) for item in actual] == expected_values
-                    print(f"| matching | {count} | {entities_count} | {before:.6f} | {after:.6f} | {before / after:.2f}x | yes |", flush=True)
+                    print(f"| matching | {count} | {entities_count} | {before:.6f} | {cold:.6f} | {after:.6f} | {before / after:.2f}x | yes |", flush=True)
         finally:
             connection.close()
 
