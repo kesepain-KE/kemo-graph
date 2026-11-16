@@ -87,10 +87,9 @@ def chat_with_tools(
 ) -> str:
     """循环调用 kemo LLM，执行工具并回传结果，直至得到纯文本。
 
-    工具循环默认采用串行调用。部分 Kemo 网关 Provider 虽在能力声明中
-    标记支持并行工具，但在 OpenCode 的多工具续轮中可能返回上游 500；
-    串行模式仍保留完整的工具调用能力，并避免把一批工具结果一次性回放。
-    需要明确承担该兼容性风险的调用方可以显式传入 ``True``。
+    工具循环通过 Kemo reasoning 控制显式使用非思考模式，不依赖上游默认
+    思考模式或厂商私有推理回放字段。普通问答与单轮结构化请求不受影响。
+    默认串行请求工具；调用方可按任务需要启用并行工具调用。
     """
 
     _validate_messages(system, user)
@@ -128,6 +127,12 @@ def chat_with_tools(
                     parent_request_id=parent_request_id,
                     parallel_tool_calls=parallel_tool_calls,
                     request_id=request_id,
+                    reasoning={
+                        "enabled": False,
+                        "effort": "none",
+                        "return": "none",
+                        "context": "none",
+                    },
                 )
                 break
             except ProviderError as exc:
@@ -277,6 +282,7 @@ def _send_response_request(
     parent_request_id: str | None = None,
     parallel_tool_calls: bool = False,
     request_id: str | None = None,
+    reasoning: dict[str, Any] | None = None,
 ) -> Any:
     api_key = get_api_key(settings.kemo)
     headers = kemo_headers(api_key, request_id=request_id)
@@ -288,7 +294,7 @@ def _send_response_request(
         "stream": False,
         "system_prompt": system_prompt,
         "parallel_tool_calls": parallel_tool_calls,
-        "reasoning": None,
+        "reasoning": reasoning,
         "generation": {},
         "output": {"modalities": ["text"]},
         "tools": tools or [],

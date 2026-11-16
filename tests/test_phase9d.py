@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import numpy as np
 
+from provider import request_json
 from provider.embedding import EmbeddingResult
 
 from core.documents.chunker.engine import chunking_signature
@@ -38,6 +42,111 @@ def _settings(root: Path, dimensions: int = 3) -> AppConfig:
 
 
 class ToolGraphBuildTests(unittest.TestCase):
+    def test_kemo_tool_build_explicitly_disables_reasoning_on_every_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            external = root / "markdown"
+            external.mkdir()
+            (external / "doc.md").write_text("Alpha relates Beta", encoding="utf-8")
+            settings = _settings(root)
+            settings.kemo.api_key = "offline-test"
+            settings.kemo.base_url = "https://gateway.test"
+            ingestor = Ingestor(root / "data", external, settings=settings)
+            requests: list[dict] = []
+            reasoning = {
+                "enabled": False, "effort": "none", "return": "none", "context": "none",
+            }
+
+            def gateway(request: httpx.Request) -> httpx.Response:
+                self.assertEqual(str(request.url), "https://gateway.test/model/responses")
+                payload = json.loads(request.content)
+                turn = len(requests)
+                requests.append(payload)
+                if turn and payload["reasoning"] != reasoning:
+                    return httpx.Response(200, json={
+                        "status": "failed",
+                        "error": {
+                            "code": "REASONING_UNSUPPORTED",
+                            "message": "工具续轮不能依赖上游隐式推理模式",
+                            "retryable": False,
+                        },
+                    })
+                if turn == 0:
+                    actions = [("search_entities", {"query": "Alpha", "limit": None})]
+                elif turn == 1:
+                    actions = [
+                        ("add_entity", {
+                            "keyword": keyword, "summary": keyword + " concept",
+                            "aliases": None, "tags": None,
+                        })
+                        for keyword in ("Alpha", "Beta")
+                    ]
+                elif turn == 2:
+                    node_ids = [
+                        json.loads(item["content"][0]["text"])["data"]
+                        for item in payload["input"]
+                        if item["type"] == "tool_result" and item["name"] == "add_entity"
+                    ]
+                    self.assertEqual(len(node_ids), 2)
+                    actions = [
+                        ("add_relation", {
+                            "source_node_id": node_ids[0], "relation": "关联",
+                            "target_node_id": node_ids[1], "evidence_weight": 0.9,
+                        }),
+                        ("finish", {}),
+                    ]
+                else:
+                    self.assertEqual(turn, 3)
+                    return httpx.Response(200, json={
+                        "request_id": payload["request_id"], "status": "completed",
+                        "output": [{
+                            "type": "message", "id": "msg_done", "role": "assistant",
+                            "content": [{"type": "text", "text": "finished"}],
+                        }],
+                    })
+                return httpx.Response(200, json={
+                    "request_id": payload["request_id"], "status": "requires_action",
+                    "output": [
+                        {
+                            "type": "tool_call", "id": f"call_{turn}_{index}",
+                            "call_id": f"callid_{turn}_{index}",
+                            "name": name, "arguments": arguments,
+                        }
+                        for index, (name, arguments) in enumerate(actions)
+                    ],
+                })
+
+            with (
+                httpx.Client(transport=httpx.MockTransport(gateway)) as client,
+                patch("provider.engine.request_json", partial(request_json, client=client)),
+            ):
+                result = ingestor.ingest(mode="graph")
+
+            self.assertEqual(result["failed"], 0, result["details"])
+            self.assertEqual(result["graph_updated"], 1)
+            self.assertEqual(len(requests), 4)
+            for index, payload in enumerate(requests):
+                self.assertEqual(payload["protocol_version"], "2.0")
+                self.assertEqual(payload["reasoning"], reasoning)
+                self.assertEqual(payload["provider_options"], {})
+                if index:
+                    self.assertEqual(
+                        payload["parent_request_id"], requests[index - 1]["request_id"]
+                    )
+            self.assertEqual(self._keywords(ingestor), {"Alpha", "Beta"})
+            connection = connect_graph(ingestor.paths)
+            try:
+                edge = connection.execute(
+                    "SELECT relation, weight, support_count FROM edges"
+                ).fetchone()
+                source = connection.execute(
+                    "SELECT COUNT(*) FROM node_sources"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual((edge["relation"], edge["weight"], edge["support_count"]), ("关联", 0.9, 1))
+            self.assertEqual(source, 2)
+
     def test_graph_schemas_require_all_fields_and_nullable_optional_fields(self) -> None:
         optional_fields = {
             "add_entity": {"aliases": "array", "tags": "array"},

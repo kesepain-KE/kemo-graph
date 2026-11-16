@@ -121,6 +121,7 @@ class StructuredProviderTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         request_payload = request.call_args.kwargs["payload"]
         self.assertEqual(request_payload["tools"], [])
+        self.assertIsNone(request_payload["reasoning"])
         self.assertEqual(
             request_payload["structured_output"]["type"],
             "json_schema",

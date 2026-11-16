@@ -174,6 +174,7 @@ class ProviderFunctionTests(unittest.TestCase):
         self.assertIs(payload["parallel_tool_calls"], False)
         self.assertEqual(payload["output"], {"modalities": ["text"]})
         self.assertEqual(payload["tools"], [])
+        self.assertIsNone(payload["reasoning"])
         self.assertEqual(payload["provider_options"], {})
         self.assertEqual(payload["metadata"], {"capability": "conversation"})
         self.assertEqual(payload["extensions"], {})
@@ -277,6 +278,11 @@ class ProviderFunctionTests(unittest.TestCase):
             False,
         )
         second_payload = request.call_args_list[1].kwargs["payload"]
+        for call in request.call_args_list:
+            self.assertEqual(
+                call.kwargs["payload"]["reasoning"],
+                {"enabled": False, "effort": "none", "return": "none", "context": "none"},
+            )
         replayed = second_payload["input"]
         self.assertEqual(len(replayed), 5)
         self.assertEqual(second_payload["parent_request_id"], "req_first")
