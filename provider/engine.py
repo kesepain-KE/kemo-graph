@@ -117,7 +117,7 @@ def chat_with_tools(
     parent_request_id: str | None = None
     for _ in range(iteration_limit):
         request_id = f"req_{uuid4().hex}"
-        request_attempt = 1
+        transport_attempt = 1
         while True:
             try:
                 response = _send_response_request(
@@ -128,18 +128,18 @@ def chat_with_tools(
                     parent_request_id=parent_request_id,
                     parallel_tool_calls=parallel_tool_calls,
                     request_id=request_id,
-                    attempt=request_attempt,
                 )
-                tool_calls = _extract_tool_calls(response, provider)
                 break
             except ProviderError as exc:
                 if (
-                    request_attempt > _MAX_TOOL_REQUEST_RETRIES
+                    transport_attempt > _MAX_TOOL_REQUEST_RETRIES
                     or not _is_retryable_provider_error(exc)
                 ):
                     raise
-                sleep(min(1.0, 0.25 * request_attempt))
-                request_attempt += 1
+                sleep(min(1.0, 0.25 * transport_attempt))
+                transport_attempt += 1
+        # 已持久化的失败终态不能由传输层自动重新执行。
+        tool_calls = _extract_tool_calls(response, provider)
         if not tool_calls:
             return _extract_text(response, provider)
 
@@ -277,16 +277,13 @@ def _send_response_request(
     parent_request_id: str | None = None,
     parallel_tool_calls: bool = False,
     request_id: str | None = None,
-    attempt: int = 1,
 ) -> Any:
-    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
-        raise ValueError("attempt 必须是大于等于 1 的整数")
     api_key = get_api_key(settings.kemo)
     headers = kemo_headers(api_key, request_id=request_id)
     payload: dict[str, Any] = {
         "protocol_version": settings.kemo.protocol_version,
         "request_id": headers["X-Request-ID"],
-        "attempt": attempt,
+        "attempt": 1,
         "model": model or settings.models.llm,
         "stream": False,
         "system_prompt": system_prompt,
@@ -324,9 +321,9 @@ def _validate_messages(system: str, user: str) -> None:
 def _is_retryable_provider_error(error: ProviderError) -> bool:
     """判断工具循环请求是否可以安全重试一次。"""
 
+    if error.retryable is not None:
+        return error.retryable
     if isinstance(error, (ProviderRequestError, ProviderTimeoutError)):
-        return True
-    if error.retryable is True:
         return True
     status = error.provider_status or error.status_code
     if status in _RETRYABLE_PROVIDER_STATUS_CODES:

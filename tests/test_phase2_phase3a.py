@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -324,48 +326,122 @@ class ProviderFunctionTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
 
     def test_chat_with_tools_retries_transient_gateway_failure(self) -> None:
-        responses = [
-            ProviderResponseError(
-                "kemo API 返回 HTTP 502",
-                provider="kemo",
-                status_code=502,
-            ),
-            {
-                "status": "completed",
-                "output": [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": "recovered"}],
+        for failure in ("http_502", "timeout"):
+            with self.subTest(failure=failure):
+                requests: list[httpx.Request] = []
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    requests.append(request)
+                    if len(requests) == 1:
+                        if failure == "timeout":
+                            raise httpx.ReadTimeout("slow", request=request)
+                        return httpx.Response(502, json={"error": "unavailable"})
+                    return httpx.Response(
+                        200,
+                        json={
+                            "status": "completed",
+                            "output": [
+                                {
+                                    "type": "message",
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": "recovered"}],
+                                }
+                            ],
+                        },
+                    )
+
+                with (
+                    patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True),
+                    httpx.Client(transport=httpx.MockTransport(handler)) as client,
+                    patch("provider.engine.request_json", partial(request_json, client=client)),
+                    patch("provider.engine.sleep"),
+                ):
+                    result = chat_with_tools(
+                        "rules", "document", [],
+                        lambda name, arguments: [],
+                        settings=_settings(),
+                    )
+
+                self.assertEqual(result, "recovered")
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(requests[0].content, requests[1].content)
+                self.assertEqual(requests[0].headers, requests[1].headers)
+                payload = json.loads(requests[0].content)
+                self.assertEqual(payload["attempt"], 1)
+                self.assertEqual(payload["request_id"], requests[0].headers["X-Request-ID"])
+                self.assertEqual(payload["request_id"], requests[0].headers["Idempotency-Key"])
+
+    def test_chat_with_tools_does_not_retry_failed_response(self) -> None:
+        requests: list[httpx.Request] = []
+        executions: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "status": "failed",
+                    "error": {
+                        "code": "PROVIDER_UNAVAILABLE",
+                        "message": "No available channel",
+                        "retryable": True,
+                        "provider_status": 503,
+                    },
+                },
+            )
+
+        with (
+            patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True),
+            httpx.Client(transport=httpx.MockTransport(handler)) as client,
+            patch("provider.engine.request_json", partial(request_json, client=client)),
+            patch("provider.engine.sleep"),
+        ):
+            with self.assertRaises(ProviderResponseError) as context:
+                chat_with_tools(
+                    "rules", "document", [],
+                    lambda name, arguments: executions.append(name),
+                    settings=_settings(),
+                )
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(executions, [])
+        self.assertEqual(context.exception.provider_code, "PROVIDER_UNAVAILABLE")
+        self.assertEqual(context.exception.provider_status, 503)
+        self.assertTrue(context.exception.retryable)
+
+    def test_chat_with_tools_respects_explicit_nonretryable_http_error(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                503,
+                json={
+                    "error": {
+                        "code": "PROVIDER_UNAVAILABLE",
+                        "message": "No enabled channel",
+                        "retryable": False,
+                        "provider_status": 503,
                     }
-                ],
-            },
-        ]
-        with patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True):
-            with (
-                patch("provider.engine.request_json", side_effect=responses) as request,
-                patch("provider.engine.sleep"),
-            ):
-                result = chat_with_tools(
-                    "rules",
-                    "document",
-                    [],
+                },
+            )
+
+        with (
+            patch.dict(os.environ, {"TEST_KEMO_API_KEY": "secret"}, clear=True),
+            httpx.Client(transport=httpx.MockTransport(handler)) as client,
+            patch("provider.engine.request_json", partial(request_json, client=client)),
+            patch("provider.engine.sleep"),
+        ):
+            with self.assertRaises(ProviderResponseError) as context:
+                chat_with_tools(
+                    "rules", "document", [],
                     lambda name, arguments: [],
                     settings=_settings(),
                 )
 
-        self.assertEqual(result, "recovered")
-        self.assertEqual(request.call_count, 2)
-        self.assertEqual(request.call_args_list[0].kwargs["payload"]["attempt"], 1)
-        self.assertEqual(request.call_args_list[1].kwargs["payload"]["attempt"], 2)
-        self.assertEqual(
-            request.call_args_list[0].kwargs["payload"]["request_id"],
-            request.call_args_list[1].kwargs["payload"]["request_id"],
-        )
-        self.assertEqual(
-            request.call_args_list[0].kwargs["headers"]["Idempotency-Key"],
-            request.call_args_list[1].kwargs["headers"]["Idempotency-Key"],
-        )
+        self.assertEqual(len(requests), 1)
+        self.assertIs(context.exception.retryable, False)
+        self.assertEqual(context.exception.status_code, 503)
 
     def test_failed_response_retry_metadata_is_preserved(self) -> None:
         response = {

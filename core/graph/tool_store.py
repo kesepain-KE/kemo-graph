@@ -120,11 +120,13 @@ def add_relation(
 def search_entities(
     conn: sqlite3.Connection,
     query: str,
-    limit: int = 10,
+    limit: int | None = 10,
 ) -> list[dict[str, Any]]:
     """精确关键词优先，再按 keyword 和 aliases 做模糊搜索。"""
 
     query = _required_text(query, "query")
+    if limit is None:
+        limit = 10
     if isinstance(limit, bool) or not isinstance(limit, int):
         raise TypeError("limit 必须是整数")
     if not 1 <= limit <= 100:

@@ -7,6 +7,15 @@ def _function_schema(
     properties: dict[str, dict[str, Any]],
     required: list[str] | None = None,
 ) -> dict[str, Any]:
+    required_fields = set(required or ())
+    # strict 模式要求全部属性必填，可选字段通过 null 表达。
+    properties = {
+        key: {
+            **field,
+            "type": field["type"] if key in required_fields else [field["type"], "null"],
+        }
+        for key, field in properties.items()
+    }
     return {
         "type": "function",
         "name": name,
@@ -14,7 +23,7 @@ def _function_schema(
         "parameters": {
             "type": "object",
             "properties": properties,
-            "required": required or [],
+            "required": list(properties),
             "additionalProperties": False,
         },
         "strict": True,
@@ -75,6 +84,7 @@ SEARCH_ENTITIES_SCHEMA = _function_schema(
         "query": {"type": "string", "description": "关键词或别名"},
         "limit": {
             "type": "integer",
+            "description": "最多返回的节点数；null 使用默认值 10",
             "minimum": 1,
             "maximum": 100,
             "default": 10,
@@ -98,7 +108,7 @@ LIST_ENTITIES_SCHEMA = _function_schema(
 
 UPDATE_ENTITY_SCHEMA = _function_schema(
     "update_entity",
-    "更新一个已有节点；只修改明确传入的字段",
+    "更新一个已有节点；null 表示不修改该字段，aliases/tags 传空数组可清空",
     {
         "node_id": _NODE_ID,
         "keyword": {"type": "string", "description": "新的短概念名，2~20 字符"},

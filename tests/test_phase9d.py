@@ -38,6 +38,30 @@ def _settings(root: Path, dimensions: int = 3) -> AppConfig:
 
 
 class ToolGraphBuildTests(unittest.TestCase):
+    def test_graph_schemas_require_all_fields_and_nullable_optional_fields(self) -> None:
+        optional_fields = {
+            "add_entity": {"aliases": "array", "tags": "array"},
+            "search_entities": {"limit": "integer"},
+            "update_entity": {
+                "keyword": "string", "summary": "string",
+                "aliases": "array", "tags": "array",
+            },
+        }
+        for schema in get_tool_schemas("graph"):
+            with self.subTest(tool=schema["name"]):
+                parameters = schema["parameters"]
+                self.assertIs(schema["strict"], True)
+                self.assertIs(parameters["additionalProperties"], False)
+                self.assertEqual(
+                    parameters["required"], list(parameters["properties"])
+                )
+                for name, field in parameters["properties"].items():
+                    nullable_type = optional_fields.get(schema["name"], {}).get(name)
+                    if nullable_type:
+                        self.assertEqual(field["type"], [nullable_type, "null"])
+                    else:
+                        self.assertIsInstance(field["type"], str)
+
     def test_tool_loop_commits_as_one_transaction_and_failure_rolls_back(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -56,7 +80,7 @@ class ToolGraphBuildTests(unittest.TestCase):
                 captured["system"] = system
                 captured["schemas"] = [tool["name"] for tool in tools]
                 self.assertEqual(
-                    tool_handler("search_entities", {"query": "Alpha"}), []
+                    tool_handler("search_entities", {"query": "Alpha", "limit": None}), []
                 )
                 alpha = tool_handler(
                     "add_entity",
@@ -72,8 +96,8 @@ class ToolGraphBuildTests(unittest.TestCase):
                     {
                         "keyword": "Beta",
                         "summary": "Beta concept",
-                        "aliases": [],
-                        "tags": ["test"],
+                        "aliases": None,
+                        "tags": None,
                     },
                 )
                 tool_handler(
@@ -163,7 +187,10 @@ class ToolGraphBuildTests(unittest.TestCase):
                         weight, ref_count, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    ("shared", "Shared", "old", "[]", "[]", 1.0, 1, now, now),
+                    (
+                        "shared", "Shared", "old", '["Shared alias"]', '["old"]',
+                        1.0, 1, now, now,
+                    ),
                 )
                 graph_connection.execute(
                     """
@@ -186,9 +213,26 @@ class ToolGraphBuildTests(unittest.TestCase):
                 self.assertEqual(found[0]["node_id"], "shared")
                 updated = tool_handler(
                     "update_entity",
-                    {"node_id": "shared", "summary": "new details"},
+                    {
+                        "node_id": "shared", "keyword": None,
+                        "summary": "new details", "aliases": None, "tags": None,
+                    },
                 )
                 self.assertEqual(updated["ref_count"], 2)
+                self.assertEqual(updated["keyword"], "Shared")
+                self.assertEqual(updated["aliases"], ["Shared alias"])
+                self.assertEqual(updated["tags"], ["old"])
+                cleared = tool_handler(
+                    "update_entity",
+                    {
+                        "node_id": "shared", "keyword": None,
+                        "summary": None, "aliases": [], "tags": [],
+                    },
+                )
+                self.assertEqual(cleared["ref_count"], 2)
+                self.assertEqual(cleared["summary"], "new details")
+                self.assertEqual(cleared["aliases"], [])
+                self.assertEqual(cleared["tags"], [])
                 tool_handler("finish", {})
                 return "finished"
 
@@ -198,7 +242,8 @@ class ToolGraphBuildTests(unittest.TestCase):
             graph_connection = connect_graph(ingestor.paths)
             try:
                 row = graph_connection.execute(
-                    "SELECT ref_count, summary FROM nodes WHERE node_id = 'shared'"
+                    "SELECT ref_count, summary, keyword, aliases, tags "
+                    "FROM nodes WHERE node_id = 'shared'"
                 ).fetchone()
                 bindings = graph_connection.execute(
                     "SELECT COUNT(*) FROM node_sources WHERE node_id = 'shared'"
@@ -209,6 +254,7 @@ class ToolGraphBuildTests(unittest.TestCase):
                 (int(row["ref_count"]), row["summary"]), (2, "new details")
             )
             self.assertEqual(bindings, 2)
+            self.assertEqual((row["keyword"], row["aliases"], row["tags"]), ("Shared", "[]", "[]"))
 
     @staticmethod
     def _keywords(ingestor: Ingestor) -> set[str]:
