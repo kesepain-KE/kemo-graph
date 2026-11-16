@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import numpy as np
 
 from core.settings import AppConfig
@@ -16,7 +19,10 @@ from core.storage import initialize_databases
 from core.documents.query_planner import filter_semantic_drift
 from core.documents import plan_query
 from core.rag import RAGEngine
+from core.observability.progress import QueryTrace, bind_trace
+from provider import request_json
 from provider.embedding import EmbeddingResult
+from provider.engine import _clear_capability_cache
 
 
 def _settings(root: Path) -> AppConfig:
@@ -62,6 +68,57 @@ def _plan_payload() -> dict:
 
 
 class QueryPlannerTests(unittest.TestCase):
+    def test_kemo_non_strict_query_planning_completes_without_fallback(self) -> None:
+        _clear_capability_cache()
+        self.addCleanup(_clear_capability_cache)
+        settings = _settings(Path("."))
+        settings.kemo.api_key = "offline-test"
+        settings.kemo.base_url = "https://gateway.test"
+        requests: list[httpx.Request] = []
+
+        def gateway(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                self.assertEqual(
+                    str(request.url), "https://gateway.test/model/models/test-llm/capabilities"
+                )
+                return httpx.Response(200, json={"structured_output": {
+                    "supported": True, "strict": False, "schema_subset": ["json_schema"],
+                }})
+            self.assertEqual(str(request.url), "https://gateway.test/model/responses")
+            payload = json.loads(request.content)
+            if payload["structured_output"]["strict"]:
+                return httpx.Response(400, json={"error": {
+                    "code": "STRUCTURED_OUTPUT_UNSUPPORTED",
+                    "message": "模型不支持 strict json_schema。",
+                }})
+            self.assertEqual(payload["protocol_version"], "2.0")
+            self.assertEqual(payload["provider_options"], {})
+            self.assertEqual(payload["structured_output"]["schema_name"], "submit_query_plan")
+            return httpx.Response(200, json={
+                "status": "completed", "request_id": payload["request_id"],
+                "output": [{
+                    "type": "message", "role": "assistant",
+                    "content": [{"type": "text", "text": json.dumps(_plan_payload())}],
+                }],
+            })
+
+        trace = QueryTrace()
+        with (
+            httpx.Client(transport=httpx.MockTransport(gateway)) as client,
+            patch("provider.engine.request_json", partial(request_json, client=client)),
+            bind_trace(trace),
+        ):
+            plan = plan_query("看书", settings=settings)
+        self.assertFalse(plan.degraded)
+        self.assertEqual(plan.texts, ["看书", "阅读", "阅读理解"])
+        self.assertEqual(plan.entities[0].normalized, "阅读")
+        self.assertEqual(trace.snapshot()["steps"], [
+            {"id": "llm", "label": "LLM 优化", "status": "completed"},
+            {"id": "split", "label": "关键词与拆分", "status": "completed"},
+        ])
+        self.assertEqual([request.method for request in requests], ["GET", "POST"])
+
     def test_original_is_kept_and_duplicates_are_removed(self) -> None:
         settings = _settings(Path("."))
         payload = _plan_payload()

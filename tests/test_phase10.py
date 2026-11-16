@@ -6,8 +6,11 @@ import tempfile
 import threading
 import unittest
 import json
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
+
+import httpx
 
 from core.settings import AppConfig
 from core.storage import connect_graph, connect_sources
@@ -19,9 +22,9 @@ from core.graph.draft import merge_graph_drafts, split_markdown_for_graph, valid
 from core.ingest import Ingestor
 from core.graph import GraphOrganizer
 from core.service import KnowledgeBaseService
-from provider import ProviderResponseError
+from provider import ProviderResponseError, request_json
 from provider.embedding import EmbeddingResult
-from provider.engine import chat_structured
+from provider.engine import _clear_capability_cache, chat_structured, supports_structured_output
 
 
 def _settings(root: Path, **updates: object) -> AppConfig:
@@ -95,7 +98,11 @@ def _draft(
 
 
 class StructuredProviderTests(unittest.TestCase):
-    def test_chat_structured_makes_one_request_and_returns_arguments(self) -> None:
+    def setUp(self) -> None:
+        _clear_capability_cache()
+        self.addCleanup(_clear_capability_cache)
+
+    def test_chat_structured_discovers_capability_and_makes_one_inference_request(self) -> None:
         payload = _draft()
         response = {
             "status": "completed",
@@ -112,14 +119,25 @@ class StructuredProviderTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary_dir:
             settings = _settings(Path(temporary_dir))
-            with patch("provider.engine.request_json", return_value=response) as request:
+            with patch("provider.engine.request_json", side_effect=[
+                {"structured_output": {
+                    "supported": True, "strict": True, "schema_subset": ["json_schema"],
+                }},
+                response,
+            ]) as request:
                 result = chat_structured(
                     "system", "user", {"type": "object", "properties": {}},
-                    settings=settings,
+                    model="strict-llm", settings=settings,
                 )
         self.assertEqual(result, payload)
-        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[0].args[0], "GET")
+        self.assertTrue(request.call_args_list[0].args[1].endswith(
+            "/model/models/strict-llm/capabilities"
+        ))
+        self.assertEqual(request.call_args_list[1].args[0], "POST")
         request_payload = request.call_args.kwargs["payload"]
+        self.assertEqual(request_payload["model"], "strict-llm")
         self.assertEqual(request_payload["tools"], [])
         self.assertIsNone(request_payload["reasoning"])
         self.assertEqual(
@@ -138,7 +156,9 @@ class StructuredProviderTests(unittest.TestCase):
             schema = {"type": "object", "properties": {}}
             with patch(
                 "provider.engine.request_json",
-                return_value={
+                side_effect=[{"structured_output": {
+                    "supported": True, "strict": False, "schema_subset": ["json_schema"],
+                }}, {
                     "status": "completed",
                     "output": [
                         {
@@ -148,10 +168,85 @@ class StructuredProviderTests(unittest.TestCase):
                             "content": [{"type": "text", "text": "not-json"}],
                         }
                     ],
-                },
+                }],
             ):
                 with self.assertRaisesRegex(ProviderResponseError, "不是合法 JSON"):
                     chat_structured("system", "user", schema, settings=settings)
+
+    def test_non_strict_output_rejects_nested_schema_violations_and_caches_capability(self) -> None:
+        settings = _settings(Path("."))
+        settings.kemo.base_url = "https://gateway.test"
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"confidence": {
+                            "type": "number", "minimum": 0.0, "maximum": 1.0,
+                        }},
+                        "required": ["confidence"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        }
+        invalid = iter([
+            {"items": [{"confidence": True}]},
+            {"items": [{"confidence": 1.5}]},
+            {"items": [{"confidence": 0.9, "unexpected": "value"}]},
+            {"items": [{}]},
+        ])
+        requests: list[httpx.Request] = []
+
+        def gateway(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json={"structured_output": {
+                    "supported": True, "strict": False, "schema_subset": ["json_schema"],
+                }})
+            payload = json.loads(request.content)
+            self.assertIs(payload["structured_output"]["strict"], False)
+            return httpx.Response(200, json={
+                "status": "completed",
+                "output": [{
+                    "type": "message", "role": "assistant",
+                    "content": [{"type": "text", "text": json.dumps(next(invalid))}],
+                }],
+            })
+
+        with (
+            httpx.Client(transport=httpx.MockTransport(gateway)) as client,
+            patch("provider.engine.request_json", partial(request_json, client=client)),
+        ):
+            for constraint in ("type", "maximum", "additionalProperties", "required"):
+                with self.subTest(constraint=constraint):
+                    with self.assertRaisesRegex(ProviderResponseError, constraint):
+                        chat_structured("system", "user", schema, settings=settings)
+            # 自动建图仍仅在支持严格结构化输出时选择结构化路径。
+            self.assertFalse(supports_structured_output(settings=settings))
+        self.assertEqual([request.method for request in requests], ["GET"] + ["POST"] * 4)
+
+    def test_unsupported_json_schema_does_not_send_inference_request(self) -> None:
+        for capability in (
+            {"supported": False, "strict": False, "schema_subset": []},
+            {"supported": True, "strict": False, "schema_subset": ["json_object"]},
+        ):
+            with self.subTest(capability=capability):
+                _clear_capability_cache()
+                with patch("provider.engine.request_json", return_value={
+                    "structured_output": capability,
+                }) as request:
+                    with self.assertRaisesRegex(ProviderResponseError, "json_schema"):
+                        chat_structured(
+                            "system", "user", {"type": "object"},
+                            settings=_settings(Path(".")),
+                        )
+                self.assertEqual(request.call_count, 1)
+                self.assertEqual(request.call_args.args[0], "GET")
 
 
 class GraphDraftTests(unittest.TestCase):

@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
+from jsonschema import ValidationError, validate as validate_json_schema
+
 from core.settings import AppConfig
 from core.settings import load_config
 
@@ -31,7 +33,7 @@ ToolHandler = Callable[[str, dict[str, Any]], Any]
 _CAPABILITY_CACHE_TTL_SECONDS = 300.0
 _MAX_TOOL_REQUEST_RETRIES = 1
 _RETRYABLE_PROVIDER_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
-_CAPABILITY_CACHE: dict[tuple[str, str], tuple[bool, float]] = {}
+_CAPABILITY_CACHE: dict[tuple[str, str], tuple[bool, bool, float]] = {}
 _CAPABILITY_CACHE_LOCK = RLock()
 
 
@@ -169,7 +171,7 @@ def chat_structured(
     settings: AppConfig | None = None,
     tool_name: str = "submit_structured_output",
 ) -> dict[str, Any]:
-    """使用 Kemo 2.0 ``structured_output`` 返回一个 JSON 对象。"""
+    """按 Kemo 2.0 模型能力选择 strict，并在本地校验结构化结果。"""
 
     _validate_messages(system, user)
     if not isinstance(schema, dict) or schema.get("type") != "object":
@@ -177,6 +179,14 @@ def chat_structured(
     if not isinstance(tool_name, str) or not tool_name.strip():
         raise ValueError("tool_name 不能为空")
     active_settings = settings or load_config()
+    supported, strict = _structured_output_capabilities(
+        active_settings, model or active_settings.models.llm,
+    )
+    if not supported:
+        raise ProviderResponseError(
+            "kemo 模型未声明支持 json_schema 结构化输出",
+            provider="kemo",
+        )
     response = _send_response_request(
         system_prompt=system,
         input_items=[_user_message_item(user)],
@@ -186,7 +196,7 @@ def chat_structured(
             "type": "json_schema",
             "schema_name": tool_name.strip(),
             "schema": deepcopy(schema),
-            "strict": True,
+            "strict": strict,
         },
     )
     content = _extract_text(response, "kemo")
@@ -207,6 +217,13 @@ def chat_structured(
             "kemo 结构化输出必须是 JSON 对象",
             provider="kemo",
         )
+    try:
+        validate_json_schema(parsed, schema)
+    except ValidationError as exc:
+        raise ProviderResponseError(
+            f"kemo 结构化输出不符合 JSON Schema：{exc.json_path}（{exc.validator}）",
+            provider="kemo",
+        ) from exc
     return parsed
 
 
@@ -215,28 +232,37 @@ def supports_structured_output(
     *,
     settings: AppConfig | None = None,
 ) -> bool:
-    """读取 Kemo 模型能力声明；短暂缓存结果以避免每篇文档重复发现。"""
+    """自动建图仅在模型支持严格 JSON Schema 时选择结构化路径。"""
 
     active_settings = settings or load_config()
-    selected_model = model or active_settings.models.llm
-    cache_key = (active_settings.kemo.base_url.rstrip("/"), selected_model)
+    _, strict = _structured_output_capabilities(
+        active_settings, model or active_settings.models.llm,
+    )
+    return strict
+
+
+def _structured_output_capabilities(
+    settings: AppConfig,
+    model: str,
+) -> tuple[bool, bool]:
+    cache_key = (settings.kemo.base_url.rstrip("/"), model)
     now = monotonic()
     with _CAPABILITY_CACHE_LOCK:
         cached = _CAPABILITY_CACHE.get(cache_key)
-        if cached is not None and cached[1] > now:
-            return cached[0]
+        if cached is not None and cached[2] > now:
+            return cached[0], cached[1]
 
-    api_key = get_api_key(active_settings.kemo)
+    api_key = get_api_key(settings.kemo)
     headers = kemo_headers(api_key)
     response = request_json(
         "GET",
         build_endpoint_url(
-            active_settings.kemo.base_url,
-            f"model/models/{quote(selected_model, safe='')}/capabilities",
+            settings.kemo.base_url,
+            f"model/models/{quote(model, safe='')}/capabilities",
         ),
         provider="kemo",
         headers=headers,
-        timeout=active_settings.kemo.request_timeout,
+        timeout=settings.kemo.request_timeout,
     )
     if not isinstance(response, dict):
         raise ProviderResponseError(
@@ -244,24 +270,23 @@ def supports_structured_output(
             provider="kemo",
         )
     structured = response.get("structured_output")
-    if isinstance(structured, dict):
-        supported = (
-            structured.get("supported") is True
-            and structured.get("strict") is True
+    if not isinstance(structured, dict):
+        raise ProviderResponseError(
+            "kemo 模型能力响应缺少 structured_output 对象",
+            provider="kemo",
         )
-    else:
-        # Keep accepting the legacy boolean shape while a mixed gateway fleet
-        # is being drained; outgoing requests are always Kemo 2.0.
-        supported = structured is True
-    # Structured output is a distinct Kemo 2.0 capability.  Function calling
-    # alone is not enough because ``chat_structured`` now uses the native
-    # structured_output field instead of a synthetic tool.
+    supported = (
+        structured.get("supported") is True
+        and "json_schema" in structured.get("schema_subset", [])
+    )
+    strict = supported and structured.get("strict") is True
     with _CAPABILITY_CACHE_LOCK:
         _CAPABILITY_CACHE[cache_key] = (
             supported,
+            strict,
             monotonic() + _CAPABILITY_CACHE_TTL_SECONDS,
         )
-    return supported
+    return supported, strict
 
 
 def _clear_capability_cache() -> None:

@@ -16,7 +16,7 @@ from core.observability import query_step, step_status, tracked_step
 
 LOGGER = logging.getLogger(__name__)
 
-QUERY_PLANNER_VERSION = "query-planner-v1"
+QUERY_PLANNER_VERSION = "query-planner-v2"
 
 _PROMPT_PATH = Path(__file__).resolve().parents[2] / "config" / "query_planning_prompt.md"
 
